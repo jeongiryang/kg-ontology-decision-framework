@@ -1,7 +1,9 @@
 .venv/
-data/
 .env
 __pycache__/
 *.pyc
+*.csv
+*.pdf
+*.hwp
 .DS_Store
 AGENTS.md

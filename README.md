@@ -68,7 +68,8 @@ kg-ontology-decision-framework/
     └── test_neo4j.py           # Neo4j DB 연결 및 쿼리 동작 정상 여부 테스트
 ```
 
-* **Git 추적 제외 안내:** `.venv/`(가상환경 디렉토리), `data/`(데이터 저장소), `.env`(민감한 환경변수 설정) 파일 등은 보안 및 용량 관리를 위해 `.gitignore`에 등록되어 저장소 추적 대상에서 제외되어 있음.
+
+**Git 추적 제외 안내: .venv/(가상환경 디렉토리), .env(민감한 환경변수 설정), CSV/PDF/HWP 데이터 파일 등은 보안 및 용량 관리를 위해 .gitignore에 등록되어 저장소 추적 대상에서 제외.**
 
 ---
 
@@ -101,3 +102,4 @@ kg-ontology-decision-framework/
 
 ### `tests/` (검증 모듈)
 * **`test_neo4j.py`**: 전체 시스템 구동 전, Neo4j DB 접속 및 기본 쿼리 실행이 정상인지 단독으로 확인하는 테스트 코드.
+
