@@ -7,3 +7,5 @@ __pycache__/
 *.hwp
 .DS_Store
 AGENTS.md
+WORKLOG.md
+data/review_sessions/

@@ -1,0 +1,102 @@
+{
+  "schema_version": "1.0",
+  "scope": {
+    "document": "2022 교육과정 -일부 발췌본.pdf",
+    "pdf_pages": [128, 129, 130],
+    "department": "컴퓨터공학과",
+    "description": "세 페이지에서 확인되는 교육과정, 이수학점, 교과목과 전공능력만 모델링한다."
+  },
+  "identity_policy": {
+    "property": "uid",
+    "rule": "노드 종류와 원문 식별자를 조합한 재현 가능한 문자열을 사용한다.",
+    "examples": [
+      "curriculum:2022:computer-engineering",
+      "course:CDA0143",
+      "requirement:2022:computer-engineering:전공심화"
+    ]
+  },
+  "node_types": {
+    "Document": {
+      "required_properties": ["uid", "file_name", "sha256"]
+    },
+    "Page": {
+      "required_properties": ["uid", "pdf_page", "printed_page"]
+    },
+    "Curriculum": {
+      "required_properties": ["uid", "year"]
+    },
+    "Department": {
+      "required_properties": ["uid", "name", "college"]
+    },
+    "ProfileStatement": {
+      "required_properties": ["uid", "kind", "order", "text"]
+    },
+    "ProgramTrack": {
+      "required_properties": ["uid", "name"]
+    },
+    "CreditRequirement": {
+      "required_properties": [
+        "uid",
+        "general_total_credits",
+        "major_required_credits",
+        "major_elective_credits",
+        "major_total_credits",
+        "graduation_total_credits"
+      ]
+    },
+    "CreditAllocation": {
+      "required_properties": ["uid", "section", "category", "term_credits"]
+    },
+    "Course": {
+      "required_properties": ["uid", "code", "name_ko", "credits", "course_type"]
+    },
+    "CourseCategory": {
+      "required_properties": ["uid", "name"]
+    },
+    "Competency": {
+      "required_properties": ["uid", "competency_id"]
+    },
+    "Evidence": {
+      "required_properties": [
+        "uid",
+        "pdf_page",
+        "printed_page",
+        "section",
+        "bbox",
+        "raw_text"
+      ]
+    }
+  },
+  "relationship_types": {
+    "HAS_PAGE": ["Document", "Page"],
+    "DEFINES_CURRICULUM": ["Document", "Curriculum"],
+    "FOR_DEPARTMENT": ["Curriculum", "Department"],
+    "HAS_PROFILE_STATEMENT": ["Department", "ProfileStatement"],
+    "HAS_TRACK": ["Curriculum", "ProgramTrack"],
+    "HAS_REQUIREMENT": ["ProgramTrack", "CreditRequirement"],
+    "HAS_ALLOCATION": ["ProgramTrack", "CreditAllocation"],
+    "OFFERS_COURSE": ["Department", "Course"],
+    "DESIGNATES_COURSE": ["Department", "Course"],
+    "IN_CATEGORY": ["Course", "CourseCategory"],
+    "DEVELOPS_COMPETENCY": ["Course", "Competency"],
+    "SUPPORTED_BY": ["ProfileStatement|CreditRequirement|CreditAllocation|Course", "Evidence"],
+    "LOCATED_IN": ["Evidence", "Page"]
+  },
+  "normalized_data_mapping": {
+    "curriculum": "curriculum.uid",
+    "profile_statements": "curriculum.profile_statements[]",
+    "requirements": "curriculum.program_requirements[]",
+    "allocations": "curriculum.credit_allocations[]",
+    "courses": [
+      "curriculum.designated_courses[]",
+      "curriculum.major_courses[]"
+    ],
+    "evidence": "각 항목의 evidence 속성"
+  },
+  "graph_rules": [
+    "모든 노드는 KGNode 공통 라벨과 uid를 가진다.",
+    "모든 PDF 유래 사실은 SUPPORTED_BY 관계로 Evidence와 연결한다.",
+    "원문에서 서로 다른 값이 발견되면 하나를 임의 선택하지 않고 검증 경고를 유지한다.",
+    "PDF 128-130쪽 밖의 근거는 이 PoC 그래프에 적재하지 않는다."
+  ]
+}

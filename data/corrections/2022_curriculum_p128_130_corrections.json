@@ -1,0 +1,6 @@
+{
+  "schema_version": "1.0",
+  "source_sha256": "491df3bf0d4a4f0da86b0d43335979a982d5bb009bcfe59d7922bc5bcfe5beb9",
+  "description": "자동 검토 보고서에서 확인한 값만 corrections 배열에 기록한다. 원본 추출 JSON은 직접 수정하지 않는다.",
+  "corrections": []
+}

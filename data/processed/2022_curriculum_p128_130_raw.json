@@ -1,0 +1,1208 @@
+{
+  "schema_version": "1.0",
+  "source": {
+    "file_name": "2022 교육과정 -일부 발췌본.pdf",
+    "sha256": "491df3bf0d4a4f0da86b0d43335979a982d5bb009bcfe59d7922bc5bcfe5beb9",
+    "total_pdf_pages": 130,
+    "selected_pdf_pages": [
+      128,
+      129,
+      130
+    ],
+    "page_numbering": "one_based_pdf_page",
+    "extractor": "PyMuPDF 1.28.0"
+  },
+  "pages": [
+    {
+      "pdf_page": 128,
+      "page_index": 127,
+      "printed_page": null,
+      "width": 538.588,
+      "height": 737.008,
+      "block_count": 31,
+      "character_count": 587,
+      "text": "공과대학컴퓨터공학과\n/\n…281\n컴퓨터공학과\n전공교육목표\n1.\n인공지능 시대를 선도할 인재양성\n전공인재상\n2.\n컴퓨터 전문지식을 가지고 끊임없이 자기계발에도 노력하는 인재\n창의력과 책임감을 가지고 진취적으로 도전하는 인재\n직업의식운리의식을 가지고 업무에 충실하며 협력적인 인재\n,\n전공능력기반\n3.\n①전공기초능력컴퓨터 전공 기초능력\n:\n②주체적 창의력\n주체적인 전문인\n:\n③팀워크 능력팀워크를 통해 다양한 구성원의 능력을 최대한 살릴 수 있는 능력\n:\n④문제해결 능력전공지식을 이용한 체계적인 문제해결 능력\n:\n⑤연구능력최신 컴퓨터 내용을 학습 및 연구하는 능력\n:\n기본이수 학점구조표\n4.\n교양\n전공\n학과\n구분\n졸업\n학점\n소계전공\n졸업\n잔여\n학점\n최소전공\n인정학점\n시행여부\n기초\n교양\n균형\n교양\n기초\n전공\n필수\n전공\n선택\n소계\n교양\n잔여\n학점\n컴퓨터공학과\n전공심화\n8\n19\n3\n30\n21\n57\n78\n22\n130\n○\n복수전공\n8\n19\n3\n30\n21\n35\n56\n44\n130\n전공능력기반 전공교과목 연관성\n●\n대 전공능력기반\n5\n①\n②\n③\n④\n⑤\n합계\n전공과목학점\n(\n)\n26((78)\n21(78)\n22(60)\n38(132)\n18(72)\n125(420)",
+      "blocks": [
+        {
+          "block_index": 0,
+          "source_block_number": 0,
+          "bbox": [
+            356.854,
+            53.44,
+            473.372,
+            63.399
+          ],
+          "text": "공과대학컴퓨터공학과\n/\n…281"
+        },
+        {
+          "block_index": 1,
+          "source_block_number": 1,
+          "bbox": [
+            204.814,
+            92.165,
+            319.418,
+            115.745
+          ],
+          "text": "컴퓨터공학과"
+        },
+        {
+          "block_index": 2,
+          "source_block_number": 2,
+          "bbox": [
+            65.253,
+            144.113,
+            144.934,
+            160.061
+          ],
+          "text": "전공교육목표\n1."
+        },
+        {
+          "block_index": 3,
+          "source_block_number": 3,
+          "bbox": [
+            65.253,
+            170.32,
+            218.508,
+            180.279
+          ],
+          "text": "인공지능 시대를 선도할 인재양성"
+        },
+        {
+          "block_index": 4,
+          "source_block_number": 4,
+          "bbox": [
+            65.253,
+            196.913,
+            134.134,
+            212.861
+          ],
+          "text": "전공인재상\n2."
+        },
+        {
+          "block_index": 5,
+          "source_block_number": 5,
+          "bbox": [
+            84.454,
+            223.12,
+            354.875,
+            233.079
+          ],
+          "text": "컴퓨터 전문지식을 가지고 끊임없이 자기계발에도 노력하는 인재"
+        },
+        {
+          "block_index": 6,
+          "source_block_number": 6,
+          "bbox": [
+            84.454,
+            239.08,
+            305.286,
+            249.039
+          ],
+          "text": "창의력과 책임감을 가지고 진취적으로 도전하는 인재"
+        },
+        {
+          "block_index": 7,
+          "source_block_number": 7,
+          "bbox": [
+            84.454,
+            255.04,
+            339.521,
+            264.999
+          ],
+          "text": "직업의식운리의식을 가지고 업무에 충실하며 협력적인 인재\n,"
+        },
+        {
+          "block_index": 8,
+          "source_block_number": 8,
+          "bbox": [
+            65.253,
+            282.713,
+            144.934,
+            298.661
+          ],
+          "text": "전공능력기반\n3."
+        },
+        {
+          "block_index": 9,
+          "source_block_number": 9,
+          "bbox": [
+            76.294,
+            306.52,
+            241.43,
+            316.479
+          ],
+          "text": "①전공기초능력컴퓨터 전공 기초능력\n:"
+        },
+        {
+          "block_index": 10,
+          "source_block_number": 10,
+          "bbox": [
+            76.293,
+            321.507,
+            227.999,
+            331.465
+          ],
+          "text": "②주체적 창의력\n주체적인 전문인\n:"
+        },
+        {
+          "block_index": 11,
+          "source_block_number": 11,
+          "bbox": [
+            76.293,
+            336.493,
+            421.853,
+            346.451
+          ],
+          "text": "③팀워크 능력팀워크를 통해 다양한 구성원의 능력을 최대한 살릴 수 있는 능력\n:"
+        },
+        {
+          "block_index": 12,
+          "source_block_number": 12,
+          "bbox": [
+            76.293,
+            351.359,
+            336.138,
+            361.318
+          ],
+          "text": "④문제해결 능력전공지식을 이용한 체계적인 문제해결 능력\n:"
+        },
+        {
+          "block_index": 13,
+          "source_block_number": 13,
+          "bbox": [
+            76.293,
+            366.345,
+            313.695,
+            376.304
+          ],
+          "text": "⑤연구능력최신 컴퓨터 내용을 학습 및 연구하는 능력\n:"
+        },
+        {
+          "block_index": 14,
+          "source_block_number": 14,
+          "bbox": [
+            65.253,
+            393.113,
+            182.734,
+            409.061
+          ],
+          "text": "기본이수 학점구조표\n4."
+        },
+        {
+          "block_index": 15,
+          "source_block_number": 16,
+          "bbox": [
+            216.094,
+            416.336,
+            334.529,
+            425.825
+          ],
+          "text": "교양\n전공"
+        },
+        {
+          "block_index": 16,
+          "source_block_number": 15,
+          "bbox": [
+            88.053,
+            432.896,
+            159.329,
+            442.385
+          ],
+          "text": "학과\n구분"
+        },
+        {
+          "block_index": 17,
+          "source_block_number": 18,
+          "bbox": [
+            413.613,
+            428.336,
+            430.529,
+            446.825
+          ],
+          "text": "졸업\n학점"
+        },
+        {
+          "block_index": 18,
+          "source_block_number": 22,
+          "bbox": [
+            254.134,
+            435.896,
+            293.609,
+            449.945
+          ],
+          "text": "소계전공"
+        },
+        {
+          "block_index": 19,
+          "source_block_number": 17,
+          "bbox": [
+            383.974,
+            423.896,
+            400.889,
+            451.385
+          ],
+          "text": "졸업\n잔여\n학점"
+        },
+        {
+          "block_index": 20,
+          "source_block_number": 19,
+          "bbox": [
+            179.374,
+            423.896,
+            470.612,
+            454.505
+          ],
+          "text": "최소전공\n인정학점\n시행여부\n기초\n교양"
+        },
+        {
+          "block_index": 21,
+          "source_block_number": 20,
+          "bbox": [
+            204.814,
+            435.896,
+            221.729,
+            454.505
+          ],
+          "text": "균형\n교양"
+        },
+        {
+          "block_index": 22,
+          "source_block_number": 23,
+          "bbox": [
+            276.694,
+            445.016,
+            293.609,
+            454.505
+          ],
+          "text": "기초"
+        },
+        {
+          "block_index": 23,
+          "source_block_number": 24,
+          "bbox": [
+            300.694,
+            435.896,
+            317.609,
+            454.505
+          ],
+          "text": "전공\n필수"
+        },
+        {
+          "block_index": 24,
+          "source_block_number": 25,
+          "bbox": [
+            327.574,
+            435.896,
+            372.689,
+            454.505
+          ],
+          "text": "전공\n선택\n소계"
+        },
+        {
+          "block_index": 25,
+          "source_block_number": 21,
+          "bbox": [
+            230.134,
+            431.456,
+            247.049,
+            458.945
+          ],
+          "text": "교양\n잔여\n학점"
+        },
+        {
+          "block_index": 26,
+          "source_block_number": 26,
+          "bbox": [
+            71.014,
+            472.255,
+            121.994,
+            481.745
+          ],
+          "text": "컴퓨터공학과"
+        },
+        {
+          "block_index": 27,
+          "source_block_number": 27,
+          "bbox": [
+            133.894,
+            464.695,
+            459.093,
+            489.305
+          ],
+          "text": "전공심화\n8\n19\n3\n30\n21\n57\n78\n22\n130\n○\n복수전공\n8\n19\n3\n30\n21\n35\n56\n44\n130"
+        },
+        {
+          "block_index": 28,
+          "source_block_number": 28,
+          "bbox": [
+            65.266,
+            500.56,
+            213.963,
+            510.519
+          ],
+          "text": "전공능력기반 전공교과목 연관성\n●"
+        },
+        {
+          "block_index": 29,
+          "source_block_number": 29,
+          "bbox": [
+            84.694,
+            519.2,
+            446.508,
+            528.209
+          ],
+          "text": "대 전공능력기반\n5\n①\n②\n③\n④\n⑤\n합계"
+        },
+        {
+          "block_index": 30,
+          "source_block_number": 30,
+          "bbox": [
+            90.454,
+            535.52,
+            454.103,
+            544.529
+          ],
+          "text": "전공과목학점\n(\n)\n26((78)\n21(78)\n22(60)\n38(132)\n18(72)\n125(420)"
+        }
+      ]
+    },
+    {
+      "pdf_page": 129,
+      "page_index": 128,
+      "printed_page": null,
+      "width": 538.588,
+      "height": 737.008,
+      "block_count": 34,
+      "character_count": 1216,
+      "text": "282\n학년도 교육과정\n2022\n…\n전공심화과정 학점배분구조표\n5.\n구    분\n학년\n1\n학년\n2\n학년\n3\n학년\n4\n총계\n비고\n학기\n1\n학기\n2\n학기\n1\n학기\n2\n학기\n1\n학기\n2\n학기\n1\n학기\n2\n교양\n기초교양\n3\n3\n2\n8\n균형교양\n9\n7\n3\n3\n22\n확대교양\n3\n3\n잔여학점\n소    계\n12\n10\n5\n6\n33\n전공\n전공필수\n3\n12\n9\n24\n전공선택\n3\n9\n9\n3\n9\n12\n9\n78\n소    계\n3\n9\n12\n15\n18\n12\n9\n78\n교양\n전공\n계\n(\n)+(\n)=\n12\n13\n14\n18\n15\n18\n12\n9\n111\n졸업잔여학점\n5\n4\n3\n2\n3\n2\n19\n졸업학점\n17\n17\n17\n18\n17\n18\n15\n11\n130\n학과지정교과목\n6.\n구분영역\n(\n)\n학수번호\n과목명\n학점\n시수\n개설학기\n균형교양\n디지털커뮤니케이션\n(1.\n)\nGEA7261\n컴퓨팅프로그래밍\n3\n4\n1-1,2\nGEA7260\n컴퓨터개론\n3\n3\n1-1,2\nGEA8515\n컴퓨팅사고력\n2\n2\n1-2\n균형교양\n자연\n과학\n기술의 이해\n(4.\n·\n·\n)\nGEA8538\n인공지능의시대\n2\n2\n1-2\n확대교양\n소양교육\n(2.\n)\nGEA7301\n공업수학\n3\n3\n2-1,2\n전공교육과정표\n7.\n전공능력\n이수\n구분\n학수번호\n과  목  명\n학점\n시간수\n개설\n학년\n학기\n기반\n연관성 \n강의\n실습\n실기\nCDA0143 고급자료구조(Advanced Data Structure)\n3\n3\n2-2\n①③④\nCDA0065 데이터베이스개론(Database Theory)\n3\n3\n3-1\n②④⑤\nCDA0027 알고리즘(Algorithms)\n3\n3\n3-1\n①④\nCDA0017\n운영체제(Operating System)\n※\n3\n3\n3-2\n①④\nCDA0016\n컴퓨터구조(Computer Architechture)\n※\n3\n3\n3-1\n①③④\n전공\n필수\nCDA0023 데이터통신(Data Communication)\n3\n3\n3-2\n①③④\nCDA0028 소프트웨어공학(Software Engineering)\n3\n3\n3-2\n①③④\nCDA0088 심층상담(Consultation)\n0\n전학년-\n1,2\n②\nCDA0034 졸업논문(Graduation Thesis)\n0\n4-1,2\n②③④⑤\nCDA0155 객체지향프로그래밍(Object-oriented Programming)\n3\n2\n2\n2-1\n①②④\nCDA0156 오픈소스소프트웨어(Open Source Software)\n3\n2\n2\n2-1\n①②③\nCDA0157 이산수학(Discrete mathematics)\n3\n3\n2-1\n①④",
+      "blocks": [
+        {
+          "block_index": 0,
+          "source_block_number": 0,
+          "bbox": [
+            65.253,
+            53.44,
+            177.179,
+            63.399
+          ],
+          "text": "282\n학년도 교육과정\n2022\n…"
+        },
+        {
+          "block_index": 1,
+          "source_block_number": 1,
+          "bbox": [
+            65.253,
+            91.913,
+            225.934,
+            107.861
+          ],
+          "text": "전공심화과정 학점배분구조표\n5."
+        },
+        {
+          "block_index": 2,
+          "source_block_number": 29,
+          "bbox": [
+            104.254,
+            116.335,
+            462.329,
+            138.665
+          ],
+          "text": "구    분\n학년\n1\n학년\n2\n학년\n3\n학년\n4\n총계\n비고\n학기\n1\n학기\n2\n학기\n1\n학기\n2\n학기\n1\n학기\n2\n학기\n1\n학기\n2"
+        },
+        {
+          "block_index": 3,
+          "source_block_number": 30,
+          "bbox": [
+            73.173,
+            167.936,
+            90.089,
+            177.425
+          ],
+          "text": "교양"
+        },
+        {
+          "block_index": 4,
+          "source_block_number": 31,
+          "bbox": [
+            119.253,
+            142.136,
+            424.275,
+            203.225
+          ],
+          "text": "기초교양\n3\n3\n2\n8\n균형교양\n9\n7\n3\n3\n22\n확대교양\n3\n3\n잔여학점\n소    계\n12\n10\n5\n6\n33"
+        },
+        {
+          "block_index": 5,
+          "source_block_number": 32,
+          "bbox": [
+            73.173,
+            219.535,
+            90.089,
+            229.025
+          ],
+          "text": "전공"
+        },
+        {
+          "block_index": 6,
+          "source_block_number": 33,
+          "bbox": [
+            88.654,
+            206.575,
+            426.06,
+            280.625
+          ],
+          "text": "전공필수\n3\n12\n9\n24\n전공선택\n3\n9\n9\n3\n9\n12\n9\n78\n소    계\n3\n9\n12\n15\n18\n12\n9\n78\n교양\n전공\n계\n(\n)+(\n)=\n12\n13\n14\n18\n15\n18\n12\n9\n111\n졸업잔여학점\n5\n4\n3\n2\n3\n2\n19\n졸업학점\n17\n17\n17\n18\n17\n18\n15\n11\n130"
+        },
+        {
+          "block_index": 7,
+          "source_block_number": 2,
+          "bbox": [
+            65.253,
+            300.353,
+            155.734,
+            316.301
+          ],
+          "text": "학과지정교과목\n6."
+        },
+        {
+          "block_index": 8,
+          "source_block_number": 3,
+          "bbox": [
+            107.254,
+            325.975,
+            463.762,
+            335.465
+          ],
+          "text": "구분영역\n(\n)\n학수번호\n과목명\n학점\n시수\n개설학기"
+        },
+        {
+          "block_index": 9,
+          "source_block_number": 4,
+          "bbox": [
+            83.014,
+            341.095,
+            456.485,
+            360.665
+          ],
+          "text": "균형교양\n디지털커뮤니케이션\n(1.\n)\nGEA7261\n컴퓨팅프로그래밍\n3\n4\n1-1,2"
+        },
+        {
+          "block_index": 10,
+          "source_block_number": 6,
+          "bbox": [
+            201.454,
+            366.296,
+            456.486,
+            375.785
+          ],
+          "text": "GEA7260\n컴퓨터개론\n3\n3\n1-1,2"
+        },
+        {
+          "block_index": 11,
+          "source_block_number": 7,
+          "bbox": [
+            202.053,
+            381.415,
+            453.613,
+            390.905
+          ],
+          "text": "GEA8515\n컴퓨팅사고력\n2\n2\n1-2"
+        },
+        {
+          "block_index": 12,
+          "source_block_number": 5,
+          "bbox": [
+            71.614,
+            376.496,
+            182.468,
+            395.945
+          ],
+          "text": "균형교양\n자연\n과학\n기술의 이해\n(4.\n·\n·\n)"
+        },
+        {
+          "block_index": 13,
+          "source_block_number": 8,
+          "bbox": [
+            201.214,
+            396.655,
+            453.613,
+            406.145
+          ],
+          "text": "GEA8538\n인공지능의시대\n2\n2\n1-2"
+        },
+        {
+          "block_index": 14,
+          "source_block_number": 9,
+          "bbox": [
+            86.613,
+            411.776,
+            457.209,
+            421.265
+          ],
+          "text": "확대교양\n소양교육\n(2.\n)\nGEA7301\n공업수학\n3\n3\n2-1,2"
+        },
+        {
+          "block_index": 15,
+          "source_block_number": 10,
+          "bbox": [
+            65.253,
+            447.113,
+            155.734,
+            463.061
+          ],
+          "text": "전공교육과정표\n7."
+        },
+        {
+          "block_index": 16,
+          "source_block_number": 13,
+          "bbox": [
+            437.733,
+            472.16,
+            470.165,
+            481.169
+          ],
+          "text": "전공능력"
+        },
+        {
+          "block_index": 17,
+          "source_block_number": 11,
+          "bbox": [
+            71.014,
+            478.4,
+            352.185,
+            497.369
+          ],
+          "text": "이수\n구분\n학수번호\n과  목  명\n학점"
+        },
+        {
+          "block_index": 18,
+          "source_block_number": 12,
+          "bbox": [
+            367.893,
+            472.16,
+            427.185,
+            502.289
+          ],
+          "text": "시간수\n개설\n학년\n학기"
+        },
+        {
+          "block_index": 19,
+          "source_block_number": 14,
+          "bbox": [
+            360.214,
+            483.32,
+            470.163,
+            503.609
+          ],
+          "text": "기반\n연관성 \n강의\n실습\n실기"
+        },
+        {
+          "block_index": 20,
+          "source_block_number": 16,
+          "bbox": [
+            96.213,
+            509.575,
+            466.521,
+            519.065
+          ],
+          "text": "CDA0143 고급자료구조(Advanced Data Structure)\n3\n3\n2-2\n①③④"
+        },
+        {
+          "block_index": 21,
+          "source_block_number": 17,
+          "bbox": [
+            95.253,
+            525.895,
+            466.523,
+            535.385
+          ],
+          "text": "CDA0065 데이터베이스개론(Database Theory)\n3\n3\n3-1\n②④⑤"
+        },
+        {
+          "block_index": 22,
+          "source_block_number": 18,
+          "bbox": [
+            95.613,
+            540.655,
+            462.325,
+            550.145
+          ],
+          "text": "CDA0027 알고리즘(Algorithms)\n3\n3\n3-1\n①④"
+        },
+        {
+          "block_index": 23,
+          "source_block_number": 19,
+          "bbox": [
+            96.214,
+            554.695,
+            462.326,
+            564.185
+          ],
+          "text": "CDA0017\n운영체제(Operating System)\n※\n3\n3\n3-2\n①④"
+        },
+        {
+          "block_index": 24,
+          "source_block_number": 20,
+          "bbox": [
+            95.973,
+            568.735,
+            466.523,
+            578.225
+          ],
+          "text": "CDA0016\n컴퓨터구조(Computer Architechture)\n※\n3\n3\n3-1\n①③④"
+        },
+        {
+          "block_index": 25,
+          "source_block_number": 15,
+          "bbox": [
+            70.654,
+            564.775,
+            87.569,
+            586.145
+          ],
+          "text": "전공\n필수"
+        },
+        {
+          "block_index": 26,
+          "source_block_number": 21,
+          "bbox": [
+            95.374,
+            582.775,
+            466.522,
+            592.265
+          ],
+          "text": "CDA0023 데이터통신(Data Communication)\n3\n3\n3-2\n①③④"
+        },
+        {
+          "block_index": 27,
+          "source_block_number": 22,
+          "bbox": [
+            95.253,
+            596.815,
+            466.522,
+            606.305
+          ],
+          "text": "CDA0028 소프트웨어공학(Software Engineering)\n3\n3\n3-2\n①③④"
+        },
+        {
+          "block_index": 28,
+          "source_block_number": 23,
+          "bbox": [
+            95.133,
+            610.689,
+            429.248,
+            624.305
+          ],
+          "text": "CDA0088 심층상담(Consultation)\n0\n전학년-"
+        },
+        {
+          "block_index": 29,
+          "source_block_number": 24,
+          "bbox": [
+            415.293,
+            614.815,
+            458.013,
+            628.337
+          ],
+          "text": "1,2\n②"
+        },
+        {
+          "block_index": 30,
+          "source_block_number": 25,
+          "bbox": [
+            95.253,
+            633.055,
+            470.84,
+            642.545
+          ],
+          "text": "CDA0034 졸업논문(Graduation Thesis)\n0\n4-1,2\n②③④⑤"
+        },
+        {
+          "block_index": 31,
+          "source_block_number": 26,
+          "bbox": [
+            96.214,
+            647.215,
+            466.523,
+            656.705
+          ],
+          "text": "CDA0155 객체지향프로그래밍(Object-oriented Programming)\n3\n2\n2\n2-1\n①②④"
+        },
+        {
+          "block_index": 32,
+          "source_block_number": 27,
+          "bbox": [
+            96.094,
+            661.255,
+            466.523,
+            670.745
+          ],
+          "text": "CDA0156 오픈소스소프트웨어(Open Source Software)\n3\n2\n2\n2-1\n①②③"
+        },
+        {
+          "block_index": 33,
+          "source_block_number": 28,
+          "bbox": [
+            96.454,
+            676.615,
+            462.326,
+            686.105
+          ],
+          "text": "CDA0157 이산수학(Discrete mathematics)\n3\n3\n2-1\n①④"
+        }
+      ]
+    },
+    {
+      "pdf_page": 130,
+      "page_index": 129,
+      "printed_page": null,
+      "width": 538.588,
+      "height": 737.008,
+      "block_count": 40,
+      "character_count": 1622,
+      "text": "공과대학컴퓨터공학과\n/\n…283\n전공능력\n이수\n구분\n학수번호\n과  목  명\n학점\n시간수\n개설\n학년\n학기\n기반\n연관성 \n강의\n실습\n실기\nCDA0008\n자료구조(Data Structure)\n※\n3\n3\n2-1\n①③④\nCDA0010 논리설계(Digital Design)\n3\n3\n2-2\n①③④\nCDA0136 데이터베이스언어실습(Database Language Practice)\n3\n2\n2\n2-2\n①②④\nCDA0125 모바일프로그래밍(Mobile Programming)\n3\n3\n2-2\n①③④\nCDA0006 시스템프로그래밍(System Programming)\n3\n3\n2-2\n①④⑤\nCDA0014 컴퓨터그래픽스(Computer Graphics)\n3\n3\n2-2\n①③④\nCDA0130 멀티미디어공학(Multimedia and Project)\n3\n3\n3-1\n①③④\nCDA0154 소프트웨어설계(Software Design)\n3\n3\n3-1\n①③④\nCDA0152 데이터베이스설계(Database Design)\n3\n3\n3-2\n③④⑤\nCDA0139 영상처리(Image Processing)\n3\n3\n3-2\n①②④\nCDA0019 컴퓨터구조응용(Computer architecture application)\n3\n3\n3-2\n①④⑤\nCDA0141 캡스톤디자인1(Capstone Design 1)\n0\n3-2\n②③④⑤\nCDA0013 프로그래밍언어론(Programming Languages)\n3\n3\n2-2\n①④\nCDA0151 네트워크프로그램(Network Program)\n3\n3\n4-1\n②④⑤\n전공\n선택\nCDA0025 마이크로프로세서(Microprocessor)\n3\n3\n4-1\n①③④\nCDA0030 인공지능(Artificial Intelligence)\n3\n3\n4-1\n①③④\nCDA0142 캡스톤디자인2(Capstone Design 2)\n3\n3\n4-1\n②③④⑤\nCDA0119 컴파일러(Compiler)\n3\n3\n4-1\n①③④\nCDA0031 컴퓨터네트워크(Computer Networks)\n3\n3\n4-1\n②③⑤\nCDA0149 딥러닝(Deep Learning)\n3\n3\n4-2\n①②④\nCDA0148 분산컴퓨팅시스템\n(Fundamentals of Distributed Computing Systems)\n3\n3\n4-1\n①③④\nCDA0150 사물인터넷(Internet of Things, IoT)\n3\n3\n4-2\n②③⑤\nCDA0153 정보보안(Information Security)\n3\n3\n4-2\n①②③\nCDA0074 생명정보학개론(Bio-informatics Theory)\n3\n3\n4-2\n④⑤\nCDA0159 데이터과학세미나(Data Science Seminar)\n3\n3\n4-2\n②④⑤\nCDA0144 현장실습1(Working Practices1)\n3\n주\n4\n계\n3,4-\n절\n②④⑤\nCDA0145 현장실습3(Working Practices3)\n6\n주\n8\n계절\n3,4-\n②④⑤\nCDA0147 현장실습4(Working Practices4)\n12\n주\n12\n4-1,2\n②④⑤\nCDA0160 표준형현장실습(Co-op)1\n3\n주\n4\n계절\n3,4-\n②④⑤\nCDA0161 표준형현장실습(Co-op)3\n6\n주\n8\n계절\n3,4-\n②④⑤\nCDA0162 표준형현장실습(Co-op)4\n12\n주\n12\n3,4-1,2\n②④⑤\n계\n과목\n43\n144\n표시 과목은 부전공 필수 교과목임.\n※",
+      "blocks": [
+        {
+          "block_index": 0,
+          "source_block_number": 0,
+          "bbox": [
+            355.173,
+            53.44,
+            473.314,
+            63.399
+          ],
+          "text": "공과대학컴퓨터공학과\n/\n…283"
+        },
+        {
+          "block_index": 1,
+          "source_block_number": 3,
+          "bbox": [
+            437.733,
+            93.8,
+            470.165,
+            102.809
+          ],
+          "text": "전공능력"
+        },
+        {
+          "block_index": 2,
+          "source_block_number": 1,
+          "bbox": [
+            71.014,
+            100.16,
+            352.185,
+            119.009
+          ],
+          "text": "이수\n구분\n학수번호\n과  목  명\n학점"
+        },
+        {
+          "block_index": 3,
+          "source_block_number": 2,
+          "bbox": [
+            367.893,
+            93.8,
+            427.185,
+            124.049
+          ],
+          "text": "시간수\n개설\n학년\n학기"
+        },
+        {
+          "block_index": 4,
+          "source_block_number": 4,
+          "bbox": [
+            360.214,
+            105.08,
+            470.163,
+            125.369
+          ],
+          "text": "기반\n연관성 \n강의\n실습\n실기"
+        },
+        {
+          "block_index": 5,
+          "source_block_number": 6,
+          "bbox": [
+            95.013,
+            129.895,
+            466.523,
+            139.385
+          ],
+          "text": "CDA0008\n자료구조(Data Structure)\n※\n3\n3\n2-1\n①③④"
+        },
+        {
+          "block_index": 6,
+          "source_block_number": 7,
+          "bbox": [
+            95.854,
+            143.936,
+            466.523,
+            153.425
+          ],
+          "text": "CDA0010 논리설계(Digital Design)\n3\n3\n2-2\n①③④"
+        },
+        {
+          "block_index": 7,
+          "source_block_number": 8,
+          "bbox": [
+            96.094,
+            157.975,
+            466.522,
+            167.465
+          ],
+          "text": "CDA0136 데이터베이스언어실습(Database Language Practice)\n3\n2\n2\n2-2\n①②④"
+        },
+        {
+          "block_index": 8,
+          "source_block_number": 9,
+          "bbox": [
+            96.333,
+            171.895,
+            466.523,
+            181.385
+          ],
+          "text": "CDA0125 모바일프로그래밍(Mobile Programming)\n3\n3\n2-2\n①③④"
+        },
+        {
+          "block_index": 9,
+          "source_block_number": 10,
+          "bbox": [
+            95.014,
+            185.936,
+            466.523,
+            195.425
+          ],
+          "text": "CDA0006 시스템프로그래밍(System Programming)\n3\n3\n2-2\n①④⑤"
+        },
+        {
+          "block_index": 10,
+          "source_block_number": 11,
+          "bbox": [
+            95.973,
+            199.975,
+            466.522,
+            209.465
+          ],
+          "text": "CDA0014 컴퓨터그래픽스(Computer Graphics)\n3\n3\n2-2\n①③④"
+        },
+        {
+          "block_index": 11,
+          "source_block_number": 12,
+          "bbox": [
+            95.973,
+            214.015,
+            466.522,
+            223.505
+          ],
+          "text": "CDA0130 멀티미디어공학(Multimedia and Project)\n3\n3\n3-1\n①③④"
+        },
+        {
+          "block_index": 12,
+          "source_block_number": 13,
+          "bbox": [
+            96.214,
+            228.056,
+            466.522,
+            237.545
+          ],
+          "text": "CDA0154 소프트웨어설계(Software Design)\n3\n3\n3-1\n①③④"
+        },
+        {
+          "block_index": 13,
+          "source_block_number": 14,
+          "bbox": [
+            96.333,
+            242.095,
+            466.523,
+            251.585
+          ],
+          "text": "CDA0152 데이터베이스설계(Database Design)\n3\n3\n3-2\n③④⑤"
+        },
+        {
+          "block_index": 14,
+          "source_block_number": 15,
+          "bbox": [
+            96.094,
+            256.015,
+            466.523,
+            265.505
+          ],
+          "text": "CDA0139 영상처리(Image Processing)\n3\n3\n3-2\n①②④"
+        },
+        {
+          "block_index": 15,
+          "source_block_number": 16,
+          "bbox": [
+            95.973,
+            270.056,
+            466.522,
+            279.545
+          ],
+          "text": "CDA0019 컴퓨터구조응용(Computer architecture application)\n3\n3\n3-2\n①④⑤"
+        },
+        {
+          "block_index": 16,
+          "source_block_number": 17,
+          "bbox": [
+            96.934,
+            284.095,
+            470.84,
+            293.585
+          ],
+          "text": "CDA0141 캡스톤디자인1(Capstone Design 1)\n0\n3-2\n②③④⑤"
+        },
+        {
+          "block_index": 17,
+          "source_block_number": 18,
+          "bbox": [
+            95.973,
+            298.135,
+            462.327,
+            307.625
+          ],
+          "text": "CDA0013 프로그래밍언어론(Programming Languages)\n3\n3\n2-2\n①④"
+        },
+        {
+          "block_index": 18,
+          "source_block_number": 19,
+          "bbox": [
+            96.934,
+            312.176,
+            466.523,
+            321.665
+          ],
+          "text": "CDA0151 네트워크프로그램(Network Program)\n3\n3\n4-1\n②④⑤"
+        },
+        {
+          "block_index": 19,
+          "source_block_number": 5,
+          "bbox": [
+            70.654,
+            314.576,
+            87.569,
+            334.025
+          ],
+          "text": "전공\n선택"
+        },
+        {
+          "block_index": 20,
+          "source_block_number": 20,
+          "bbox": [
+            95.374,
+            326.215,
+            466.522,
+            335.705
+          ],
+          "text": "CDA0025 마이크로프로세서(Microprocessor)\n3\n3\n4-1\n①③④"
+        },
+        {
+          "block_index": 21,
+          "source_block_number": 21,
+          "bbox": [
+            95.014,
+            340.135,
+            466.523,
+            349.625
+          ],
+          "text": "CDA0030 인공지능(Artificial Intelligence)\n3\n3\n4-1\n①③④"
+        },
+        {
+          "block_index": 22,
+          "source_block_number": 22,
+          "bbox": [
+            96.214,
+            354.176,
+            470.837,
+            363.665
+          ],
+          "text": "CDA0142 캡스톤디자인2(Capstone Design 2)\n3\n3\n4-1\n②③④⑤"
+        },
+        {
+          "block_index": 23,
+          "source_block_number": 23,
+          "bbox": [
+            96.934,
+            368.215,
+            466.523,
+            377.705
+          ],
+          "text": "CDA0119 컴파일러(Compiler)\n3\n3\n4-1\n①③④"
+        },
+        {
+          "block_index": 24,
+          "source_block_number": 24,
+          "bbox": [
+            95.973,
+            382.255,
+            466.522,
+            391.745
+          ],
+          "text": "CDA0031 컴퓨터네트워크(Computer Networks)\n3\n3\n4-1\n②③⑤"
+        },
+        {
+          "block_index": 25,
+          "source_block_number": 25,
+          "bbox": [
+            96.094,
+            396.296,
+            466.522,
+            405.785
+          ],
+          "text": "CDA0149 딥러닝(Deep Learning)\n3\n3\n4-2\n①②④"
+        },
+        {
+          "block_index": 26,
+          "source_block_number": 26,
+          "bbox": [
+            96.094,
+            410.336,
+            205.866,
+            425.945
+          ],
+          "text": "CDA0148 분산컴퓨팅시스템"
+        },
+        {
+          "block_index": 27,
+          "source_block_number": 27,
+          "bbox": [
+            137.853,
+            416.456,
+            466.524,
+            432.065
+          ],
+          "text": "(Fundamentals of Distributed Computing Systems)\n3\n3\n4-1\n①③④"
+        },
+        {
+          "block_index": 28,
+          "source_block_number": 28,
+          "bbox": [
+            95.973,
+            436.855,
+            466.523,
+            446.345
+          ],
+          "text": "CDA0150 사물인터넷(Internet of Things, IoT)\n3\n3\n4-2\n②③⑤"
+        },
+        {
+          "block_index": 29,
+          "source_block_number": 29,
+          "bbox": [
+            96.214,
+            451.135,
+            466.523,
+            460.625
+          ],
+          "text": "CDA0153 정보보안(Information Security)\n3\n3\n4-2\n①②③"
+        },
+        {
+          "block_index": 30,
+          "source_block_number": 30,
+          "bbox": [
+            95.493,
+            465.176,
+            462.326,
+            474.665
+          ],
+          "text": "CDA0074 생명정보학개론(Bio-informatics Theory)\n3\n3\n4-2\n④⑤"
+        },
+        {
+          "block_index": 31,
+          "source_block_number": 31,
+          "bbox": [
+            96.094,
+            479.215,
+            466.523,
+            488.705
+          ],
+          "text": "CDA0159 데이터과학세미나(Data Science Seminar)\n3\n3\n4-2\n②④⑤"
+        },
+        {
+          "block_index": 32,
+          "source_block_number": 32,
+          "bbox": [
+            96.094,
+            493.089,
+            466.525,
+            508.337
+          ],
+          "text": "CDA0144 현장실습1(Working Practices1)\n3\n주\n4\n계\n3,4-\n절\n②④⑤"
+        },
+        {
+          "block_index": 33,
+          "source_block_number": 33,
+          "bbox": [
+            96.214,
+            512.935,
+            466.525,
+            522.425
+          ],
+          "text": "CDA0145 현장실습3(Working Practices3)\n6\n주\n8\n계절\n3,4-\n②④⑤"
+        },
+        {
+          "block_index": 34,
+          "source_block_number": 34,
+          "bbox": [
+            96.454,
+            526.975,
+            466.522,
+            536.465
+          ],
+          "text": "CDA0147 현장실습4(Working Practices4)\n12\n주\n12\n4-1,2\n②④⑤"
+        },
+        {
+          "block_index": 35,
+          "source_block_number": 35,
+          "bbox": [
+            95.973,
+            541.016,
+            466.525,
+            550.505
+          ],
+          "text": "CDA0160 표준형현장실습(Co-op)1\n3\n주\n4\n계절\n3,4-\n②④⑤"
+        },
+        {
+          "block_index": 36,
+          "source_block_number": 36,
+          "bbox": [
+            96.934,
+            555.055,
+            466.525,
+            564.545
+          ],
+          "text": "CDA0161 표준형현장실습(Co-op)3\n6\n주\n8\n계절\n3,4-\n②④⑤"
+        },
+        {
+          "block_index": 37,
+          "source_block_number": 37,
+          "bbox": [
+            96.214,
+            568.975,
+            466.525,
+            578.465
+          ],
+          "text": "CDA0162 표준형현장실습(Co-op)4\n12\n주\n12\n3,4-1,2\n②④⑤"
+        },
+        {
+          "block_index": 38,
+          "source_block_number": 38,
+          "bbox": [
+            97.294,
+            583.016,
+            350.534,
+            592.505
+          ],
+          "text": "계\n과목\n43\n144"
+        },
+        {
+          "block_index": 39,
+          "source_block_number": 39,
+          "bbox": [
+            68.014,
+            597.055,
+            215.314,
+            606.545
+          ],
+          "text": "표시 과목은 부전공 필수 교과목임.\n※"
+        }
+      ]
+    }
+  ]
+}

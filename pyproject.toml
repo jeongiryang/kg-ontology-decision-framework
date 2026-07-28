@@ -1,0 +1,16 @@
+[project]
+name = "kg-ontology-decision-framework"
+version = "0.1.0"
+description = "Evidence-backed knowledge graph proof of concept for curriculum rules"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "pdfplumber>=0.11,<1",
+    "pillow>=10,<13",
+    "pydantic>=2.7,<3",
+    "pymupdf>=1.24,<2",
+    "streamlit>=1.40,<2",
+]
+
+[tool.uv]
+package = false

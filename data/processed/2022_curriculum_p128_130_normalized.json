@@ -1,0 +1,2780 @@
+{
+  "schema_version": "1.0",
+  "source": {
+    "file_name": "2022 교육과정 -일부 발췌본.pdf",
+    "sha256": "491df3bf0d4a4f0da86b0d43335979a982d5bb009bcfe59d7922bc5bcfe5beb9",
+    "selected_pdf_pages": [
+      128,
+      129,
+      130
+    ],
+    "printed_pages": {
+      "128": 281,
+      "129": 282,
+      "130": 283
+    },
+    "extractors": [
+      "PyMuPDF 1.28.0",
+      "pdfplumber 0.11.10"
+    ]
+  },
+  "curriculum": {
+    "uid": "curriculum:2022:computer-engineering",
+    "year": 2022,
+    "college": "공과대학",
+    "department": "컴퓨터공학과",
+    "profile_statements": [
+      {
+        "uid": "profile:2022:computer-engineering:educational_goal:1",
+        "kind": "educational_goal",
+        "order": 1,
+        "text": "인공지능 시대를 선도할 인재양성",
+        "evidence": {
+          "pdf_page": 128,
+          "printed_page": 281,
+          "section": "educational_goal",
+          "bbox": [
+            107.147,
+            222.771,
+            246.855,
+            232.72
+          ],
+          "raw_text": "인공지능 시대를 선도할 인재양성",
+          "extraction_method": "pdfplumber text lines"
+        }
+      },
+      {
+        "uid": "profile:2022:computer-engineering:talent_profile:1",
+        "kind": "talent_profile",
+        "order": 1,
+        "text": "컴퓨터 전문지식을 가지고 끊임없이 자기계발에도 노력하는 인재",
+        "evidence": {
+          "pdf_page": 128,
+          "printed_page": 281,
+          "section": "talent_profile",
+          "bbox": [
+            112.8,
+            275.571,
+            383.222,
+            285.52
+          ],
+          "raw_text": "컴퓨터 전문지식을 가지고 끊임없이 자기계발에도 노력하는 인재",
+          "extraction_method": "pdfplumber text lines"
+        }
+      },
+      {
+        "uid": "profile:2022:computer-engineering:talent_profile:2",
+        "kind": "talent_profile",
+        "order": 2,
+        "text": "창의력과 책임감을 가지고 진취적으로 도전하는 인재",
+        "evidence": {
+          "pdf_page": 128,
+          "printed_page": 281,
+          "section": "talent_profile",
+          "bbox": [
+            112.8,
+            291.531,
+            333.632,
+            301.48
+          ],
+          "raw_text": "창의력과 책임감을 가지고 진취적으로 도전하는 인재",
+          "extraction_method": "pdfplumber text lines"
+        }
+      },
+      {
+        "uid": "profile:2022:computer-engineering:talent_profile:3",
+        "kind": "talent_profile",
+        "order": 3,
+        "text": "직업의식, 운리의식을 가지고 업무에 충실하며 협력적인 인재",
+        "evidence": {
+          "pdf_page": 128,
+          "printed_page": 281,
+          "section": "talent_profile",
+          "bbox": [
+            112.8,
+            307.491,
+            367.868,
+            317.44
+          ],
+          "raw_text": "직업의식, 운리의식을 가지고 업무에 충실하며 협력적인 인재",
+          "extraction_method": "pdfplumber text lines"
+        }
+      },
+      {
+        "uid": "profile:2022:computer-engineering:competency_definition:1",
+        "kind": "competency_definition",
+        "order": 1,
+        "text": "① 전공기초능력: 컴퓨터 전공 기초능력",
+        "evidence": {
+          "pdf_page": 128,
+          "printed_page": 281,
+          "section": "competency_definition",
+          "bbox": [
+            104.64,
+            358.971,
+            269.777,
+            368.92
+          ],
+          "raw_text": "① 전공기초능력: 컴퓨터 전공 기초능력",
+          "extraction_method": "pdfplumber text lines"
+        }
+      },
+      {
+        "uid": "profile:2022:computer-engineering:competency_definition:2",
+        "kind": "competency_definition",
+        "order": 2,
+        "text": "② 주체적 창의력: 주체적인 전문인",
+        "evidence": {
+          "pdf_page": 128,
+          "printed_page": 281,
+          "section": "competency_definition",
+          "bbox": [
+            104.639,
+            373.957,
+            256.345,
+            383.906
+          ],
+          "raw_text": "② 주체적 창의력: 주체적인 전문인",
+          "extraction_method": "pdfplumber text lines"
+        }
+      },
+      {
+        "uid": "profile:2022:computer-engineering:competency_definition:3",
+        "kind": "competency_definition",
+        "order": 3,
+        "text": "③ 팀워크 능력: 팀워크를 통해 다양한 구성원의 능력을 최대한 살릴 수 있는 능력",
+        "evidence": {
+          "pdf_page": 128,
+          "printed_page": 281,
+          "section": "competency_definition",
+          "bbox": [
+            104.639,
+            388.944,
+            450.199,
+            398.892
+          ],
+          "raw_text": "③ 팀워크 능력: 팀워크를 통해 다양한 구성원의 능력을 최대한 살릴 수 있는 능력",
+          "extraction_method": "pdfplumber text lines"
+        }
+      },
+      {
+        "uid": "profile:2022:computer-engineering:competency_definition:4",
+        "kind": "competency_definition",
+        "order": 4,
+        "text": "④ 문제해결 능력: 전공지식을 이용한 체계적인 문제해결 능력",
+        "evidence": {
+          "pdf_page": 128,
+          "printed_page": 281,
+          "section": "competency_definition",
+          "bbox": [
+            104.639,
+            403.81,
+            364.484,
+            413.759
+          ],
+          "raw_text": "④ 문제해결 능력: 전공지식을 이용한 체계적인 문제해결 능력",
+          "extraction_method": "pdfplumber text lines"
+        }
+      },
+      {
+        "uid": "profile:2022:computer-engineering:competency_definition:5",
+        "kind": "competency_definition",
+        "order": 5,
+        "text": "⑤ 연구능력: 최신 컴퓨터 내용을 학습 및 연구하는 능력",
+        "evidence": {
+          "pdf_page": 128,
+          "printed_page": 281,
+          "section": "competency_definition",
+          "bbox": [
+            104.639,
+            418.796,
+            342.042,
+            428.745
+          ],
+          "raw_text": "⑤ 연구능력: 최신 컴퓨터 내용을 학습 및 연구하는 능력",
+          "extraction_method": "pdfplumber text lines"
+        }
+      }
+    ],
+    "program_requirements": [
+      {
+        "uid": "requirement:2022:computer-engineering:전공심화",
+        "track": "전공심화",
+        "basic_general_credits": 8,
+        "balanced_general_credits": 19,
+        "general_remaining_credits": 3,
+        "general_total_credits": 30,
+        "major_foundation_credits": null,
+        "major_required_credits": 21,
+        "major_elective_credits": 57,
+        "major_total_credits": 78,
+        "graduation_remaining_credits": 22,
+        "graduation_total_credits": 130,
+        "minimum_major_recognition_enabled": true,
+        "evidence": {
+          "pdf_page": 128,
+          "printed_page": 281,
+          "section": "기본이수 학점구조표",
+          "bbox": [
+            66.667,
+            461.369,
+            472.197,
+            491.609
+          ],
+          "raw_text": "컴퓨터공학과 | 전공심화 | 8 | 19 | 3 | 30 | | 21 | 57 | 78 | 22 | 130 | ○",
+          "extraction_method": "PyMuPDF coordinates"
+        }
+      },
+      {
+        "uid": "requirement:2022:computer-engineering:복수전공",
+        "track": "복수전공",
+        "basic_general_credits": 8,
+        "balanced_general_credits": 19,
+        "general_remaining_credits": 3,
+        "general_total_credits": 30,
+        "major_foundation_credits": null,
+        "major_required_credits": 21,
+        "major_elective_credits": 35,
+        "major_total_credits": 56,
+        "graduation_remaining_credits": 44,
+        "graduation_total_credits": 130,
+        "minimum_major_recognition_enabled": null,
+        "evidence": {
+          "pdf_page": 128,
+          "printed_page": 281,
+          "section": "기본이수 학점구조표",
+          "bbox": [
+            126.574,
+            476.489,
+            437.733,
+            491.609
+          ],
+          "raw_text": "| 복수전공 | 8 | 19 | 3 | 30 | | 21 | 35 | 56 | 44 | 130 |",
+          "extraction_method": "PyMuPDF coordinates"
+        }
+      }
+    ],
+    "credit_allocations": [
+      {
+        "uid": "allocation:2022:교양:기초교양",
+        "section": "교양",
+        "category": "기초교양",
+        "term_credits": [
+          3,
+          3,
+          2,
+          0,
+          0,
+          0,
+          0,
+          0
+        ],
+        "declared_total": 8,
+        "evidence": {
+          "pdf_page": 129,
+          "printed_page": 282,
+          "section": "전공심화과정 학점배분구조표",
+          "bbox": [
+            66.669,
+            142.136,
+            472.369,
+            151.625
+          ],
+          "raw_text": "기초교양 3 3 2 8",
+          "extraction_method": "PyMuPDF coordinates"
+        }
+      },
+      {
+        "uid": "allocation:2022:교양:균형교양",
+        "section": "교양",
+        "category": "균형교양",
+        "term_credits": [
+          9,
+          7,
+          3,
+          3,
+          0,
+          0,
+          0,
+          0
+        ],
+        "declared_total": 22,
+        "evidence": {
+          "pdf_page": 129,
+          "printed_page": 282,
+          "section": "전공심화과정 학점배분구조표",
+          "bbox": [
+            66.669,
+            154.975,
+            472.369,
+            164.465
+          ],
+          "raw_text": "균형교양 9 7 3 3 22",
+          "extraction_method": "PyMuPDF coordinates"
+        }
+      },
+      {
+        "uid": "allocation:2022:교양:확대교양",
+        "section": "교양",
+        "category": "확대교양",
+        "term_credits": [
+          0,
+          0,
+          0,
+          3,
+          0,
+          0,
+          0,
+          0
+        ],
+        "declared_total": 3,
+        "evidence": {
+          "pdf_page": 129,
+          "printed_page": 282,
+          "section": "전공심화과정 학점배분구조표",
+          "bbox": [
+            66.669,
+            167.936,
+            472.369,
+            177.425
+          ],
+          "raw_text": "교양 확대교양 3 3",
+          "extraction_method": "PyMuPDF coordinates"
+        }
+      },
+      {
+        "uid": "allocation:2022:교양:잔여학점",
+        "section": "교양",
+        "category": "잔여학점",
+        "term_credits": [
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0
+        ],
+        "declared_total": null,
+        "evidence": {
+          "pdf_page": 129,
+          "printed_page": 282,
+          "section": "전공심화과정 학점배분구조표",
+          "bbox": [
+            66.669,
+            180.775,
+            472.369,
+            190.265
+          ],
+          "raw_text": "잔여학점",
+          "extraction_method": "PyMuPDF coordinates"
+        }
+      },
+      {
+        "uid": "allocation:2022:교양:교양 소계",
+        "section": "교양",
+        "category": "교양 소계",
+        "term_credits": [
+          12,
+          10,
+          5,
+          6,
+          0,
+          0,
+          0,
+          0
+        ],
+        "declared_total": 33,
+        "evidence": {
+          "pdf_page": 129,
+          "printed_page": 282,
+          "section": "전공심화과정 학점배분구조표",
+          "bbox": [
+            66.669,
+            193.736,
+            472.369,
+            203.225
+          ],
+          "raw_text": "소 계 12 10 5 6 33",
+          "extraction_method": "PyMuPDF coordinates"
+        }
+      },
+      {
+        "uid": "allocation:2022:전공:전공필수",
+        "section": "전공",
+        "category": "전공필수",
+        "term_credits": [
+          0,
+          0,
+          0,
+          3,
+          12,
+          9,
+          0,
+          0
+        ],
+        "declared_total": 24,
+        "evidence": {
+          "pdf_page": 129,
+          "printed_page": 282,
+          "section": "전공심화과정 학점배분구조표",
+          "bbox": [
+            66.669,
+            206.575,
+            472.369,
+            216.065
+          ],
+          "raw_text": "전공필수 3 12 9 24",
+          "extraction_method": "PyMuPDF coordinates"
+        }
+      },
+      {
+        "uid": "allocation:2022:전공:전공선택",
+        "section": "전공",
+        "category": "전공선택",
+        "term_credits": [
+          0,
+          3,
+          9,
+          9,
+          3,
+          9,
+          12,
+          9
+        ],
+        "declared_total": 78,
+        "evidence": {
+          "pdf_page": 129,
+          "printed_page": 282,
+          "section": "전공심화과정 학점배분구조표",
+          "bbox": [
+            66.669,
+            219.535,
+            472.369,
+            229.025
+          ],
+          "raw_text": "전공 전공선택 3 9 9 3 9 12 9 78",
+          "extraction_method": "PyMuPDF coordinates"
+        }
+      },
+      {
+        "uid": "allocation:2022:전공:전공 소계",
+        "section": "전공",
+        "category": "전공 소계",
+        "term_credits": [
+          0,
+          3,
+          9,
+          12,
+          15,
+          18,
+          12,
+          9
+        ],
+        "declared_total": 78,
+        "evidence": {
+          "pdf_page": 129,
+          "printed_page": 282,
+          "section": "전공심화과정 학점배분구조표",
+          "bbox": [
+            66.669,
+            232.376,
+            472.369,
+            241.865
+          ],
+          "raw_text": "소 계 3 9 12 15 18 12 9 78",
+          "extraction_method": "PyMuPDF coordinates"
+        }
+      },
+      {
+        "uid": "allocation:2022:전체:교양+전공",
+        "section": "전체",
+        "category": "교양+전공",
+        "term_credits": [
+          12,
+          13,
+          14,
+          18,
+          15,
+          18,
+          12,
+          9
+        ],
+        "declared_total": 111,
+        "evidence": {
+          "pdf_page": 129,
+          "printed_page": 282,
+          "section": "전공심화과정 학점배분구조표",
+          "bbox": [
+            66.669,
+            245.335,
+            472.369,
+            254.825
+          ],
+          "raw_text": "( 교양 )+( 전공 )= 계 12 13 14 18 15 18 12 9 111",
+          "extraction_method": "PyMuPDF coordinates"
+        }
+      },
+      {
+        "uid": "allocation:2022:졸업:졸업잔여학점",
+        "section": "졸업",
+        "category": "졸업잔여학점",
+        "term_credits": [
+          5,
+          4,
+          3,
+          0,
+          2,
+          0,
+          3,
+          2
+        ],
+        "declared_total": 19,
+        "evidence": {
+          "pdf_page": 129,
+          "printed_page": 282,
+          "section": "전공심화과정 학점배분구조표",
+          "bbox": [
+            66.669,
+            258.176,
+            472.369,
+            267.665
+          ],
+          "raw_text": "졸업잔여학점 5 4 3 2 3 2 19",
+          "extraction_method": "PyMuPDF coordinates"
+        }
+      },
+      {
+        "uid": "allocation:2022:졸업:졸업학점",
+        "section": "졸업",
+        "category": "졸업학점",
+        "term_credits": [
+          17,
+          17,
+          17,
+          18,
+          17,
+          18,
+          15,
+          11
+        ],
+        "declared_total": 130,
+        "evidence": {
+          "pdf_page": 129,
+          "printed_page": 282,
+          "section": "전공심화과정 학점배분구조표",
+          "bbox": [
+            66.669,
+            271.135,
+            472.369,
+            280.625
+          ],
+          "raw_text": "졸업학점 17 17 17 18 17 18 15 11 130",
+          "extraction_method": "PyMuPDF coordinates"
+        }
+      }
+    ],
+    "designated_courses": [
+      {
+        "uid": "course:GEA7261",
+        "code": "GEA7261",
+        "course_type": "designated_general",
+        "category": "균형교양",
+        "area": "1. 디지털커뮤니케이션",
+        "name_ko": "컴퓨팅프로그래밍",
+        "name_en": null,
+        "credits": 3,
+        "total_hours": 4,
+        "lecture_hours": null,
+        "practice_hours": null,
+        "practice_weeks": null,
+        "offering": "1-1,2",
+        "competency_ids": [],
+        "minor_required": false,
+        "source_order": 1,
+        "evidence": {
+          "pdf_page": 129,
+          "printed_page": 282,
+          "section": "학과지정교과목",
+          "bbox": [
+            66.669,
+            337.769,
+            472.369,
+            360.96
+          ],
+          "raw_text": "균형교양 (1. 디지털커뮤니케이션 ) | GEA7261 | 컴퓨팅프로그래밍 | 3 | 4 | 1-1,2",
+          "extraction_method": "PyMuPDF coordinates"
+        }
+      },
+      {
+        "uid": "course:GEA7260",
+        "code": "GEA7260",
+        "course_type": "designated_general",
+        "category": "균형교양",
+        "area": "1. 디지털커뮤니케이션",
+        "name_ko": "컴퓨터개론",
+        "name_en": null,
+        "credits": 3,
+        "total_hours": 3,
+        "lecture_hours": null,
+        "practice_hours": null,
+        "practice_weeks": null,
+        "offering": "1-1,2",
+        "competency_ids": [],
+        "minor_required": false,
+        "source_order": 2,
+        "evidence": {
+          "pdf_page": 129,
+          "printed_page": 282,
+          "section": "학과지정교과목",
+          "bbox": [
+            66.669,
+            360.96,
+            472.369,
+            378.6
+          ],
+          "raw_text": "균형교양 | GEA7260 | 컴퓨터개론 | 3 | 3 | 1-1,2",
+          "extraction_method": "PyMuPDF coordinates"
+        }
+      },
+      {
+        "uid": "course:GEA8515",
+        "code": "GEA8515",
+        "course_type": "designated_general",
+        "category": "균형교양",
+        "area": "4. 자연·과학·기술의 이해",
+        "name_ko": "컴퓨팅사고력",
+        "name_en": null,
+        "credits": 2,
+        "total_hours": 2,
+        "lecture_hours": null,
+        "practice_hours": null,
+        "practice_weeks": null,
+        "offering": "1-2",
+        "competency_ids": [],
+        "minor_required": false,
+        "source_order": 3,
+        "evidence": {
+          "pdf_page": 129,
+          "printed_page": 282,
+          "section": "학과지정교과목",
+          "bbox": [
+            66.669,
+            378.6,
+            472.369,
+            393.78
+          ],
+          "raw_text": "균형교양 (4. 자연 · 과학 · 기술의 이해 ) | GEA8515 | 컴퓨팅사고력 | 2 | 2 | 1-2",
+          "extraction_method": "PyMuPDF coordinates"
+        }
+      },
+      {
+        "uid": "course:GEA8538",
+        "code": "GEA8538",
+        "course_type": "designated_general",
+        "category": "균형교양",
+        "area": "4. 자연·과학·기술의 이해",
+        "name_ko": "인공지능의시대",
+        "name_en": null,
+        "credits": 2,
+        "total_hours": 2,
+        "lecture_hours": null,
+        "practice_hours": null,
+        "practice_weeks": null,
+        "offering": "1-2",
+        "competency_ids": [],
+        "minor_required": false,
+        "source_order": 4,
+        "evidence": {
+          "pdf_page": 129,
+          "printed_page": 282,
+          "section": "학과지정교과목",
+          "bbox": [
+            66.669,
+            393.78,
+            472.369,
+            408.96
+          ],
+          "raw_text": "균형교양 | GEA8538 | 인공지능의시대 | 2 | 2 | 1-2",
+          "extraction_method": "PyMuPDF coordinates"
+        }
+      },
+      {
+        "uid": "course:GEA7301",
+        "code": "GEA7301",
+        "course_type": "designated_general",
+        "category": "확대교양",
+        "area": "2. 소양교육",
+        "name_ko": "공업수학",
+        "name_en": null,
+        "credits": 3,
+        "total_hours": 3,
+        "lecture_hours": null,
+        "practice_hours": null,
+        "practice_weeks": null,
+        "offering": "2-1,2",
+        "competency_ids": [],
+        "minor_required": false,
+        "source_order": 5,
+        "evidence": {
+          "pdf_page": 129,
+          "printed_page": 282,
+          "section": "학과지정교과목",
+          "bbox": [
+            66.669,
+            408.96,
+            472.369,
+            423.569
+          ],
+          "raw_text": "확대교양 (2. 소양교육 ) | GEA7301 | 공업수학 | 3 | 3 | 2-1,2",
+          "extraction_method": "PyMuPDF coordinates"
+        }
+      }
+    ],
+    "major_courses": [
+      {
+        "uid": "course:CDA0143",
+        "code": "CDA0143",
+        "course_type": "major_required",
+        "category": "전공필수",
+        "area": null,
+        "name_ko": "고급자료구조",
+        "name_en": "Advanced Data Structure",
+        "credits": 3,
+        "total_hours": null,
+        "lecture_hours": 3,
+        "practice_hours": null,
+        "practice_weeks": null,
+        "offering": "2-2",
+        "competency_ids": [
+          1,
+          3,
+          4
+        ],
+        "minor_required": false,
+        "source_order": 1,
+        "evidence": {
+          "pdf_page": 129,
+          "printed_page": 282,
+          "section": "전공교육과정표",
+          "bbox": [
+            66.669,
+            505.409,
+            472.369,
+            522.48
+          ],
+          "raw_text": "CDA0143 | 고급자료구조(Advanced Data Structure) | 3 | 3 | | 2-2 | ①③④",
+          "extraction_method": "PyMuPDF coordinates"
+        }
+      },
+      {
+        "uid": "course:CDA0065",
+        "code": "CDA0065",
+        "course_type": "major_required",
+        "category": "전공필수",
+        "area": null,
+        "name_ko": "데이터베이스개론",
+        "name_en": "Database Theory",
+        "credits": 3,
+        "total_hours": null,
+        "lecture_hours": 3,
+        "practice_hours": null,
+        "practice_weeks": null,
+        "offering": "3-1",
+        "competency_ids": [
+          2,
+          4,
+          5
+        ],
+        "minor_required": false,
+        "source_order": 2,
+        "evidence": {
+          "pdf_page": 129,
+          "printed_page": 282,
+          "section": "전공교육과정표",
+          "bbox": [
+            66.669,
+            522.48,
+            472.369,
+            538.02
+          ],
+          "raw_text": "CDA0065 | 데이터베이스개론(Database Theory) | 3 | 3 | | 3-1 | ②④⑤",
+          "extraction_method": "PyMuPDF coordinates"
+        }
+      },
+      {
+        "uid": "course:CDA0027",
+        "code": "CDA0027",
+        "course_type": "major_required",
+        "category": "전공필수",
+        "area": null,
+        "name_ko": "알고리즘",
+        "name_en": "Algorithms",
+        "credits": 3,
+        "total_hours": null,
+        "lecture_hours": 3,
+        "practice_hours": null,
+        "practice_weeks": null,
+        "offering": "3-1",
+        "competency_ids": [
+          1,
+          4
+        ],
+        "minor_required": false,
+        "source_order": 3,
+        "evidence": {
+          "pdf_page": 129,
+          "printed_page": 282,
+          "section": "전공교육과정표",
+          "bbox": [
+            66.669,
+            538.02,
+            472.369,
+            552.42
+          ],
+          "raw_text": "CDA0027 | 알고리즘(Algorithms) | 3 | 3 | | 3-1 | ①④",
+          "extraction_method": "PyMuPDF coordinates"
+        }
+      },
+      {
+        "uid": "course:CDA0017",
+        "code": "CDA0017",
+        "course_type": "major_required",
+        "category": "전공필수",
+        "area": null,
+        "name_ko": "운영체제",
+        "name_en": "Operating System",
+        "credits": 3,
+        "total_hours": null,
+        "lecture_hours": 3,
+        "practice_hours": null,
+        "practice_weeks": null,
+        "offering": "3-2",
+        "competency_ids": [
+          1,
+          4
+        ],
+        "minor_required": true,
+        "source_order": 4,
+        "evidence": {
+          "pdf_page": 129,
+          "printed_page": 282,
+          "section": "전공교육과정표",
+          "bbox": [
+            66.669,
+            552.42,
+            472.369,
+            566.46
+          ],
+          "raw_text": "CDA0017 | ※ 운영체제(Operating System) | 3 | 3 | | 3-2 | ①④",
+          "extraction_method": "PyMuPDF coordinates"
+        }
+      },
+      {
+        "uid": "course:CDA0016",
+        "code": "CDA0016",
+        "course_type": "major_required",
+        "category": "전공필수",
+        "area": null,
+        "name_ko": "컴퓨터구조",
+        "name_en": "Computer Architechture",
+        "credits": 3,
+        "total_hours": null,
+        "lecture_hours": 3,
+        "practice_hours": null,
+        "practice_weeks": null,
+        "offering": "3-1",
+        "competency_ids": [
+          1,
+          3,
+          4
+        ],
+        "minor_required": true,
+        "source_order": 5,
+        "evidence": {
+          "pdf_page": 129,
+          "printed_page": 282,
+          "section": "전공교육과정표",
+          "bbox": [
+            66.669,
+            566.46,
+            472.369,
+            580.5
+          ],
+          "raw_text": "CDA0016 | ※ 컴퓨터구조(Computer Architechture) | 3 | 3 | | 3-1 | ①③④",
+          "extraction_method": "PyMuPDF coordinates"
+        }
+      },
+      {
+        "uid": "course:CDA0023",
+        "code": "CDA0023",
+        "course_type": "major_required",
+        "category": "전공필수",
+        "area": null,
+        "name_ko": "데이터통신",
+        "name_en": "Data Communication",
+        "credits": 3,
+        "total_hours": null,
+        "lecture_hours": 3,
+        "practice_hours": null,
+        "practice_weeks": null,
+        "offering": "3-2",
+        "competency_ids": [
+          1,
+          3,
+          4
+        ],
+        "minor_required": false,
+        "source_order": 6,
+        "evidence": {
+          "pdf_page": 129,
+          "printed_page": 282,
+          "section": "전공교육과정표",
+          "bbox": [
+            66.669,
+            580.5,
+            472.369,
+            594.54
+          ],
+          "raw_text": "CDA0023 | 데이터통신(Data Communication) | 3 | 3 | | 3-2 | ①③④",
+          "extraction_method": "PyMuPDF coordinates"
+        }
+      },
+      {
+        "uid": "course:CDA0028",
+        "code": "CDA0028",
+        "course_type": "major_required",
+        "category": "전공필수",
+        "area": null,
+        "name_ko": "소프트웨어공학",
+        "name_en": "Software Engineering",
+        "credits": 3,
+        "total_hours": null,
+        "lecture_hours": 3,
+        "practice_hours": null,
+        "practice_weeks": null,
+        "offering": "3-2",
+        "competency_ids": [
+          1,
+          3,
+          4
+        ],
+        "minor_required": false,
+        "source_order": 7,
+        "evidence": {
+          "pdf_page": 129,
+          "printed_page": 282,
+          "section": "전공교육과정표",
+          "bbox": [
+            66.669,
+            594.54,
+            472.369,
+            610.56
+          ],
+          "raw_text": "CDA0028 | 소프트웨어공학(Software Engineering) | 3 | 3 | | 3-2 | ①③④",
+          "extraction_method": "PyMuPDF coordinates"
+        }
+      },
+      {
+        "uid": "course:CDA0088",
+        "code": "CDA0088",
+        "course_type": "major_required",
+        "category": "전공필수",
+        "area": null,
+        "name_ko": "심층상담",
+        "name_en": "Consultation",
+        "credits": 0,
+        "total_hours": null,
+        "lecture_hours": null,
+        "practice_hours": null,
+        "practice_weeks": null,
+        "offering": "전학년-1,2",
+        "competency_ids": [
+          2
+        ],
+        "minor_required": false,
+        "source_order": 8,
+        "evidence": {
+          "pdf_page": 129,
+          "printed_page": 282,
+          "section": "전공교육과정표",
+          "bbox": [
+            66.669,
+            610.56,
+            472.369,
+            628.68
+          ],
+          "raw_text": "CDA0088 | 심층상담(Consultation) | 0 | | | 전학년-1,2 | ②",
+          "extraction_method": "PyMuPDF coordinates"
+        }
+      },
+      {
+        "uid": "course:CDA0034",
+        "code": "CDA0034",
+        "course_type": "major_required",
+        "category": "전공필수",
+        "area": null,
+        "name_ko": "졸업논문",
+        "name_en": "Graduation Thesis",
+        "credits": 0,
+        "total_hours": null,
+        "lecture_hours": null,
+        "practice_hours": null,
+        "practice_weeks": null,
+        "offering": "4-1,2",
+        "competency_ids": [
+          2,
+          3,
+          4,
+          5
+        ],
+        "minor_required": false,
+        "source_order": 9,
+        "evidence": {
+          "pdf_page": 129,
+          "printed_page": 282,
+          "section": "전공교육과정표",
+          "bbox": [
+            66.669,
+            628.68,
+            472.369,
+            644.88
+          ],
+          "raw_text": "CDA0034 | 졸업논문(Graduation Thesis) | 0 | | | 4-1,2 | ②③④⑤",
+          "extraction_method": "PyMuPDF coordinates"
+        }
+      },
+      {
+        "uid": "course:CDA0155",
+        "code": "CDA0155",
+        "course_type": "major_elective",
+        "category": "전공선택",
+        "area": null,
+        "name_ko": "객체지향프로그래밍",
+        "name_en": "Object-oriented Programming",
+        "credits": 3,
+        "total_hours": null,
+        "lecture_hours": 2,
+        "practice_hours": 2,
+        "practice_weeks": null,
+        "offering": "2-1",
+        "competency_ids": [
+          1,
+          2,
+          4
+        ],
+        "minor_required": false,
+        "source_order": 10,
+        "evidence": {
+          "pdf_page": 129,
+          "printed_page": 282,
+          "section": "전공교육과정표",
+          "bbox": [
+            66.669,
+            644.88,
+            472.369,
+            658.98
+          ],
+          "raw_text": "CDA0155 | 객체지향프로그래밍(Object-oriented Programming) | 3 | 2 | 2 | 2-1 | ①②④",
+          "extraction_method": "PyMuPDF coordinates"
+        }
+      },
+      {
+        "uid": "course:CDA0156",
+        "code": "CDA0156",
+        "course_type": "major_elective",
+        "category": "전공선택",
+        "area": null,
+        "name_ko": "오픈소스소프트웨어",
+        "name_en": "Open Source Software",
+        "credits": 3,
+        "total_hours": null,
+        "lecture_hours": 2,
+        "practice_hours": 2,
+        "practice_weeks": null,
+        "offering": "2-1",
+        "competency_ids": [
+          1,
+          2,
+          3
+        ],
+        "minor_required": false,
+        "source_order": 11,
+        "evidence": {
+          "pdf_page": 129,
+          "printed_page": 282,
+          "section": "전공교육과정표",
+          "bbox": [
+            66.669,
+            658.98,
+            472.369,
+            673.68
+          ],
+          "raw_text": "CDA0156 | 오픈소스소프트웨어(Open Source Software) | 3 | 2 | 2 | 2-1 | ①②③",
+          "extraction_method": "PyMuPDF coordinates"
+        }
+      },
+      {
+        "uid": "course:CDA0157",
+        "code": "CDA0157",
+        "course_type": "major_elective",
+        "category": "전공선택",
+        "area": null,
+        "name_ko": "이산수학",
+        "name_en": "Discrete mathematics",
+        "credits": 3,
+        "total_hours": null,
+        "lecture_hours": 3,
+        "practice_hours": null,
+        "practice_weeks": null,
+        "offering": "2-1",
+        "competency_ids": [
+          1,
+          4
+        ],
+        "minor_required": false,
+        "source_order": 12,
+        "evidence": {
+          "pdf_page": 129,
+          "printed_page": 282,
+          "section": "전공교육과정표",
+          "bbox": [
+            66.669,
+            673.68,
+            472.369,
+            689.249
+          ],
+          "raw_text": "CDA0157 | 이산수학(Discrete mathematics) | 3 | 3 | | 2-1 | ①④",
+          "extraction_method": "PyMuPDF coordinates"
+        }
+      },
+      {
+        "uid": "course:CDA0008",
+        "code": "CDA0008",
+        "course_type": "major_elective",
+        "category": "전공선택",
+        "area": null,
+        "name_ko": "자료구조",
+        "name_en": "Data Structure",
+        "credits": 3,
+        "total_hours": null,
+        "lecture_hours": 3,
+        "practice_hours": null,
+        "practice_weeks": null,
+        "offering": "2-1",
+        "competency_ids": [
+          1,
+          3,
+          4
+        ],
+        "minor_required": true,
+        "source_order": 13,
+        "evidence": {
+          "pdf_page": 130,
+          "printed_page": 283,
+          "section": "전공교육과정표",
+          "bbox": [
+            66.663,
+            127.169,
+            473.414,
+            141.66
+          ],
+          "raw_text": "CDA0008 | ※ 자료구조(Data Structure) | 3 | 3 | | 2-1 | ①③④",
+          "extraction_method": "PyMuPDF coordinates"
+        }
+      },
+      {
+        "uid": "course:CDA0010",
+        "code": "CDA0010",
+        "course_type": "major_elective",
+        "category": "전공선택",
+        "area": null,
+        "name_ko": "논리설계",
+        "name_en": "Digital Design",
+        "credits": 3,
+        "total_hours": null,
+        "lecture_hours": 3,
+        "practice_hours": null,
+        "practice_weeks": null,
+        "offering": "2-2",
+        "competency_ids": [
+          1,
+          3,
+          4
+        ],
+        "minor_required": false,
+        "source_order": 14,
+        "evidence": {
+          "pdf_page": 130,
+          "printed_page": 283,
+          "section": "전공교육과정표",
+          "bbox": [
+            66.663,
+            141.66,
+            473.414,
+            155.7
+          ],
+          "raw_text": "CDA0010 | 논리설계(Digital Design) | 3 | 3 | | 2-2 | ①③④",
+          "extraction_method": "PyMuPDF coordinates"
+        }
+      },
+      {
+        "uid": "course:CDA0136",
+        "code": "CDA0136",
+        "course_type": "major_elective",
+        "category": "전공선택",
+        "area": null,
+        "name_ko": "데이터베이스언어실습",
+        "name_en": "Database Language Practice",
+        "credits": 3,
+        "total_hours": null,
+        "lecture_hours": 2,
+        "practice_hours": 2,
+        "practice_weeks": null,
+        "offering": "2-2",
+        "competency_ids": [
+          1,
+          2,
+          4
+        ],
+        "minor_required": false,
+        "source_order": 15,
+        "evidence": {
+          "pdf_page": 130,
+          "printed_page": 283,
+          "section": "전공교육과정표",
+          "bbox": [
+            66.663,
+            155.7,
+            473.414,
+            169.68
+          ],
+          "raw_text": "CDA0136 | 데이터베이스언어실습(Database Language Practice) | 3 | 2 | 2 | 2-2 | ①②④",
+          "extraction_method": "PyMuPDF coordinates"
+        }
+      },
+      {
+        "uid": "course:CDA0125",
+        "code": "CDA0125",
+        "course_type": "major_elective",
+        "category": "전공선택",
+        "area": null,
+        "name_ko": "모바일프로그래밍",
+        "name_en": "Mobile Programming",
+        "credits": 3,
+        "total_hours": null,
+        "lecture_hours": 3,
+        "practice_hours": null,
+        "practice_weeks": null,
+        "offering": "2-2",
+        "competency_ids": [
+          1,
+          3,
+          4
+        ],
+        "minor_required": false,
+        "source_order": 16,
+        "evidence": {
+          "pdf_page": 130,
+          "printed_page": 283,
+          "section": "전공교육과정표",
+          "bbox": [
+            66.663,
+            169.68,
+            473.414,
+            183.66
+          ],
+          "raw_text": "CDA0125 | 모바일프로그래밍(Mobile Programming) | 3 | 3 | | 2-2 | ①③④",
+          "extraction_method": "PyMuPDF coordinates"
+        }
+      },
+      {
+        "uid": "course:CDA0006",
+        "code": "CDA0006",
+        "course_type": "major_elective",
+        "category": "전공선택",
+        "area": null,
+        "name_ko": "시스템프로그래밍",
+        "name_en": "System Programming",
+        "credits": 3,
+        "total_hours": null,
+        "lecture_hours": 3,
+        "practice_hours": null,
+        "practice_weeks": null,
+        "offering": "2-2",
+        "competency_ids": [
+          1,
+          4,
+          5
+        ],
+        "minor_required": false,
+        "source_order": 17,
+        "evidence": {
+          "pdf_page": 130,
+          "printed_page": 283,
+          "section": "전공교육과정표",
+          "bbox": [
+            66.663,
+            183.66,
+            473.414,
+            197.7
+          ],
+          "raw_text": "CDA0006 | 시스템프로그래밍(System Programming) | 3 | 3 | | 2-2 | ①④⑤",
+          "extraction_method": "PyMuPDF coordinates"
+        }
+      },
+      {
+        "uid": "course:CDA0014",
+        "code": "CDA0014",
+        "course_type": "major_elective",
+        "category": "전공선택",
+        "area": null,
+        "name_ko": "컴퓨터그래픽스",
+        "name_en": "Computer Graphics",
+        "credits": 3,
+        "total_hours": null,
+        "lecture_hours": 3,
+        "practice_hours": null,
+        "practice_weeks": null,
+        "offering": "2-2",
+        "competency_ids": [
+          1,
+          3,
+          4
+        ],
+        "minor_required": false,
+        "source_order": 18,
+        "evidence": {
+          "pdf_page": 130,
+          "printed_page": 283,
+          "section": "전공교육과정표",
+          "bbox": [
+            66.663,
+            197.7,
+            473.414,
+            211.74
+          ],
+          "raw_text": "CDA0014 | 컴퓨터그래픽스(Computer Graphics) | 3 | 3 | | 2-2 | ①③④",
+          "extraction_method": "PyMuPDF coordinates"
+        }
+      },
+      {
+        "uid": "course:CDA0130",
+        "code": "CDA0130",
+        "course_type": "major_elective",
+        "category": "전공선택",
+        "area": null,
+        "name_ko": "멀티미디어공학",
+        "name_en": "Multimedia and Project",
+        "credits": 3,
+        "total_hours": null,
+        "lecture_hours": 3,
+        "practice_hours": null,
+        "practice_weeks": null,
+        "offering": "3-1",
+        "competency_ids": [
+          1,
+          3,
+          4
+        ],
+        "minor_required": false,
+        "source_order": 19,
+        "evidence": {
+          "pdf_page": 130,
+          "printed_page": 283,
+          "section": "전공교육과정표",
+          "bbox": [
+            66.663,
+            211.74,
+            473.414,
+            225.78
+          ],
+          "raw_text": "CDA0130 | 멀티미디어공학(Multimedia and Project) | 3 | 3 | | 3-1 | ①③④",
+          "extraction_method": "PyMuPDF coordinates"
+        }
+      },
+      {
+        "uid": "course:CDA0154",
+        "code": "CDA0154",
+        "course_type": "major_elective",
+        "category": "전공선택",
+        "area": null,
+        "name_ko": "소프트웨어설계",
+        "name_en": "Software Design",
+        "credits": 3,
+        "total_hours": null,
+        "lecture_hours": 3,
+        "practice_hours": null,
+        "practice_weeks": null,
+        "offering": "3-1",
+        "competency_ids": [
+          1,
+          3,
+          4
+        ],
+        "minor_required": false,
+        "source_order": 20,
+        "evidence": {
+          "pdf_page": 130,
+          "printed_page": 283,
+          "section": "전공교육과정표",
+          "bbox": [
+            66.663,
+            225.78,
+            473.414,
+            239.82
+          ],
+          "raw_text": "CDA0154 | 소프트웨어설계(Software Design) | 3 | 3 | | 3-1 | ①③④",
+          "extraction_method": "PyMuPDF coordinates"
+        }
+      },
+      {
+        "uid": "course:CDA0152",
+        "code": "CDA0152",
+        "course_type": "major_elective",
+        "category": "전공선택",
+        "area": null,
+        "name_ko": "데이터베이스설계",
+        "name_en": "Database Design",
+        "credits": 3,
+        "total_hours": null,
+        "lecture_hours": 3,
+        "practice_hours": null,
+        "practice_weeks": null,
+        "offering": "3-2",
+        "competency_ids": [
+          3,
+          4,
+          5
+        ],
+        "minor_required": false,
+        "source_order": 21,
+        "evidence": {
+          "pdf_page": 130,
+          "printed_page": 283,
+          "section": "전공교육과정표",
+          "bbox": [
+            66.663,
+            239.82,
+            473.414,
+            253.8
+          ],
+          "raw_text": "CDA0152 | 데이터베이스설계(Database Design) | 3 | 3 | | 3-2 | ③④⑤",
+          "extraction_method": "PyMuPDF coordinates"
+        }
+      },
+      {
+        "uid": "course:CDA0139",
+        "code": "CDA0139",
+        "course_type": "major_elective",
+        "category": "전공선택",
+        "area": null,
+        "name_ko": "영상처리",
+        "name_en": "Image Processing",
+        "credits": 3,
+        "total_hours": null,
+        "lecture_hours": 3,
+        "practice_hours": null,
+        "practice_weeks": null,
+        "offering": "3-2",
+        "competency_ids": [
+          1,
+          2,
+          4
+        ],
+        "minor_required": false,
+        "source_order": 22,
+        "evidence": {
+          "pdf_page": 130,
+          "printed_page": 283,
+          "section": "전공교육과정표",
+          "bbox": [
+            66.663,
+            253.8,
+            473.414,
+            267.78
+          ],
+          "raw_text": "CDA0139 | 영상처리(Image Processing) | 3 | 3 | | 3-2 | ①②④",
+          "extraction_method": "PyMuPDF coordinates"
+        }
+      },
+      {
+        "uid": "course:CDA0019",
+        "code": "CDA0019",
+        "course_type": "major_elective",
+        "category": "전공선택",
+        "area": null,
+        "name_ko": "컴퓨터구조응용",
+        "name_en": "Computer architecture application",
+        "credits": 3,
+        "total_hours": null,
+        "lecture_hours": 3,
+        "practice_hours": null,
+        "practice_weeks": null,
+        "offering": "3-2",
+        "competency_ids": [
+          1,
+          4,
+          5
+        ],
+        "minor_required": false,
+        "source_order": 23,
+        "evidence": {
+          "pdf_page": 130,
+          "printed_page": 283,
+          "section": "전공교육과정표",
+          "bbox": [
+            66.663,
+            267.78,
+            473.414,
+            281.82
+          ],
+          "raw_text": "CDA0019 | 컴퓨터구조응용(Computer architecture application) | 3 | 3 | | 3-2 | ①④⑤",
+          "extraction_method": "PyMuPDF coordinates"
+        }
+      },
+      {
+        "uid": "course:CDA0141",
+        "code": "CDA0141",
+        "course_type": "major_elective",
+        "category": "전공선택",
+        "area": null,
+        "name_ko": "캡스톤디자인1",
+        "name_en": "Capstone Design 1",
+        "credits": 0,
+        "total_hours": null,
+        "lecture_hours": null,
+        "practice_hours": null,
+        "practice_weeks": null,
+        "offering": "3-2",
+        "competency_ids": [
+          2,
+          3,
+          4,
+          5
+        ],
+        "minor_required": false,
+        "source_order": 24,
+        "evidence": {
+          "pdf_page": 130,
+          "printed_page": 283,
+          "section": "전공교육과정표",
+          "bbox": [
+            66.663,
+            281.82,
+            473.414,
+            295.86
+          ],
+          "raw_text": "CDA0141 | 캡스톤디자인1(Capstone Design 1) | 0 | | | 3-2 | ②③④⑤",
+          "extraction_method": "PyMuPDF coordinates"
+        }
+      },
+      {
+        "uid": "course:CDA0013",
+        "code": "CDA0013",
+        "course_type": "major_elective",
+        "category": "전공선택",
+        "area": null,
+        "name_ko": "프로그래밍언어론",
+        "name_en": "Programming Languages",
+        "credits": 3,
+        "total_hours": null,
+        "lecture_hours": 3,
+        "practice_hours": null,
+        "practice_weeks": null,
+        "offering": "2-2",
+        "competency_ids": [
+          1,
+          4
+        ],
+        "minor_required": false,
+        "source_order": 25,
+        "evidence": {
+          "pdf_page": 130,
+          "printed_page": 283,
+          "section": "전공교육과정표",
+          "bbox": [
+            66.663,
+            295.86,
+            473.414,
+            309.9
+          ],
+          "raw_text": "CDA0013 | 프로그래밍언어론(Programming Languages) | 3 | 3 | | 2-2 | ①④",
+          "extraction_method": "PyMuPDF coordinates"
+        }
+      },
+      {
+        "uid": "course:CDA0151",
+        "code": "CDA0151",
+        "course_type": "major_elective",
+        "category": "전공선택",
+        "area": null,
+        "name_ko": "네트워크프로그램",
+        "name_en": "Network Program",
+        "credits": 3,
+        "total_hours": null,
+        "lecture_hours": 3,
+        "practice_hours": null,
+        "practice_weeks": null,
+        "offering": "4-1",
+        "competency_ids": [
+          2,
+          4,
+          5
+        ],
+        "minor_required": false,
+        "source_order": 26,
+        "evidence": {
+          "pdf_page": 130,
+          "printed_page": 283,
+          "section": "전공교육과정표",
+          "bbox": [
+            66.663,
+            309.9,
+            473.414,
+            323.94
+          ],
+          "raw_text": "CDA0151 | 네트워크프로그램(Network Program) | 3 | 3 | | 4-1 | ②④⑤",
+          "extraction_method": "PyMuPDF coordinates"
+        }
+      },
+      {
+        "uid": "course:CDA0025",
+        "code": "CDA0025",
+        "course_type": "major_elective",
+        "category": "전공선택",
+        "area": null,
+        "name_ko": "마이크로프로세서",
+        "name_en": "Microprocessor",
+        "credits": 3,
+        "total_hours": null,
+        "lecture_hours": 3,
+        "practice_hours": null,
+        "practice_weeks": null,
+        "offering": "4-1",
+        "competency_ids": [
+          1,
+          3,
+          4
+        ],
+        "minor_required": false,
+        "source_order": 27,
+        "evidence": {
+          "pdf_page": 130,
+          "printed_page": 283,
+          "section": "전공교육과정표",
+          "bbox": [
+            66.663,
+            323.94,
+            473.414,
+            337.92
+          ],
+          "raw_text": "CDA0025 | 마이크로프로세서(Microprocessor) | 3 | 3 | | 4-1 | ①③④",
+          "extraction_method": "PyMuPDF coordinates"
+        }
+      },
+      {
+        "uid": "course:CDA0030",
+        "code": "CDA0030",
+        "course_type": "major_elective",
+        "category": "전공선택",
+        "area": null,
+        "name_ko": "인공지능",
+        "name_en": "Artificial Intelligence",
+        "credits": 3,
+        "total_hours": null,
+        "lecture_hours": 3,
+        "practice_hours": null,
+        "practice_weeks": null,
+        "offering": "4-1",
+        "competency_ids": [
+          1,
+          3,
+          4
+        ],
+        "minor_required": false,
+        "source_order": 28,
+        "evidence": {
+          "pdf_page": 130,
+          "printed_page": 283,
+          "section": "전공교육과정표",
+          "bbox": [
+            66.663,
+            337.92,
+            473.414,
+            351.9
+          ],
+          "raw_text": "CDA0030 | 인공지능(Artificial Intelligence) | 3 | 3 | | 4-1 | ①③④",
+          "extraction_method": "PyMuPDF coordinates"
+        }
+      },
+      {
+        "uid": "course:CDA0142",
+        "code": "CDA0142",
+        "course_type": "major_elective",
+        "category": "전공선택",
+        "area": null,
+        "name_ko": "캡스톤디자인2",
+        "name_en": "Capstone Design 2",
+        "credits": 3,
+        "total_hours": null,
+        "lecture_hours": 3,
+        "practice_hours": null,
+        "practice_weeks": null,
+        "offering": "4-1",
+        "competency_ids": [
+          2,
+          3,
+          4,
+          5
+        ],
+        "minor_required": false,
+        "source_order": 29,
+        "evidence": {
+          "pdf_page": 130,
+          "printed_page": 283,
+          "section": "전공교육과정표",
+          "bbox": [
+            66.663,
+            351.9,
+            473.414,
+            365.94
+          ],
+          "raw_text": "CDA0142 | 캡스톤디자인2(Capstone Design 2) | 3 | 3 | | 4-1 | ②③④⑤",
+          "extraction_method": "PyMuPDF coordinates"
+        }
+      },
+      {
+        "uid": "course:CDA0119",
+        "code": "CDA0119",
+        "course_type": "major_elective",
+        "category": "전공선택",
+        "area": null,
+        "name_ko": "컴파일러",
+        "name_en": "Compiler",
+        "credits": 3,
+        "total_hours": null,
+        "lecture_hours": 3,
+        "practice_hours": null,
+        "practice_weeks": null,
+        "offering": "4-1",
+        "competency_ids": [
+          1,
+          3,
+          4
+        ],
+        "minor_required": false,
+        "source_order": 30,
+        "evidence": {
+          "pdf_page": 130,
+          "printed_page": 283,
+          "section": "전공교육과정표",
+          "bbox": [
+            66.663,
+            365.94,
+            473.414,
+            379.98
+          ],
+          "raw_text": "CDA0119 | 컴파일러(Compiler) | 3 | 3 | | 4-1 | ①③④",
+          "extraction_method": "PyMuPDF coordinates"
+        }
+      },
+      {
+        "uid": "course:CDA0031",
+        "code": "CDA0031",
+        "course_type": "major_elective",
+        "category": "전공선택",
+        "area": null,
+        "name_ko": "컴퓨터네트워크",
+        "name_en": "Computer Networks",
+        "credits": 3,
+        "total_hours": null,
+        "lecture_hours": 3,
+        "practice_hours": null,
+        "practice_weeks": null,
+        "offering": "4-1",
+        "competency_ids": [
+          2,
+          3,
+          5
+        ],
+        "minor_required": false,
+        "source_order": 31,
+        "evidence": {
+          "pdf_page": 130,
+          "printed_page": 283,
+          "section": "전공교육과정표",
+          "bbox": [
+            66.663,
+            379.98,
+            473.414,
+            394.02
+          ],
+          "raw_text": "CDA0031 | 컴퓨터네트워크(Computer Networks) | 3 | 3 | | 4-1 | ②③⑤",
+          "extraction_method": "PyMuPDF coordinates"
+        }
+      },
+      {
+        "uid": "course:CDA0149",
+        "code": "CDA0149",
+        "course_type": "major_elective",
+        "category": "전공선택",
+        "area": null,
+        "name_ko": "딥러닝",
+        "name_en": "Deep Learning",
+        "credits": 3,
+        "total_hours": null,
+        "lecture_hours": 3,
+        "practice_hours": null,
+        "practice_weeks": null,
+        "offering": "4-2",
+        "competency_ids": [
+          1,
+          2,
+          4
+        ],
+        "minor_required": false,
+        "source_order": 32,
+        "evidence": {
+          "pdf_page": 130,
+          "printed_page": 283,
+          "section": "전공교육과정표",
+          "bbox": [
+            66.663,
+            394.02,
+            473.414,
+            411.12
+          ],
+          "raw_text": "CDA0149 | 딥러닝(Deep Learning) | 3 | 3 | | 4-2 | ①②④",
+          "extraction_method": "PyMuPDF coordinates"
+        }
+      },
+      {
+        "uid": "course:CDA0148",
+        "code": "CDA0148",
+        "course_type": "major_elective",
+        "category": "전공선택",
+        "area": null,
+        "name_ko": "분산컴퓨팅시스템",
+        "name_en": "Fundamentals of Distributed Computing Systems",
+        "credits": 3,
+        "total_hours": null,
+        "lecture_hours": 3,
+        "practice_hours": null,
+        "practice_weeks": null,
+        "offering": "4-1",
+        "competency_ids": [
+          1,
+          3,
+          4
+        ],
+        "minor_required": false,
+        "source_order": 33,
+        "evidence": {
+          "pdf_page": 130,
+          "printed_page": 283,
+          "section": "전공교육과정표",
+          "bbox": [
+            66.663,
+            411.12,
+            473.414,
+            431.4
+          ],
+          "raw_text": "CDA0148 | 분산컴퓨팅시스템 (Fundamentals of Distributed Computing Systems) | 3 | 3 | | 4-1 | ①③④",
+          "extraction_method": "PyMuPDF coordinates"
+        }
+      },
+      {
+        "uid": "course:CDA0150",
+        "code": "CDA0150",
+        "course_type": "major_elective",
+        "category": "전공선택",
+        "area": null,
+        "name_ko": "사물인터넷",
+        "name_en": "Internet of Things, IoT",
+        "credits": 3,
+        "total_hours": null,
+        "lecture_hours": 3,
+        "practice_hours": null,
+        "practice_weeks": null,
+        "offering": "4-2",
+        "competency_ids": [
+          2,
+          3,
+          5
+        ],
+        "minor_required": false,
+        "source_order": 34,
+        "evidence": {
+          "pdf_page": 130,
+          "printed_page": 283,
+          "section": "전공교육과정표",
+          "bbox": [
+            66.663,
+            431.4,
+            473.414,
+            448.74
+          ],
+          "raw_text": "CDA0150 | 사물인터넷(Internet of Things, IoT) | 3 | 3 | | 4-2 | ②③⑤",
+          "extraction_method": "PyMuPDF coordinates"
+        }
+      },
+      {
+        "uid": "course:CDA0153",
+        "code": "CDA0153",
+        "course_type": "major_elective",
+        "category": "전공선택",
+        "area": null,
+        "name_ko": "정보보안",
+        "name_en": "Information Security",
+        "credits": 3,
+        "total_hours": null,
+        "lecture_hours": 3,
+        "practice_hours": null,
+        "practice_weeks": null,
+        "offering": "4-2",
+        "competency_ids": [
+          1,
+          2,
+          3
+        ],
+        "minor_required": false,
+        "source_order": 35,
+        "evidence": {
+          "pdf_page": 130,
+          "printed_page": 283,
+          "section": "전공교육과정표",
+          "bbox": [
+            66.663,
+            448.74,
+            473.414,
+            462.9
+          ],
+          "raw_text": "CDA0153 | 정보보안(Information Security) | 3 | 3 | | 4-2 | ①②③",
+          "extraction_method": "PyMuPDF coordinates"
+        }
+      },
+      {
+        "uid": "course:CDA0074",
+        "code": "CDA0074",
+        "course_type": "major_elective",
+        "category": "전공선택",
+        "area": null,
+        "name_ko": "생명정보학개론",
+        "name_en": "Bio-informatics Theory",
+        "credits": 3,
+        "total_hours": null,
+        "lecture_hours": 3,
+        "practice_hours": null,
+        "practice_weeks": null,
+        "offering": "4-2",
+        "competency_ids": [
+          4,
+          5
+        ],
+        "minor_required": false,
+        "source_order": 36,
+        "evidence": {
+          "pdf_page": 130,
+          "printed_page": 283,
+          "section": "전공교육과정표",
+          "bbox": [
+            66.663,
+            462.9,
+            473.414,
+            476.94
+          ],
+          "raw_text": "CDA0074 | 생명정보학개론(Bio-informatics Theory) | 3 | 3 | | 4-2 | ④⑤",
+          "extraction_method": "PyMuPDF coordinates"
+        }
+      },
+      {
+        "uid": "course:CDA0159",
+        "code": "CDA0159",
+        "course_type": "major_elective",
+        "category": "전공선택",
+        "area": null,
+        "name_ko": "데이터과학세미나",
+        "name_en": "Data Science Seminar",
+        "credits": 3,
+        "total_hours": null,
+        "lecture_hours": 3,
+        "practice_hours": null,
+        "practice_weeks": null,
+        "offering": "4-2",
+        "competency_ids": [
+          2,
+          4,
+          5
+        ],
+        "minor_required": false,
+        "source_order": 37,
+        "evidence": {
+          "pdf_page": 130,
+          "printed_page": 283,
+          "section": "전공교육과정표",
+          "bbox": [
+            66.663,
+            476.94,
+            473.414,
+            492.42
+          ],
+          "raw_text": "CDA0159 | 데이터과학세미나(Data Science Seminar) | 3 | 3 | | 4-2 | ②④⑤",
+          "extraction_method": "PyMuPDF coordinates"
+        }
+      },
+      {
+        "uid": "course:CDA0144",
+        "code": "CDA0144",
+        "course_type": "major_elective",
+        "category": "전공선택",
+        "area": null,
+        "name_ko": "현장실습1",
+        "name_en": "Working Practices1",
+        "credits": 3,
+        "total_hours": null,
+        "lecture_hours": null,
+        "practice_hours": null,
+        "practice_weeks": 4,
+        "offering": "3,4-계절",
+        "competency_ids": [
+          2,
+          4,
+          5
+        ],
+        "minor_required": false,
+        "source_order": 38,
+        "evidence": {
+          "pdf_page": 130,
+          "printed_page": 283,
+          "section": "전공교육과정표",
+          "bbox": [
+            66.663,
+            492.42,
+            473.414,
+            509.28
+          ],
+          "raw_text": "CDA0144 | 현장실습1(Working Practices1) | 3 | | 4주 | 3,4-계절 | ②④⑤",
+          "extraction_method": "PyMuPDF coordinates"
+        }
+      },
+      {
+        "uid": "course:CDA0145",
+        "code": "CDA0145",
+        "course_type": "major_elective",
+        "category": "전공선택",
+        "area": null,
+        "name_ko": "현장실습3",
+        "name_en": "Working Practices3",
+        "credits": 6,
+        "total_hours": null,
+        "lecture_hours": null,
+        "practice_hours": null,
+        "practice_weeks": 8,
+        "offering": "3,4-계절",
+        "competency_ids": [
+          2,
+          4,
+          5
+        ],
+        "minor_required": false,
+        "source_order": 39,
+        "evidence": {
+          "pdf_page": 130,
+          "printed_page": 283,
+          "section": "전공교육과정표",
+          "bbox": [
+            66.663,
+            509.28,
+            473.414,
+            524.7
+          ],
+          "raw_text": "CDA0145 | 현장실습3(Working Practices3) | 6 | | 8주 | 3,4-계절 | ②④⑤",
+          "extraction_method": "PyMuPDF coordinates"
+        }
+      },
+      {
+        "uid": "course:CDA0147",
+        "code": "CDA0147",
+        "course_type": "major_elective",
+        "category": "전공선택",
+        "area": null,
+        "name_ko": "현장실습4",
+        "name_en": "Working Practices4",
+        "credits": 12,
+        "total_hours": null,
+        "lecture_hours": null,
+        "practice_hours": null,
+        "practice_weeks": 12,
+        "offering": "4-1,2",
+        "competency_ids": [
+          2,
+          4,
+          5
+        ],
+        "minor_required": false,
+        "source_order": 40,
+        "evidence": {
+          "pdf_page": 130,
+          "printed_page": 283,
+          "section": "전공교육과정표",
+          "bbox": [
+            66.663,
+            524.7,
+            473.414,
+            538.74
+          ],
+          "raw_text": "CDA0147 | 현장실습4(Working Practices4) | 12 | | 12주 | 4-1,2 | ②④⑤",
+          "extraction_method": "PyMuPDF coordinates"
+        }
+      },
+      {
+        "uid": "course:CDA0160",
+        "code": "CDA0160",
+        "course_type": "major_elective",
+        "category": "전공선택",
+        "area": null,
+        "name_ko": "표준형현장실습1",
+        "name_en": "Co-op 1",
+        "credits": 3,
+        "total_hours": null,
+        "lecture_hours": null,
+        "practice_hours": null,
+        "practice_weeks": 4,
+        "offering": "3,4-계절",
+        "competency_ids": [
+          2,
+          4,
+          5
+        ],
+        "minor_required": false,
+        "source_order": 41,
+        "evidence": {
+          "pdf_page": 130,
+          "printed_page": 283,
+          "section": "전공교육과정표",
+          "bbox": [
+            66.663,
+            538.74,
+            473.414,
+            552.78
+          ],
+          "raw_text": "CDA0160 | 표준형현장실습(Co-op)1 | 3 | | 4주 | 3,4-계절 | ②④⑤",
+          "extraction_method": "PyMuPDF coordinates"
+        }
+      },
+      {
+        "uid": "course:CDA0161",
+        "code": "CDA0161",
+        "course_type": "major_elective",
+        "category": "전공선택",
+        "area": null,
+        "name_ko": "표준형현장실습3",
+        "name_en": "Co-op 3",
+        "credits": 6,
+        "total_hours": null,
+        "lecture_hours": null,
+        "practice_hours": null,
+        "practice_weeks": 8,
+        "offering": "3,4-계절",
+        "competency_ids": [
+          2,
+          4,
+          5
+        ],
+        "minor_required": false,
+        "source_order": 42,
+        "evidence": {
+          "pdf_page": 130,
+          "printed_page": 283,
+          "section": "전공교육과정표",
+          "bbox": [
+            66.663,
+            552.78,
+            473.414,
+            566.76
+          ],
+          "raw_text": "CDA0161 | 표준형현장실습(Co-op)3 | 6 | | 8주 | 3,4-계절 | ②④⑤",
+          "extraction_method": "PyMuPDF coordinates"
+        }
+      },
+      {
+        "uid": "course:CDA0162",
+        "code": "CDA0162",
+        "course_type": "major_elective",
+        "category": "전공선택",
+        "area": null,
+        "name_ko": "표준형현장실습4",
+        "name_en": "Co-op 4",
+        "credits": 12,
+        "total_hours": null,
+        "lecture_hours": null,
+        "practice_hours": null,
+        "practice_weeks": 12,
+        "offering": "3,4-1,2",
+        "competency_ids": [
+          2,
+          4,
+          5
+        ],
+        "minor_required": false,
+        "source_order": 43,
+        "evidence": {
+          "pdf_page": 130,
+          "printed_page": 283,
+          "section": "전공교육과정표",
+          "bbox": [
+            66.663,
+            566.76,
+            473.414,
+            580.289
+          ],
+          "raw_text": "CDA0162 | 표준형현장실습(Co-op)4 | 12 | | 12주 | 3,4-1,2 | ②④⑤",
+          "extraction_method": "PyMuPDF coordinates"
+        }
+      }
+    ],
+    "competency_summary": [
+      {
+        "competency_id": 1,
+        "course_count": 26,
+        "credit_sum": 78
+      },
+      {
+        "competency_id": 2,
+        "course_count": 21,
+        "credit_sum": 78
+      },
+      {
+        "competency_id": 3,
+        "course_count": 22,
+        "credit_sum": 60
+      },
+      {
+        "competency_id": 4,
+        "course_count": 38,
+        "credit_sum": 132
+      },
+      {
+        "competency_id": 5,
+        "course_count": 18,
+        "credit_sum": 72
+      }
+    ],
+    "catalog_summary": {
+      "declared_course_count": 43,
+      "declared_credit_sum": 144,
+      "evidence": {
+        "pdf_page": 130,
+        "printed_page": 283,
+        "section": "전공교육과정표 합계",
+        "bbox": [
+          66.663,
+          580.289,
+          473.414,
+          594.329
+        ],
+        "raw_text": "계 | | 43과목 | 144 | | | |",
+        "extraction_method": "PyMuPDF coordinates"
+      }
+    }
+  },
+  "validation_status": "warning",
+  "validation_checks": [
+    {
+      "check_id": "unique_course_codes",
+      "status": "pass",
+      "message": "학수번호 중복 검사",
+      "expected": 48,
+      "actual": 48,
+      "reason": null,
+      "evidence": [],
+      "review_steps": [],
+      "correction_targets": []
+    },
+    {
+      "check_id": "major_catalog_course_count",
+      "status": "pass",
+      "message": "전공교육과정표의 과목 수 합계 검사",
+      "expected": 43,
+      "actual": 43,
+      "reason": null,
+      "evidence": [],
+      "review_steps": [],
+      "correction_targets": []
+    },
+    {
+      "check_id": "major_catalog_credit_sum",
+      "status": "pass",
+      "message": "전공교육과정표의 개설 학점 합계 검사",
+      "expected": 144,
+      "actual": 144,
+      "reason": null,
+      "evidence": [],
+      "review_steps": [],
+      "correction_targets": []
+    },
+    {
+      "check_id": "cross_parser_course_credits",
+      "status": "pass",
+      "message": "PyMuPDF와 pdfplumber가 읽은 학수번호·학점 비교",
+      "expected": {
+        "GEA7261": 3,
+        "GEA7260": 3,
+        "GEA8515": 2,
+        "GEA8538": 2,
+        "GEA7301": 3,
+        "CDA0143": 3,
+        "CDA0065": 3,
+        "CDA0027": 3,
+        "CDA0017": 3,
+        "CDA0016": 3,
+        "CDA0023": 3,
+        "CDA0028": 3,
+        "CDA0088": 0,
+        "CDA0034": 0,
+        "CDA0155": 3,
+        "CDA0156": 3,
+        "CDA0157": 3,
+        "CDA0008": 3,
+        "CDA0010": 3,
+        "CDA0136": 3,
+        "CDA0125": 3,
+        "CDA0006": 3,
+        "CDA0014": 3,
+        "CDA0130": 3,
+        "CDA0154": 3,
+        "CDA0152": 3,
+        "CDA0139": 3,
+        "CDA0019": 3,
+        "CDA0141": 0,
+        "CDA0013": 3,
+        "CDA0151": 3,
+        "CDA0025": 3,
+        "CDA0030": 3,
+        "CDA0142": 3,
+        "CDA0119": 3,
+        "CDA0031": 3,
+        "CDA0149": 3,
+        "CDA0148": 3,
+        "CDA0150": 3,
+        "CDA0153": 3,
+        "CDA0074": 3,
+        "CDA0159": 3,
+        "CDA0144": 3,
+        "CDA0145": 6,
+        "CDA0147": 12,
+        "CDA0160": 3,
+        "CDA0161": 6,
+        "CDA0162": 12
+      },
+      "actual": {
+        "GEA7261": 3,
+        "GEA7260": 3,
+        "GEA8515": 2,
+        "GEA8538": 2,
+        "GEA7301": 3,
+        "CDA0143": 3,
+        "CDA0065": 3,
+        "CDA0027": 3,
+        "CDA0017": 3,
+        "CDA0016": 3,
+        "CDA0023": 3,
+        "CDA0028": 3,
+        "CDA0088": 0,
+        "CDA0034": 0,
+        "CDA0155": 3,
+        "CDA0156": 3,
+        "CDA0157": 3,
+        "CDA0008": 3,
+        "CDA0010": 3,
+        "CDA0136": 3,
+        "CDA0125": 3,
+        "CDA0006": 3,
+        "CDA0014": 3,
+        "CDA0130": 3,
+        "CDA0154": 3,
+        "CDA0152": 3,
+        "CDA0139": 3,
+        "CDA0019": 3,
+        "CDA0141": 0,
+        "CDA0013": 3,
+        "CDA0151": 3,
+        "CDA0025": 3,
+        "CDA0030": 3,
+        "CDA0142": 3,
+        "CDA0119": 3,
+        "CDA0031": 3,
+        "CDA0149": 3,
+        "CDA0148": 3,
+        "CDA0150": 3,
+        "CDA0153": 3,
+        "CDA0074": 3,
+        "CDA0159": 3,
+        "CDA0144": 3,
+        "CDA0145": 6,
+        "CDA0147": 12,
+        "CDA0160": 3,
+        "CDA0161": 6,
+        "CDA0162": 12
+      },
+      "reason": null,
+      "evidence": [],
+      "review_steps": [],
+      "correction_targets": []
+    },
+    {
+      "check_id": "cross_parser_table_counts",
+      "status": "pass",
+      "message": "두 PDF 엔진이 찾은 페이지별 표 개수 비교",
+      "expected": [
+        2,
+        3,
+        1
+      ],
+      "actual": [
+        2,
+        3,
+        1
+      ],
+      "reason": null,
+      "evidence": [],
+      "review_steps": [],
+      "correction_targets": []
+    },
+    {
+      "check_id": "program_requirement_totals",
+      "status": "pass",
+      "message": "기본이수 학점구조표의 교양·전공·잔여학점 합계 검사",
+      "expected": "각 과정의 합계가 졸업학점과 일치",
+      "actual": true,
+      "reason": null,
+      "evidence": [],
+      "review_steps": [],
+      "correction_targets": []
+    },
+    {
+      "check_id": "allocation_total:allocation:2022:교양:기초교양",
+      "status": "pass",
+      "message": "기초교양 학기별 학점 합계 검사",
+      "expected": 8,
+      "actual": 8,
+      "reason": null,
+      "evidence": [],
+      "review_steps": [],
+      "correction_targets": []
+    },
+    {
+      "check_id": "allocation_total:allocation:2022:교양:균형교양",
+      "status": "pass",
+      "message": "균형교양 학기별 학점 합계 검사",
+      "expected": 22,
+      "actual": 22,
+      "reason": null,
+      "evidence": [],
+      "review_steps": [],
+      "correction_targets": []
+    },
+    {
+      "check_id": "allocation_total:allocation:2022:교양:확대교양",
+      "status": "pass",
+      "message": "확대교양 학기별 학점 합계 검사",
+      "expected": 3,
+      "actual": 3,
+      "reason": null,
+      "evidence": [],
+      "review_steps": [],
+      "correction_targets": []
+    },
+    {
+      "check_id": "allocation_total:allocation:2022:교양:교양 소계",
+      "status": "pass",
+      "message": "교양 소계 학기별 학점 합계 검사",
+      "expected": 33,
+      "actual": 33,
+      "reason": null,
+      "evidence": [],
+      "review_steps": [],
+      "correction_targets": []
+    },
+    {
+      "check_id": "allocation_total:allocation:2022:전공:전공필수",
+      "status": "pass",
+      "message": "전공필수 학기별 학점 합계 검사",
+      "expected": 24,
+      "actual": 24,
+      "reason": null,
+      "evidence": [],
+      "review_steps": [],
+      "correction_targets": []
+    },
+    {
+      "check_id": "allocation_total:allocation:2022:전공:전공선택",
+      "status": "warning",
+      "message": "전공선택 학기별 학점 합계 검사",
+      "expected": 78,
+      "actual": 54,
+      "reason": "같은 행의 8개 학기 값을 더한 결과와 PDF에 인쇄된 총계가 다릅니다. 자동으로 어느 값이 오자인지 결정하지 않았습니다.",
+      "evidence": [
+        {
+          "pdf_page": 129,
+          "printed_page": 282,
+          "section": "전공심화과정 학점배분구조표",
+          "bbox": [
+            66.669,
+            219.535,
+            472.369,
+            229.025
+          ],
+          "raw_text": "전공 전공선택 3 9 9 3 9 12 9 78",
+          "extraction_method": "PyMuPDF coordinates"
+        }
+      ],
+      "review_steps": [
+        "PDF 파일 129쪽(인쇄 282쪽)의 '5. 전공심화과정 학점배분구조표'를 엽니다.",
+        "'전공선택' 행의 학기별 값을 왼쪽부터 더합니다: [0, 3, 9, 9, 3, 9, 12, 9] = 54.",
+        "같은 행 오른쪽 총계 78 및 바로 아래 전공 소계와 비교합니다.",
+        "원본 발행기관의 정정 자료가 있으면 확인한 값을 보정 파일에 기록합니다."
+      ],
+      "correction_targets": [
+        "uid=allocation:2022:전공:전공선택, field=term_credits",
+        "uid=allocation:2022:전공:전공선택, field=declared_total"
+      ]
+    },
+    {
+      "check_id": "allocation_total:allocation:2022:전공:전공 소계",
+      "status": "pass",
+      "message": "전공 소계 학기별 학점 합계 검사",
+      "expected": 78,
+      "actual": 78,
+      "reason": null,
+      "evidence": [],
+      "review_steps": [],
+      "correction_targets": []
+    },
+    {
+      "check_id": "allocation_total:allocation:2022:전체:교양+전공",
+      "status": "pass",
+      "message": "교양+전공 학기별 학점 합계 검사",
+      "expected": 111,
+      "actual": 111,
+      "reason": null,
+      "evidence": [],
+      "review_steps": [],
+      "correction_targets": []
+    },
+    {
+      "check_id": "allocation_total:allocation:2022:졸업:졸업잔여학점",
+      "status": "pass",
+      "message": "졸업잔여학점 학기별 학점 합계 검사",
+      "expected": 19,
+      "actual": 19,
+      "reason": null,
+      "evidence": [],
+      "review_steps": [],
+      "correction_targets": []
+    },
+    {
+      "check_id": "allocation_total:allocation:2022:졸업:졸업학점",
+      "status": "pass",
+      "message": "졸업학점 학기별 학점 합계 검사",
+      "expected": 130,
+      "actual": 130,
+      "reason": null,
+      "evidence": [],
+      "review_steps": [],
+      "correction_targets": []
+    },
+    {
+      "check_id": "required_credit_cross_section",
+      "status": "warning",
+      "message": "전공필수 학점을 세 표에서 교차 검사",
+      "expected": "세 표의 값이 일치",
+      "actual": {
+        "course_catalog": 21,
+        "degree_requirement": 21,
+        "semester_allocation": 24
+      },
+      "reason": "PDF 128쪽의 졸업요건 및 과목표 합계는 21학점이지만, PDF 129쪽 학기배분표는 24학점으로 서로 다릅니다.",
+      "evidence": [
+        {
+          "pdf_page": 128,
+          "printed_page": 281,
+          "section": "기본이수 학점구조표",
+          "bbox": [
+            66.667,
+            461.369,
+            472.197,
+            491.609
+          ],
+          "raw_text": "컴퓨터공학과 | 전공심화 | 8 | 19 | 3 | 30 | | 21 | 57 | 78 | 22 | 130 | ○",
+          "extraction_method": "PyMuPDF coordinates"
+        },
+        {
+          "pdf_page": 129,
+          "printed_page": 282,
+          "section": "전공심화과정 학점배분구조표",
+          "bbox": [
+            66.669,
+            206.575,
+            472.369,
+            216.065
+          ],
+          "raw_text": "전공필수 3 12 9 24",
+          "extraction_method": "PyMuPDF coordinates"
+        },
+        {
+          "pdf_page": 129,
+          "printed_page": 282,
+          "section": "전공교육과정표",
+          "bbox": [
+            66.669,
+            505.409,
+            472.369,
+            522.48
+          ],
+          "raw_text": "CDA0143 | 고급자료구조(Advanced Data Structure) | 3 | 3 | | 2-2 | ①③④",
+          "extraction_method": "PyMuPDF coordinates"
+        }
+      ],
+      "review_steps": [
+        "PDF 파일 128쪽(인쇄 281쪽) '4. 기본이수 학점구조표'의 전공필수 21학점을 확인합니다.",
+        "PDF 파일 129쪽(인쇄 282쪽) '5. 전공심화과정 학점배분구조표'의 전공필수 총계 24학점을 확인합니다.",
+        "PDF 파일 129쪽부터 시작하는 '7. 전공교육과정표'에서 전공필수 3학점 과목 7개와 0학점 과목 2개를 확인합니다. 학점 합계는 21입니다.",
+        "졸업 판정에는 기본이수 학점구조표를 우선 사용하되, 외부 정정 자료가 있으면 보정 파일에 근거와 함께 기록합니다."
+      ],
+      "correction_targets": [
+        "uid=requirement:2022:computer-engineering:전공심화, field=major_required_credits",
+        "uid=allocation:2022:전공:전공필수, field=term_credits",
+        "uid=allocation:2022:전공:전공필수, field=declared_total"
+      ]
+    },
+    {
+      "check_id": "competency_summary",
+      "status": "pass",
+      "message": "과목별 전공능력 연결을 128쪽 요약표와 비교",
+      "expected": {
+        "1": [
+          26,
+          78
+        ],
+        "2": [
+          21,
+          78
+        ],
+        "3": [
+          22,
+          60
+        ],
+        "4": [
+          38,
+          132
+        ],
+        "5": [
+          18,
+          72
+        ]
+      },
+      "actual": {
+        "1": [
+          26,
+          78
+        ],
+        "2": [
+          21,
+          78
+        ],
+        "3": [
+          22,
+          60
+        ],
+        "4": [
+          38,
+          132
+        ],
+        "5": [
+          18,
+          72
+        ]
+      },
+      "reason": null,
+      "evidence": [],
+      "review_steps": [],
+      "correction_targets": []
+    },
+    {
+      "check_id": "profile_text_cross_parser",
+      "status": "pass",
+      "message": "교육목표·인재상·전공능력 일반 문장 교차 검사",
+      "expected": "PyMuPDF와 pdfplumber의 문장 순서가 일치",
+      "actual": {
+        "pdfplumber_statement_count": 9,
+        "pymupdf_statement_count": 9,
+        "mismatched_statement_count": 0
+      },
+      "reason": null,
+      "evidence": [],
+      "review_steps": [],
+      "correction_targets": []
+    },
+    {
+      "check_id": "source_spelling_candidates",
+      "status": "warning",
+      "message": "PDF 텍스트층의 오탈자 후보 검사",
+      "expected": [
+        {
+          "source_text": "운리의식",
+          "candidate": "윤리의식"
+        },
+        {
+          "source_text": "Architechture",
+          "candidate": "Architecture"
+        }
+      ],
+      "actual": [
+        "운리의식",
+        "Architechture"
+      ],
+      "reason": "PyMuPDF와 pdfplumber는 같은 PDF 텍스트층을 사용하므로 인쇄 화면과 텍스트층의 글자가 다르면 둘 다 같은 값을 읽습니다. 자동 수정하지 않고 후보만 표시합니다.",
+      "evidence": [
+        {
+          "pdf_page": 128,
+          "printed_page": 281,
+          "section": "talent_profile",
+          "bbox": [
+            112.8,
+            307.491,
+            367.868,
+            317.44
+          ],
+          "raw_text": "직업의식, 운리의식을 가지고 업무에 충실하며 협력적인 인재",
+          "extraction_method": "pdfplumber text lines"
+        },
+        {
+          "pdf_page": 129,
+          "printed_page": 282,
+          "section": "전공교육과정표",
+          "bbox": [
+            66.669,
+            566.46,
+            472.369,
+            580.5
+          ],
+          "raw_text": "CDA0016 | ※ 컴퓨터구조(Computer Architechture) | 3 | 3 | | 3-1 | ①③④",
+          "extraction_method": "PyMuPDF coordinates"
+        }
+      ],
+      "review_steps": [
+        "PDF 파일 128쪽(인쇄 281쪽) '2. 전공인재상' 세 번째 문장의 '운리의식'이 화면에서 '윤리의식'인지 확인합니다.",
+        "PDF 파일 129쪽(인쇄 282쪽) CDA0016 영문 과목명의 'Architechture'가 발행기관 기준 오탈자인지 확인합니다.",
+        "원문 표기를 그대로 보존할지 정정 표기를 사용할지 결정하고, 정정할 경우 보정 파일에 이유를 기록합니다."
+      ],
+      "correction_targets": [
+        "uid=profile:2022:computer-engineering:talent_profile:3, field=text",
+        "uid=course:CDA0016, field=name_en"
+      ]
+    }
+  ],
+  "corrections_applied": []
+}
