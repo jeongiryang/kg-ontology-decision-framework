@@ -1,0 +1,232 @@
+[
+  {
+    "course_id": "GEA7261",
+    "course_name": "컴퓨팅프로그래밍",
+    "credit": 3
+  },
+  {
+    "course_id": "GEA7260",
+    "course_name": "컴퓨터개론",
+    "credit": 3
+  },
+  {
+    "course_id": "GEA8515",
+    "course_name": "컴퓨팅사고력",
+    "credit": 2
+  },
+  {
+    "course_id": "GEA8538",
+    "course_name": "인공지능의시대",
+    "credit": 2
+  },
+  {
+    "course_id": "GEA7301",
+    "course_name": "공업수학",
+    "credit": 3
+  },
+  {
+    "course_id": "CDA0143",
+    "course_name": "고급자료구조(Advanced Data Structure)",
+    "credit": 3
+  },
+  {
+    "course_id": "CDA0065",
+    "course_name": "데이터베이스개론(Database Theory)",
+    "credit": 3
+  },
+  {
+    "course_id": "CDA0027",
+    "course_name": "알고리즘(Algorithms)",
+    "credit": 3
+  },
+  {
+    "course_id": "CDA0017",
+    "course_name": "※운영체제(Operating System)",
+    "credit": 3
+  },
+  {
+    "course_id": "CDA0016",
+    "course_name": "※컴퓨터구조(Computer Architechture)",
+    "credit": 3
+  },
+  {
+    "course_id": "CDA0023",
+    "course_name": "데이터통신(Data Communication)",
+    "credit": 3
+  },
+  {
+    "course_id": "CDA0028",
+    "course_name": "소프트웨어공학(Software Engineering)",
+    "credit": 3
+  },
+  {
+    "course_id": "CDA0088",
+    "course_name": "심층상담(Consultation)",
+    "credit": 0
+  },
+  {
+    "course_id": "CDA0034",
+    "course_name": "졸업논문(Graduation Thesis)",
+    "credit": 0
+  },
+  {
+    "course_id": "CDA0155",
+    "course_name": "객체지향프로그래밍(Object-oriented Programming)",
+    "credit": 3
+  },
+  {
+    "course_id": "CDA0156",
+    "course_name": "오픈소스소프트웨어(Open Source Software)",
+    "credit": 3
+  },
+  {
+    "course_id": "CDA0157",
+    "course_name": "이산수학(Discrete mathematics)",
+    "credit": 3
+  },
+  {
+    "course_id": "CDA0008",
+    "course_name": "※자료구조(Data Structure)",
+    "credit": 3
+  },
+  {
+    "course_id": "CDA0010",
+    "course_name": "논리설계(Digital Design)",
+    "credit": 3
+  },
+  {
+    "course_id": "CDA0136",
+    "course_name": "데이터베이스언어실습(Database Language Practice)",
+    "credit": 3
+  },
+  {
+    "course_id": "CDA0125",
+    "course_name": "모바일프로그래밍(Mobile Programming)",
+    "credit": 3
+  },
+  {
+    "course_id": "CDA0006",
+    "course_name": "시스템프로그래밍(System Programming)",
+    "credit": 3
+  },
+  {
+    "course_id": "CDA0014",
+    "course_name": "컴퓨터그래픽스(Computer Graphics)",
+    "credit": 3
+  },
+  {
+    "course_id": "CDA0130",
+    "course_name": "멀티미디어공학(Multimedia and Project)",
+    "credit": 3
+  },
+  {
+    "course_id": "CDA0154",
+    "course_name": "소프트웨어설계(Software Design)",
+    "credit": 3
+  },
+  {
+    "course_id": "CDA0152",
+    "course_name": "데이터베이스설계(Database Design)",
+    "credit": 3
+  },
+  {
+    "course_id": "CDA0139",
+    "course_name": "영상처리(Image Processing)",
+    "credit": 3
+  },
+  {
+    "course_id": "CDA0019",
+    "course_name": "컴퓨터구조응용(Computer architecture application)",
+    "credit": 3
+  },
+  {
+    "course_id": "CDA0141",
+    "course_name": "캡스톤디자인1(Capstone Design 1)",
+    "credit": 0
+  },
+  {
+    "course_id": "CDA0013",
+    "course_name": "프로그래밍언어론(Programming Languages)",
+    "credit": 3
+  },
+  {
+    "course_id": "CDA0151",
+    "course_name": "네트워크프로그램(Network Program)",
+    "credit": 3
+  },
+  {
+    "course_id": "CDA0025",
+    "course_name": "마이크로프로세서(Microprocessor)",
+    "credit": 3
+  },
+  {
+    "course_id": "CDA0030",
+    "course_name": "인공지능(Artificial Intelligence)",
+    "credit": 3
+  },
+  {
+    "course_id": "CDA0142",
+    "course_name": "캡스톤디자인2(Capstone Design 2)",
+    "credit": 3
+  },
+  {
+    "course_id": "CDA0119",
+    "course_name": "컴파일러(Compiler)",
+    "credit": 3
+  },
+  {
+    "course_id": "CDA0031",
+    "course_name": "컴퓨터네트워크(Computer Networks)",
+    "credit": 3
+  },
+  {
+    "course_id": "CDA0149",
+    "course_name": "딥러닝(Deep Learning)",
+    "credit": 3
+  },
+  {
+    "course_id": "CDA0148",
+    "course_name": "3",
+    "credit": 3
+  },
+  {
+    "course_id": "CDA0150",
+    "course_name": "사물인터넷(Internet of Things, IoT)",
+    "credit": 3
+  },
+  {
+    "course_id": "CDA0153",
+    "course_name": "정보보안(Information Security)",
+    "credit": 3
+  },
+  {
+    "course_id": "CDA0074",
+    "course_name": "생명정보학개론(Bio-informatics Theory)",
+    "credit": 3
+  },
+  {
+    "course_id": "CDA0159",
+    "course_name": "데이터과학세미나(Data Science Seminar)",
+    "credit": 3
+  },
+  {
+    "course_id": "CDA0144",
+    "course_name": "현장실습1(Working Practices1)",
+    "credit": 3
+  },
+  {
+    "course_id": "CDA0145",
+    "course_name": "현장실습3(Working Practices3)",
+    "credit": 6
+  },
+  {
+    "course_id": "CDA0160",
+    "course_name": "표준형현장실습(Co-op)1",
+    "credit": 3
+  },
+  {
+    "course_id": "CDA0161",
+    "course_name": "표준형현장실습(Co-op)3",
+    "credit": 6
+  }
+]
