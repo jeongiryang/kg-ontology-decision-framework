@@ -2,7 +2,6 @@ import os
 import glob
 import pdfplumber
 import pandas as pd
-import re
 
 def get_pdf_path():
     pdf_files = glob.glob("data/raw/*.pdf")
@@ -10,108 +9,57 @@ def get_pdf_path():
         raise FileNotFoundError("data/raw/ 디렉토리에 PDF 파일이 존재하지 않습니다.")
     return pdf_files[0]
 
-def extract_stable_grid_tables():
+def extract_cell_based_tables():
     pdf_path = get_pdf_path()
-    print(f"📖 안정형 격자 파서로 PDF 로드: {pdf_path}")
+    print(f"📖 셀 사각형(Cell BBox) 기반 정밀 파서 실행: {pdf_path}\n")
     
-    parsed_courses = []
-    code_pattern = re.compile(r'([A-Z]{2,4}\d{4})')
+    extracted_tables = []
 
     with pdfplumber.open(pdf_path) as pdf:
         for page_num, page in enumerate(pdf.pages, start=1):
-            # 페이지 내 모든 텍스트 단어(Word) 좌표 추출 (x0, top, x1, bottom, text)
-            words = page.extract_words()
-            if not words:
+            # 1. 페이지 내 표 영역 감지
+            tables = page.find_tables()
+            if not tables:
                 continue
 
-            # 학수번호(Anchor)를 포함하는 단어들을 찾아서 행(Row)의 기준 Y좌표 수집
-            course_words = [w for w in words if code_pattern.search(w["text"])]
-            if not course_words:
-                continue
-
-            # 페이지 내 모든 텍스트 라인을 Y좌표 기준으로 그룹화 (오차 3pt 허용)
-            # 텍스트들을 행 단위로 묶기
-            lines_dict = {}
-            for w in words:
-                # Y 좌표를 반올림하여 대략적인 행 그룹 생성
-                y_key = round(w["top"] / 10) * 10
-                # 근접한 Y 좌표 통합
-                matched_key = None
-                for k in lines_dict.keys():
-                    if abs(k - w["top"]) < 5:
-                        matched_key = k
-                        break
-                if matched_key is not None:
-                    lines_dict[matched_key].append(w)
-                else:
-                    lines_dict[w["top"]] = [w]
-
-            # 학수번호가 포함된 행들을 추려냄
-            for w in course_words:
-                code_match = code_pattern.search(w["text"])
-                if not code_match:
+            for t_idx, table in enumerate(tables, start=1):
+                # 2. pdfplumber의 셀 구조를 직접 추출 (셀 내부 줄바꿈 보존)
+                raw_table_data = table.extract()
+                if not raw_table_data:
                     continue
-                
-                code = code_match.group(1)
-                row_y = w["top"]
-                
-                # 해당 학수번호의 Y좌표 ± 6pt 범위 내에 있는 모든 단어를 같은 행의 데이터로 수집
-                row_words = [word for word in words if abs(word["top"] - row_y) < 7]
-                # X좌표 순으로 정렬
-                row_words.sort(key=lambda x: x["x0"])
 
-                # X좌표 위치에 따라 칼럼 분류 (대략적인 대학 규정집 표 X축 기준 범위)
-                # [0~80]: 이수구분, [80~150]: 학수번호, [150~350]: 과목명, [350~420]: 학점 등...
-                cell_bins = {
-                    "category": [],
-                    "code": [],
-                    "name": [],
-                    "credits": [],
-                    "lecture": [],
-                    "practice": [],
-                    "semester": [],
-                    "capability": []
-                }
+                cleaned_matrix = []
+                for row in raw_table_data:
+                    cleaned_row = []
+                    for cell in row:
+                        if cell is None:
+                            cleaned_row.append("")
+                        else:
+                            # 핵심: 셀 내부의 줄바꿈(\n)을 띄어쓰기로 통합하여 행 터짐 방지
+                            clean_text = " ".join([line.strip() for line in cell.split("\n") if line.strip()])
+                            cleaned_row.append(clean_text)
+                    
+                    # 의미 있는 데이터가 1개라도 존재하는 행만 추가
+                    if any(cleaned_row):
+                        cleaned_matrix.append(cleaned_row)
 
-                for rw in row_words:
-                    x = rw["x0"]
-                    text = rw["text"]
-                    if x < 85:
-                        cell_bins["category"].append(text)
-                    elif 85 <= x < 145:
-                        cell_bins["code"].append(text)
-                    elif 145 <= x < 350:
-                        cell_bins["name"].append(text)
-                    elif 350 <= x < 415:
-                        cell_bins["credits"].append(text)
-                    elif 415 <= x < 450:
-                        cell_bins["lecture"].append(text)
-                    elif 450 <= x < 485:
-                        cell_bins["practice"].append(text)
-                    elif 485 <= x < 540:
-                        cell_bins["semester"].append(text)
-                    else:
-                        cell_bins["capability"].append(text)
+                if cleaned_matrix:
+                    extracted_tables.append((page_num, t_idx, cleaned_matrix))
 
-                parsed_courses.append({
-                    "이수구분": " ".join(cell_bins["category"]),
-                    "학수번호": "".join(cell_bins["code"]),
-                    "과목명": " ".join(cell_bins["name"]),
-                    "학점": "".join(cell_bins["credits"]),
-                    "강의시수": "".join(cell_bins["lecture"]),
-                    "실습시수": "".join(cell_bins["practice"]),
-                    "개설학년학기": " ".join(cell_bins["semester"]),
-                    "전공능력연관성": "".join(cell_bins["capability"])
-                })
+    # 3. CSV 파일 저장
+    output_rows = []
+    for p_num, t_num, matrix in extracted_tables:
+        output_rows.append([f"=== PAGE {p_num} TABLE {t_num} ==="])
+        output_rows.extend(matrix)
+        output_rows.append([]) # 표 구분용 공백 행
 
-    df = pd.DataFrame(parsed_courses)
+    df = pd.DataFrame(output_rows)
     os.makedirs("data/processed", exist_ok=True)
-    save_path = "data/processed/courses_stable_parsed.csv"
-    df.to_csv(save_path, index=False, encoding="utf-8-sig")
+    save_path = "data/processed/generic_tables_parsed.csv"
+    df.to_csv(save_path, index=False, header=False, encoding="utf-8-sig")
     
-    print(f"\n✅ 안정형 파서 실행 완료! 총 {len(df)}개 과목 추출")
-    print(f"📁 저장 경로: {save_path}\n")
-    print(df.to_string())
+    print(f"✅ 셀 단위 병합 완료! 결과 저장 위치: {save_path}")
+    print(f"📄 총 {len(extracted_tables)}개 표 정밀 스캔 완료\n")
 
 if __name__ == "__main__":
-    extract_stable_grid_tables()
+    extract_cell_based_tables()
