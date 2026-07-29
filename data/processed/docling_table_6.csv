@@ -1,0 +1,32 @@
+﻿이수 구분.이수 구분,학수번호.학수번호,과.목 명,학점.학점,시간수.강의,시간수.실습 실기,개설 학년 학기.개설 학년 학기,전공능력 기반 연관성.전공능력 기반 연관성
+,CDA0008,자료구조(Data Structure) ※,3,3,,2-1,①③④
+,CDA0010,논리설계(Digital Design),3,3,,2-2,①③④
+,CDA0136,데이터베이스언어실습(Database Language Practice),3,2,2,2-2,①②④
+,CDA0125,모바일프로그래밍(Mobile Programming),3,3,,2-2,①③④
+,CDA0006,시스템프로그래밍(System Programming),3,3,,2-2,①④⑤
+,CDA0014,컴퓨터그래픽스(Computer Graphics),3,3,,2-2,①③④
+,CDA0130,멀티미디어공학(Multimedia and Project),3,3,,3-1,①③④
+,CDA0154,소프트웨어설계(Software Design),3,3,,3-1,①③④
+,CDA0152,데이터베이스설계(Database Design),3,3,,3-2,③④⑤
+,CDA0139,영상처리(Image Processing),3,3,,3-2,①②④
+,CDA0019,컴퓨터구조응용(Computer architecture application),3,3,,3-2,①④⑤
+,CDA0141,캡스톤디자인1(Capstone Design 1),0,,,3-2,②③④⑤
+,CDA0013,프로그래밍언어론(Programming Languages),3,3,,2-2,①④
+,CDA0151,네트워크프로그램(Network Program),3,3,,4-1,②④⑤
+,CDA0025,마이크로프로세서(Microprocessor),3,3,,4-1,①③④
+,CDA0030,인공지능(Artificial Intelligence),3,3,,4-1,①③④
+,CDA0142,캡스톤디자인2(Capstone Design 2),3,3,,4-1,②③④⑤
+,CDA0119,컴파일러(Compiler),3,3,,4-1,①③④
+,CDA0031,컴퓨터네트워크(Computer Networks),3,3,,4-1,②③⑤
+,CDA0149,딥러닝(Deep Learning),3,3,,4-2,①②④
+,CDA0148,분산컴퓨팅시스템 (Fundamentals of Distributed Computing Systems),3,3,,4-1,①③④
+,CDA0150,"사물인터넷(Internet of Things, IoT)",3,3,,4-2,②③⑤
+,CDA0153,정보보안(Information Security),3,3,,4-2,①②③
+,CDA0074,생명정보학개론(Bio-informatics Theory),3,3,,4-2,④⑤
+,CDA0159,데이터과학세미나(Data Science Seminar),3,3,,4-2,②④⑤
+,CDA0144,현장실습1(Working Practices1),3,,4주,"3,4-계 절",②④⑤
+,CDA0145,현장실습3(Working Practices3),6,,8주,"3,4-계절",②④⑤
+,CDA0147,현장실습4(Working Practices4),12,,12주,"4-1,2",②④⑤
+,CDA0160,표준형현장실습(Co-op)1,3,,4주,"3,4-계절",②④⑤
+,CDA0161,표준형현장실습(Co-op)3,6,,8주,"3,4-계절",②④⑤
+,CDA0162,표준형현장실습(Co-op)4,12,,12주,"3,4-1,2",②④⑤
