@@ -7,3 +7,8 @@ __pycache__/
 *.hwp
 .DS_Store
 AGENTS.md
+
+# 추출 결과 JSON(data/processed/*.extraction.json)은 팀 검토용으로 추적한다.
+# 아래는 로컬 전용 — 업로드 원본 사본, 개인 검토 이력
+data/uploads/
+data/review_sessions/

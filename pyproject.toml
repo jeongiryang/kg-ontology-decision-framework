@@ -1,0 +1,17 @@
+[project]
+name = "kg-ontology-decision-framework"
+version = "0.1.0"
+description = "규정집 PDF 자동 추출 → 검증 → 온톨로지/지식그래프 적재 파이프라인"
+requires-python = ">=3.12"
+dependencies = [
+    "docling>=2.15",
+    "pymupdf>=1.24,<2",
+    "pdfplumber>=0.11,<1",
+    "pydantic>=2.7,<3",
+    "pandas>=2.2",
+    "streamlit>=1.40,<2",
+    "pillow>=10,<13",
+]
+
+[tool.uv]
+package = false

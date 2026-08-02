@@ -4,6 +4,61 @@
 
 ---
 
+## 0. PDF 자동 추출기 (이 브랜치: `feat/pdf-auto-extractor-Daegyeom-test`)
+
+규정집 PDF를 올리면 **추출 → 검증 → 사람 검토 → 재검증**을 거쳐 provenance가 붙은
+1차 JSON을 만드는 프로그램. Neo4j 적재·온톨로지 구축은 이후 단계.
+
+```text
+PDF 업로드
+  → [1] Docling 레이아웃 모델 (표·본문 구조 복원, 셀마다 페이지·bbox·원문 보존)
+  → [2] pdfplumber 독립 재추출 (교차검증 근거)
+  → [3] 결정론적 검증 게이트 — LLM 없음
+        G1 원문 대조(quote grounding)  G2 커버리지(표 미검출 차단)
+        G3 교차검증(이수구분 보충)      G4 정합성(합계·중복·단위·다중숫자)
+  → 자동확정(auto) / 검토필요(review) 분리
+  → [4] 사람 검토: [원문 유지]/[제안값 채택]/[직접 입력] 또는 자연어 지시
+  → [5] 재검증 — 사람이 고친 값도 같은 게이트를 다시 통과해야 확정
+```
+
+원칙: 자동으로 확정 못 하는 값은 **추측하지 않고** 사람에게 보낸다.
+추출 단계에 LLM을 사용하지 않는다(이슈 #2 팀 원칙).
+
+### 실행
+
+```bash
+uv sync                                      # 의존성 설치 (docling 포함)
+
+# CLI — 전체 문서
+python -m src.extractor --pdf "data/raw/★2022학년도 교육과정(업로드)(2022-3-2).pdf"
+
+# CLI — 페이지 범위 지정 (예: 컴퓨터공학과 구간)
+python -m src.extractor --pdf "data/raw/★2022학년도 교육과정(업로드)(2022-3-2).pdf" --pages 287-289
+
+# 웹 화면 (업로드·검토·보정·재검증)
+streamlit run extractor_app.py
+
+# 회귀 테스트 (컴공 구간 정답 고정)
+python -m unittest tests.test_extractor_golden -v
+```
+
+종료 코드: `0` 전체 통과 / `2` WARNING 존재 / `1` FAIL 존재.
+GPU(CUDA) 자동 사용 — 366쪽 기준 약 5~7분, CPU도 동작(느림).
+
+### 모듈 (src/extractor/)
+
+| 파일 | 역할 |
+|---|---|
+| `models.py` | 산출물 스키마 — 모든 값에 Provenance(페이지·bbox·원문인용·추출기) |
+| `docling_adapter.py` | [1] Docling 변환 + prov 전량 보존 (각주 ※·조건절도 TextBlock으로 보존) |
+| `crosscheck.py` | [2] pdfplumber 독립 추출 — 학수번호·이수구분 라벨 (경계 확정 구간만 매핑) |
+| `gates.py` | [3] 검증 게이트 G1~G4 |
+| `numeric.py` | 숫자 구조 분해 — 빈칸≠0, `4주` 단위 분리, `3(3)` 이중값, 다중숫자 해석거부 |
+| `profiles.py` | 도메인 용어 사전 (다른 도메인 적용 시 이 파일만 교체) |
+| `pipeline.py` | 조립 + 사람 보정 적용 + 재검증 |
+
+---
+
 ## 1. 전체 파이프라인 흐름 
 
 ```text
