@@ -103,3 +103,25 @@ kg-ontology-decision-framework/
 ### `tests/` (검증 모듈)
 * **`test_neo4j.py`**: 전체 시스템 구동 전, Neo4j DB 접속 및 기본 쿼리 실행이 정상인지 단독으로 확인하는 테스트 코드.
 
+## 개발환경 및 AI 작업 기록
+
+이 프로젝트는 팀원 간 재현 가능한 개발환경과 AI 에이전트 작업 추적을 위해 별도 문서를 관리합니다.
+
+### 공통 개발환경
+
+- Windows 11 + WSL2
+- Ubuntu 24.04
+- Python 3.12.3
+- uv
+- Docker Desktop
+- Neo4j 2026.06.0
+
+상세 설치 및 검증 절차는 [로컬 개발환경 구축 가이드](docs/environment-setup.md)를 참고합니다.
+
+### AI 시뮬레이션 로그
+
+AI 에이전트가 수행한 주요 작업, 변경 파일, 의사결정, 검증 결과와 남은 작업을 팀원별로 기록합니다.
+
+- [AI 시뮬레이션 로그 운영 규칙](docs/ai-simulation-logs/README.md)
+- [정이량 작업 로그](docs/ai-simulation-logs/jeong-iryang/README.md)
+- [황대겸 작업 로그](docs/ai-simulation-logs/hwang-daegyeom/README.md)
