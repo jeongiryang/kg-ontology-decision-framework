@@ -249,6 +249,14 @@ class LocalQueryPlanner:
                             status=status,
                             message=self._safe_status_message(status, selection_mode, filters),
                         )
+                # Every executable query in this project is evidence-grounded.  A
+                # small local model can correctly identify a fully scoped course
+                # request while leaving this flag false (especially after first
+                # returning CLARIFICATION_REQUIRED).  Once the deterministic
+                # scope checks above establish that the plan is READY, enforce the
+                # application contract here instead of retrying the same invalid
+                # model payload.  This changes no fact value or answer content.
+                evidence_required = True
                 rule_ids = filters.get("rule_ids") if isinstance(filters, dict) else None
                 if selection_mode == "SINGLE_RULE" and (
                     not isinstance(filters, dict)
@@ -292,7 +300,7 @@ class LocalQueryPlanner:
                     "intent": payload.get("intent"),
                     "filters": filters,
                     "requested_fields": requested_fields,
-                    "evidence_required": payload.get("evidence_required"),
+                    "evidence_required": evidence_required,
                     "selection_mode": selection_mode,
                 }
                 return PlanningOutcome(

@@ -207,6 +207,24 @@ class LocalLLMContractTests(unittest.TestCase):
         self.assertNotIn("course_code", outcome.plan.filters)
         self.assertIn("course_code", outcome.plan.requested_fields)
 
+    def test_ready_course_plan_enforces_evidence_when_model_flag_is_false(self):
+        payload = {
+            "status": "CLARIFICATION_REQUIRED",
+            "intent": "course identity",
+            "filters": {"name_ko": "이산수학"},
+            "requested_fields": ["course_code"],
+            "evidence_required": False,
+            "message": "Please provide more information.",
+            "selection_mode": "SINGLE_COURSE",
+        }
+        outcome = LocalQueryPlanner(SequenceClient([payload])).plan(
+            "이산수학의 과목코드가 뭐야"
+        )
+        self.assertEqual(outcome.status, PlanningStatus.READY)
+        self.assertTrue(outcome.plan.evidence_required)
+        self.assertEqual(outcome.plan.filters["name_ko"], "이산수학")
+        self.assertEqual(outcome.plan.requested_fields, ("course_code",))
+
     def test_model_english_clarification_is_replaced_with_safe_korean_template(self):
         payload = {
             "status": "CLARIFICATION_REQUIRED",
