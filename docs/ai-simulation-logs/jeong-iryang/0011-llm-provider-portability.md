@@ -73,7 +73,7 @@ OpenAI-compatible adapter는 `/v1/chat/completions`, 선택적 Bearer token, JSO
 | 검증 | 실제 결과 |
 |---|---|
 | provider·로컬 pipeline 집중 테스트 | 42 PASS, 1 integration skip, 37 subtests PASS |
-| 최종 unittest | 75 PASS, 4 integration skip |
+| 최종 unittest | 총 75개: 71 PASS, 4 integration skip |
 | 최종 pytest | 71 PASS, 4 integration skip, 60 subtests PASS |
 | Neo4j 읽기 통합 | 74 PASS, 로컬 LLM smoke 1 skip, 66 subtests PASS |
 | Ollama 14B 실제 smoke 최초 | 5/6 PASS, 자료구조 개설 질문 모호성으로 실패 |
