@@ -6,7 +6,7 @@ import unittest
 from neo4j import GraphDatabase
 
 from kg_builder.config import Neo4jQuerySettings
-from kg_builder.llm.client import LocalLLMSettings, OllamaClient
+from kg_builder.llm.client import LLMSettings, create_llm_client
 from kg_builder.llm.cypher_generator import LocalCypherGenerator
 from kg_builder.llm.planner import LocalQueryPlanner
 from kg_builder.query.natural_language_service import NaturalLanguageQueryService
@@ -24,13 +24,13 @@ class LocalLLMIntegrationTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls) -> None:
         cls.neo4j = Neo4jQuerySettings.from_env()
-        cls.llm = LocalLLMSettings.from_env()
+        cls.llm = LLMSettings.from_env()
         cls.driver = GraphDatabase.driver(
             cls.neo4j.uri, auth=(cls.neo4j.user, cls.neo4j.password)
         )
         cls.driver.verify_connectivity()
         cls.before = cls._counts()
-        client = OllamaClient(cls.llm)
+        client = create_llm_client(cls.llm)
         cls.service = NaturalLanguageQueryService(
             LocalQueryPlanner(client),
             LocalCypherGenerator(client),
@@ -116,7 +116,26 @@ class LocalLLMIntegrationTests(unittest.TestCase):
             self.assertEqual({row["value"] for row in general.rows}, {34})
         balanced = results["balanced"]
         if balanced.status == "ANSWERABLE":
-            self.assertEqual({row["value"] for row in balanced.rows}, {1, 12})
+            by_rule = {row["rule_ids"]: row for row in balanced.rows}
+            credit = by_rule["rule:cwnu:2026:general:balanced-min-credits"]
+            per_area = by_rule["rule:cwnu:2026:general:balanced-each-area-one"]
+            self.assertEqual((credit["value"], credit["unit"]), (12, "CREDIT"))
+            self.assertEqual(
+                (per_area["value"], per_area["unit"]),
+                (1, "COURSE_PER_AREA"),
+            )
+            self.assertIn("4개 영역", per_area["description_ko"])
+            self.assertIn("1과목", per_area["description_ko"])
+            self.assertIn("12학점", credit["source_text"])
+            self.assertIn("영역별 각 1과목", per_area["source_text"])
+            for row in (credit, per_area):
+                self.assertEqual(row["fact_status"], "VERIFIED")
+                self.assertEqual(row["evidence_verification_status"], "VERIFIED")
+                self.assertTrue(row["evidence_id"])
+                self.assertEqual(
+                    (row["excerpt_page"], row["source_pdf_page"], row["printed_page"]),
+                    (1, 33, 25),
+                )
         transfer = results["transfer"]
         if transfer.status == "ANSWERABLE":
             self.assertTrue(any("편입생" in row["description_ko"] for row in transfer.rows))

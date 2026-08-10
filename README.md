@@ -149,7 +149,7 @@ uv run python -m kg_builder.query_cli \
 
 현재 실제 구현은 `src/kg_builder/`의 `config.py`, `graph_bundle.py`, `neo4j_schema.py`, `neo4j_ingest.py`와 `query_*.py`에 있습니다. 위쪽 초기 디렉터리 설명의 0바이트 골격 모듈은 향후 구조 예시이며 구현 완료 상태를 뜻하지 않습니다.
 
-동적 Text-to-Cypher는 명세-derived LLM 스키마, 제한 문법 후보 검증, Neo4j `EXPLAIN`, Evidence provenance에 더해 로컬 Ollama planner·Cypher generator까지 연결되어 있습니다. 실행 시 명시적인 `NEO4J_QUERY_*`와 로컬 `KG_LLM_*` 설정이 필요하며 자연어 최종 답변 생성은 아직 포함하지 않습니다.
+동적 Text-to-Cypher는 명세-derived LLM 스키마, 제한 문법 후보 검증, Neo4j `EXPLAIN`, Evidence provenance에 더해 provider-neutral 로컬 LLM planner·Cypher generator까지 연결되어 있습니다. 현재 실측 provider는 Ollama이고 OpenAI-compatible adapter로 SSH 터널 뒤 연구실 vLLM을 연결할 수 있습니다. 실행 시 명시적인 `NEO4J_QUERY_*`와 로컬 `KG_LLM_*` 설정이 필요하며 자연어 최종 답변 생성은 아직 포함하지 않습니다.
 
 ```bash
 uv run python -m kg_builder.query.natural_language_cli \

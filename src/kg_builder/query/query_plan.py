@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from enum import StrEnum
 from typing import Any, Mapping
 
 from .schema_catalog import SchemaCatalog
@@ -13,6 +14,15 @@ class QueryPlanError(ValueError):
 
 
 MAX_QUESTION_LENGTH = 2_000
+
+
+class SelectionMode(StrEnum):
+    """Expected result cardinality semantics carried through result validation."""
+
+    SINGLE_RULE = "SINGLE_RULE"
+    MULTIPLE_RULES = "MULTIPLE_RULES"
+    SINGLE_COURSE = "SINGLE_COURSE"
+    COURSE_LIST = "COURSE_LIST"
 
 
 @dataclass(frozen=True, slots=True)
@@ -86,13 +96,21 @@ class QueryPlan:
     requested_fields: tuple[str, ...]
     evidence_required: bool
     intent: str | None = None
+    selection_mode: SelectionMode | None = None
 
     @classmethod
     def from_dict(cls, payload: Mapping[str, Any], catalog: SchemaCatalog) -> "QueryPlan":
         if not isinstance(payload, Mapping):
             raise QueryPlanError("QueryPlan must be a JSON object")
         validate_filter_policy(catalog)
-        allowed = {"question", "filters", "requested_fields", "evidence_required", "intent"}
+        allowed = {
+            "question",
+            "filters",
+            "requested_fields",
+            "evidence_required",
+            "intent",
+            "selection_mode",
+        }
         unknown = set(payload) - allowed
         if unknown:
             raise QueryPlanError(f"unknown QueryPlan fields: {sorted(unknown)}")
@@ -132,6 +150,10 @@ class QueryPlan:
                 if not isinstance(value, str) or not value.strip():
                     raise QueryPlanError(f"{name} must be a non-empty string")
                 filters[name] = value.strip()
+        # A stable catalog identifier takes precedence over a display name.  Keeping
+        # both would make an otherwise exact lookup fail when the display name is stale.
+        if "course_code" in filters and "name_ko" in filters:
+            filters.pop("name_ko")
         if "rule_ids" in filters:
             rule_ids = filters["rule_ids"]
             if (
@@ -182,10 +204,26 @@ class QueryPlan:
         intent = payload.get("intent")
         if intent is not None and (not isinstance(intent, str) or not intent.strip()):
             raise QueryPlanError("intent, when present, is logging metadata only and must be text")
+        selection_mode_value = payload.get("selection_mode")
+        try:
+            selection_mode = (
+                SelectionMode(selection_mode_value)
+                if selection_mode_value is not None
+                else None
+            )
+        except ValueError as exc:
+            raise QueryPlanError("selection_mode is not supported") from exc
+        if selection_mode is SelectionMode.SINGLE_COURSE and not (
+            {"course_code", "name_ko"}.intersection(filters)
+        ):
+            raise QueryPlanError(
+                "SINGLE_COURSE requires a course_code or name_ko identity filter"
+            )
         return cls(
             question=question.strip(),
             filters=filters,
             requested_fields=normalized_fields,
             evidence_required=evidence_required,
             intent=intent.strip() if isinstance(intent, str) else None,
+            selection_mode=selection_mode,
         )

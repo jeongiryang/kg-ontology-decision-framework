@@ -157,6 +157,20 @@ class NaturalLanguageQueryService:
                     evidence_count=outcome.result.evidence_count,
                 )
             except SafetyPipelineError as exc:
+                if exc.code == "RESULT_COURSE_AMBIGUOUS":
+                    return NaturalLanguageResult(
+                        request_id=provisional_id,
+                        status=PlanningStatus.CLARIFICATION_REQUIRED.value,
+                        model=self.model,
+                        elapsed_seconds=perf_counter() - started,
+                        query_plan=public_plan,
+                        error_stage=exc.stage.value,
+                        error_code=exc.code,
+                        message=(
+                            "동일한 과목명에 서로 다른 학수번호가 있습니다. "
+                            "학수번호를 지정해 주세요."
+                        ),
+                    )
                 previous_error = exc.code
                 if attempt >= self.generator_retries:
                     return self._failure(

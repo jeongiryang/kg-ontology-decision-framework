@@ -249,7 +249,7 @@ RTX 4070 Ti 로컬 PoC에서 다음 두 인터페이스를 구현했다.
 1. 자연어 질문과 온톨로지·Verified KG에서 파생한 범위 컨텍스트를 받아 `QueryPlan`을 반환하는 planner
 2. 검증된 QueryPlan과 관련 스키마 부분집합만 받아 후보 Cypher를 반환하는 generator
 
-선정 모델은 Ollama `qwen2.5-coder:14b` Q4_K_M이며 두 출력은 현재 계약과 검증기를 반드시 통과한다. 검증 실패 시 모델에 오류 코드만 제공해 한 번 재시도하고, 미검증 Cypher를 실행하는 fallback은 없다. 자세한 환경·benchmark·CLI는 [로컬 LLM PoC 문서](local-llm-query-pipeline.md)를 참고한다.
+현재 실측 모델은 Ollama `qwen2.5-coder:14b` Q4_K_M이며 두 출력은 현재 계약과 검증기를 반드시 통과한다. 검증 실패 시 모델에 오류 코드만 제공해 한 번 재시도하고, 미검증 Cypher를 실행하는 fallback은 없다. planner와 generator는 provider-neutral `StructuredLLMClient`에만 의존하고 CLI는 factory로 Ollama 또는 OpenAI-compatible adapter를 선택한다. 실제 연구실 vLLM 연결은 아직 검증하지 않았다. 자세한 환경·benchmark·provider 전환·CLI는 [로컬 LLM PoC 문서](local-llm-query-pipeline.md)를 참고한다.
 
 아직 구현하지 않은 항목:
 

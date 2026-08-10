@@ -5,13 +5,18 @@ import unittest
 from pathlib import Path
 from typing import Any
 
-from kg_builder.llm.client import LLMConfigurationError, LLMGeneration, LocalLLMSettings
+from kg_builder.llm.client import (
+    LLMConfigurationError,
+    LLMGeneration,
+    LLMProvider,
+    LLMSettings,
+)
 from kg_builder.llm.cypher_generator import LocalCypherGenerator, build_syntax_scaffold
 from kg_builder.query.cypher_validator import CypherValidator
 from kg_builder.llm.models import PlanningOutcome, PlanningStatus
 from kg_builder.llm.planner import LocalQueryPlanner
 from kg_builder.query.natural_language_service import NaturalLanguageQueryService
-from kg_builder.query.query_plan import QueryPlan
+from kg_builder.query.query_plan import QueryPlan, SelectionMode
 from kg_builder.query.safety_pipeline import SafetyPipeline
 from kg_builder.query.schema_catalog import SchemaCatalog
 from kg_builder.query.schema_selector import QuerySchemaSelector
@@ -52,8 +57,12 @@ def ready_planner_payload() -> dict[str, Any]:
 class LocalLLMContractTests(unittest.TestCase):
     def test_settings_are_local_only(self) -> None:
         with self.assertRaises(LLMConfigurationError):
-            LocalLLMSettings("https://cloud.example", "model").validate()
-        LocalLLMSettings("http://127.0.0.1:11434", "model").validate()
+            LLMSettings(
+                LLMProvider.OLLAMA, "https://cloud.example", "model"
+            ).validate()
+        LLMSettings(
+            LLMProvider.OLLAMA, "http://127.0.0.1:11434", "model"
+        ).validate()
 
     def test_planner_validates_and_retries_one_bad_contract(self) -> None:
         bad = ready_planner_payload()
@@ -80,6 +89,34 @@ class LocalLLMContractTests(unittest.TestCase):
             self.assertEqual(outcome.status.value, status)
             self.assertIsNone(outcome.plan)
 
+        ambiguous_course = {
+            "status": "CLARIFICATION_REQUIRED",
+            "intent": "course lookup",
+            "filters": {
+                "academic_year": 2026,
+                "department_id": "department:cwnu:cse",
+                "name_ko": "동명과목",
+            },
+            "requested_fields": ["grade_year", "semester"],
+            "evidence_required": True,
+            "message": "학수번호를 지정하세요",
+            "selection_mode": "SINGLE_COURSE",
+        }
+        client = SequenceClient([ambiguous_course, ambiguous_course])
+        outcome = LocalQueryPlanner(client).plan("동명과목은?")
+        self.assertEqual(outcome.status, PlanningStatus.CLARIFICATION_REQUIRED)
+        self.assertIsNone(outcome.plan)
+        self.assertEqual(len(client.prompts), 2)
+
+        ready_course = dict(ambiguous_course)
+        ready_course["status"] = "READY"
+        ready_course["message"] = None
+        client = SequenceClient([ambiguous_course, ready_course])
+        outcome = LocalQueryPlanner(client).plan("동명과목은?")
+        self.assertEqual(outcome.status, PlanningStatus.READY)
+        self.assertIsNotNone(outcome.plan)
+        self.assertEqual(outcome.plan.selection_mode, SelectionMode.SINGLE_COURSE)
+
     def test_generator_returns_only_candidate_cypher(self) -> None:
         plan = QueryPlan.from_dict(plan_payload(), SchemaCatalog.from_generated())
         client = SequenceClient([{"cypher": SAFE_QUERY}])
@@ -90,11 +127,20 @@ class LocalLLMContractTests(unittest.TestCase):
         self.assertNotIn(plan.question, client.prompts[0])
 
     def test_generated_course_scaffold_passes_the_existing_validator(self) -> None:
-        plan = QueryPlan.from_dict(plan_payload(), SchemaCatalog.from_generated())
+        payload = plan_payload()
+        payload["selection_mode"] = "SINGLE_COURSE"
+        payload["filters"] = {
+            "academic_year": 2026,
+            "department_id": "department:cwnu:cse",
+            "name_ko": "자료구조",
+        }
+        payload["requested_fields"] = ["grade_year", "semester"]
+        plan = QueryPlan.from_dict(payload, SchemaCatalog.from_generated())
         subset = QuerySchemaSelector().select(plan)
         scaffold = build_syntax_scaffold(plan, subset)
         validated = CypherValidator(SchemaCatalog.from_generated()).validate(plan, scaffold)
         self.assertEqual(validated.provenance.fact_label, "CourseOffering")
+        self.assertIn("c.course_id AS course_identity", scaffold)
 
     def test_generated_multi_rule_scaffold_passes_the_existing_validator(self) -> None:
         payload = {
@@ -207,6 +253,99 @@ class NaturalLanguageServiceTests(unittest.TestCase):
             result = service.ask("어느 과목?")
         self.assertEqual(result.status, "CLARIFICATION_REQUIRED")
         self.assertIsNone(result.cypher)
+
+    def test_single_course_uses_stable_identity_for_ambiguity(self) -> None:
+        payload = {
+            "question": "2026학년도 컴퓨터공학과 동명과목은 언제 개설되나?",
+            "filters": {
+                "academic_year": 2026,
+                "department_id": "department:cwnu:cse",
+                "name_ko": "동명과목",
+            },
+            "requested_fields": ["grade_year", "semester"],
+            "evidence_required": True,
+            "intent": "course lookup",
+            "selection_mode": SelectionMode.SINGLE_COURSE.value,
+        }
+        plan = QueryPlan.from_dict(payload, SchemaCatalog.from_generated())
+        query = build_syntax_scaffold(plan, QuerySchemaSelector().select(plan))
+
+        def row(identity: str, suffix: str) -> dict[str, Any]:
+            return {
+                "grade_year": [2],
+                "semester": "FIRST",
+                "academic_year": 2026,
+                "department_id": "department:cwnu:cse",
+                "name_ko": "동명과목",
+                "fact_id": f"offering:{suffix}",
+                "fact_label": "CourseOffering",
+                "fact_status": "VERIFIED",
+                "evidence_id": f"evidence:{suffix}",
+                "excerpt_page": 17,
+                "source_pdf_page": 262,
+                "printed_page": 254,
+                "source_text": "검증된 동명 과목 편성",
+                "evidence_verification_status": "VERIFIED",
+                "course_identity": identity,
+            }
+
+        with tempfile.TemporaryDirectory() as directory:
+            service = NaturalLanguageQueryService(
+                StubPlanner(PlanningOutcome(PlanningStatus.READY, plan)),
+                SequenceGenerator([query]),
+                SafetyPipeline(
+                    FakeExplainer(),
+                    FakeExecutor(
+                        [
+                            row("course:cwnu:ONE", "one"),
+                            row("course:cwnu:TWO", "two"),
+                        ]
+                    ),
+                    trace_dir=Path(directory),
+                ),
+                QuerySchemaSelector(),
+                model="fake-local-model",
+            )
+            result = service.ask(plan.question)
+        self.assertEqual(result.status, "CLARIFICATION_REQUIRED")
+        self.assertEqual(result.error_code, "RESULT_COURSE_AMBIGUOUS")
+
+        first_evidence = row("course:cwnu:ONE", "one-first")
+        second_evidence = row("course:cwnu:ONE", "one-second")
+        second_evidence["fact_id"] = first_evidence["fact_id"]
+        same_identity_rows = [first_evidence, second_evidence]
+        with tempfile.TemporaryDirectory() as directory:
+            service = NaturalLanguageQueryService(
+                StubPlanner(PlanningOutcome(PlanningStatus.READY, plan)),
+                SequenceGenerator([query]),
+                SafetyPipeline(
+                    FakeExplainer(),
+                    FakeExecutor(same_identity_rows),
+                    trace_dir=Path(directory),
+                ),
+                QuerySchemaSelector(),
+                model="fake-local-model",
+            )
+            result = service.ask(plan.question)
+        self.assertEqual(result.status, "ANSWERABLE")
+        self.assertEqual(len(result.rows), 2)
+
+    def test_course_code_takes_precedence_over_name(self) -> None:
+        payload = {
+            "question": "학수번호가 있는 과목 조회",
+            "filters": {
+                "academic_year": 2026,
+                "department_id": "department:cwnu:cse",
+                "course_code": "CDA0008",
+                "name_ko": "오래된 표시명",
+            },
+            "requested_fields": ["semester"],
+            "evidence_required": True,
+            "selection_mode": "SINGLE_COURSE",
+        }
+        plan = QueryPlan.from_dict(payload, SchemaCatalog.from_generated())
+        self.assertEqual(plan.filters["course_code"], "CDA0008")
+        self.assertNotIn("name_ko", plan.filters)
 
 
 if __name__ == "__main__":

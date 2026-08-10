@@ -6,7 +6,7 @@ import re
 from dataclasses import dataclass, field
 from typing import Any
 
-from .query_plan import FILTER_BINDINGS, QueryPlan
+from .query_plan import FILTER_BINDINGS, QueryPlan, SelectionMode
 from .schema_catalog import SchemaCatalog
 
 
@@ -615,6 +615,8 @@ class CypherValidator:
             "source_text",
             "evidence_verification_status",
         }
+        if plan.selection_mode is SelectionMode.SINGLE_COURSE:
+            required.add("course_identity")
         if set(sources) != required:
             self._fail(
                 "CYPHER_RETURN_FIELD_MISMATCH",
@@ -656,6 +658,18 @@ class CypherValidator:
                 "verification_status",
             ),
         }
+        if plan.selection_mode is SelectionMode.SINGLE_COURSE:
+            course_variables = [
+                variable
+                for variable, labels in variable_labels.items()
+                if "Course" in labels
+            ]
+            if len(course_variables) != 1:
+                self._fail(
+                    "CYPHER_COURSE_IDENTITY_REQUIRED",
+                    "SINGLE_COURSE must return one explicitly labeled Course identity",
+                )
+            expected["course_identity"] = (course_variables[0], "course_id")
         for alias, source in expected.items():
             if sources[alias] != source:
                 self._fail(

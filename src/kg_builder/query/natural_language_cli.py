@@ -10,7 +10,7 @@ from typing import Sequence
 from neo4j import GraphDatabase
 
 from kg_builder.config import ConfigurationError, Neo4jQuerySettings
-from kg_builder.llm.client import LLMConfigurationError, LocalLLMSettings, OllamaClient
+from kg_builder.llm.client import LLMConfigurationError, LLMSettings, create_llm_client
 from kg_builder.llm.cypher_generator import LocalCypherGenerator
 from kg_builder.llm.planner import LocalQueryPlanner
 
@@ -30,9 +30,9 @@ def build_parser() -> argparse.ArgumentParser:
 def main(argv: Sequence[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     try:
-        llm_settings = LocalLLMSettings.from_env()
+        llm_settings = LLMSettings.from_env()
         neo4j_settings = Neo4jQuerySettings.from_env()
-        client = OllamaClient(llm_settings)
+        client = create_llm_client(llm_settings)
         with GraphDatabase.driver(
             neo4j_settings.uri,
             auth=(neo4j_settings.user, neo4j_settings.password),

@@ -7,7 +7,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from .cypher_validator import ProvenanceContract
-from .query_plan import QueryPlan
+from .query_plan import QueryPlan, SelectionMode
 
 
 class ResultValidationError(ValueError):
@@ -58,11 +58,14 @@ class ResultValidator:
         if not rows:
             return ValidatedResult((), 0, 0)
         required = set(plan.requested_fields) | set(plan.filters) | {"fact_id", "fact_label"}
+        if plan.selection_mode is SelectionMode.SINGLE_COURSE:
+            required.add("course_identity")
         if plan.evidence_required:
             required.update(self.EVIDENCE_FIELDS)
         seen_rows: set[str] = set()
         seen_fact_evidence: set[tuple[str, str]] = set()
         evidence_ids: set[str] = set()
+        course_identities: set[str] = set()
         total_bytes = 0
         for index, row in enumerate(rows):
             if not isinstance(row, dict):
@@ -79,6 +82,14 @@ class ResultValidator:
                 )
             self._validate_scope(index, plan, row)
             self._validate_fact(index, row, provenance)
+            if plan.selection_mode is SelectionMode.SINGLE_COURSE:
+                identity = row["course_identity"]
+                if not isinstance(identity, str) or not identity.strip():
+                    self._fail(
+                        "RESULT_COURSE_IDENTITY_INVALID",
+                        f"row {index} has invalid course_identity",
+                    )
+                course_identities.add(identity)
             if plan.evidence_required:
                 if row["fact_status"] != "VERIFIED":
                     self._fail("RESULT_FACT_NOT_VERIFIED", f"row {index} fact is not VERIFIED")
@@ -111,6 +122,14 @@ class ResultValidator:
             if signature in seen_rows:
                 self._fail("RESULT_DUPLICATE_ROW", f"row {index} duplicates a prior row")
             seen_rows.add(signature)
+        if (
+            plan.selection_mode is SelectionMode.SINGLE_COURSE
+            and len(course_identities) > 1
+        ):
+            self._fail(
+                "RESULT_COURSE_AMBIGUOUS",
+                "SINGLE_COURSE matched multiple stable Course identities",
+            )
         return ValidatedResult(tuple(rows), len(rows), len(evidence_ids))
 
     def _validate_fact(

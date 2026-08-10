@@ -62,7 +62,7 @@ Ollama `0.32.5`를 재사용하고 공식 `qwen2.5-coder:7b`, `qwen2.5-coder:14b
 ## 7. 실제 14B 결과
 
 - 교양 최소: 34학점, Evidence 1
-- 균형교양: 12학점 및 영역별 1과목, Evidence 2
+- 균형교양: 4개 영역에서 영역별 1과목 이상(`COURSE_PER_AREA`), 총 12학점 이상(`CREDIT`), Evidence 2
 - 편입생: 면제 Rule, Evidence 1
 - 자료구조 개설: 2학년 1학기, Evidence 1
 - 전공필수: 9과목·21학점, Evidence 9

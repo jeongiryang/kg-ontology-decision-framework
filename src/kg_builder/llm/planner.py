@@ -7,7 +7,12 @@ import re
 from pathlib import Path
 from typing import Any, Mapping
 
-from kg_builder.query.query_plan import FILTER_BINDINGS, QueryPlan, QueryPlanError
+from kg_builder.query.query_plan import (
+    FILTER_BINDINGS,
+    QueryPlan,
+    QueryPlanError,
+    SelectionMode,
+)
 from kg_builder.query.schema_catalog import DEFAULT_SPEC_PATH, ROOT, SchemaCatalog
 
 from .client import LLMResponseError, StructuredLLMClient
@@ -33,9 +38,7 @@ LLM_REQUESTED_FIELDS = frozenset(
         "description_ko",
     }
 )
-SELECTION_MODES = frozenset(
-    {"SINGLE_RULE", "MULTIPLE_RULES", "SINGLE_COURSE", "COURSE_LIST"}
-)
+SELECTION_MODES = frozenset(item.value for item in SelectionMode)
 
 def planner_response_schema(catalog: SchemaCatalog) -> dict[str, Any]:
     requested_fields = sorted(LLM_REQUESTED_FIELDS.intersection(catalog.all_node_properties))
@@ -169,17 +172,26 @@ class LocalQueryPlanner:
                 selection_mode = payload.get("selection_mode")
                 filters = payload.get("filters")
                 requested_fields = payload.get("requested_fields")
-                if (
-                    status is PlanningStatus.CLARIFICATION_REQUIRED
-                    and selection_mode == "SINGLE_COURSE"
-                    and isinstance(filters, dict)
-                    and {"academic_year", "department_id"}.issubset(filters)
-                    and ("name_ko" in filters or "course_code" in filters)
-                    and isinstance(requested_fields, list)
-                    and requested_fields
-                ):
-                    status = PlanningStatus.READY
                 if status is not PlanningStatus.READY:
+                    # Do not silently turn the model's ambiguity decision into READY.
+                    # For a fully scoped SINGLE_COURSE request, ask the model once to
+                    # delegate candidate cardinality to the stable Course identity
+                    # validation performed after the database query.  A second
+                    # CLARIFICATION_REQUIRED remains a safe stop.
+                    fully_scoped_course = (
+                        status is PlanningStatus.CLARIFICATION_REQUIRED
+                        and selection_mode == SelectionMode.SINGLE_COURSE.value
+                        and isinstance(filters, dict)
+                        and {"academic_year", "department_id"}.issubset(filters)
+                        and bool({"name_ko", "course_code"}.intersection(filters))
+                    )
+                    if fully_scoped_course and attempt == 0:
+                        previous_error = (
+                            "SINGLE_COURSE is fully scoped. Return READY so the database "
+                            "result validator can count stable course identities; do not "
+                            "guess whether duplicate course names exist."
+                        )
+                        continue
                     return PlanningOutcome(status=status, message=message)
                 rule_ids = filters.get("rule_ids") if isinstance(filters, dict) else None
                 if selection_mode == "SINGLE_RULE" and (
@@ -213,6 +225,7 @@ class LocalQueryPlanner:
                     "filters": filters,
                     "requested_fields": requested_fields,
                     "evidence_required": payload.get("evidence_required"),
+                    "selection_mode": selection_mode,
                 }
                 return PlanningOutcome(
                     status=status,

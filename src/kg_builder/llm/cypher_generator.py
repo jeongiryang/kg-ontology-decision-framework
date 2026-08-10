@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Any, Mapping
 
-from kg_builder.query.query_plan import QueryPlan
+from kg_builder.query.query_plan import QueryPlan, SelectionMode
 from kg_builder.query.query_plan import FILTER_BINDINGS
 
 from .client import LLMResponseError, StructuredLLMClient
@@ -25,6 +25,7 @@ def public_plan_payload(plan: QueryPlan) -> dict[str, Any]:
         "filters": dict(plan.filters),
         "requested_fields": list(plan.requested_fields),
         "evidence_required": plan.evidence_required,
+        "selection_mode": plan.selection_mode.value if plan.selection_mode else None,
     }
 
 
@@ -129,6 +130,13 @@ def build_syntax_scaffold(plan: QueryPlan, schema_subset: Mapping[str, Any]) -> 
     returns = requested_returns + scope_returns + [
         item.format(fact=fact_alias, fact_id=fact_id) for item in PROVENANCE_RETURNS
     ]
+    if plan.selection_mode is SelectionMode.SINGLE_COURSE:
+        if family != "CourseOffering":
+            raise LLMResponseError(
+                "LLM_COURSE_IDENTITY_UNSUPPORTED",
+                "SINGLE_COURSE requires the CourseOffering fact family",
+            )
+        returns.append("c.course_id AS course_identity")
     return (
         "\n".join(matches)
         + "\nWHERE "
