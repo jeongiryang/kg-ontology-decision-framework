@@ -6,7 +6,7 @@ import re
 from dataclasses import dataclass, field
 from typing import Any
 
-from .query_plan import FILTER_BINDINGS, QueryPlan
+from .query_plan import FILTER_BINDINGS, QueryPlan, SelectionMode
 from .schema_catalog import SchemaCatalog
 
 
@@ -121,6 +121,10 @@ GRAPH_PARAMETER_FILTER = re.compile(
 )
 PARAMETER_IN_PROPERTY_FILTER = re.compile(
     rf"^\s*\$({IDENTIFIER})\s+IN\s+({IDENTIFIER})\.({IDENTIFIER})\s*$",
+    re.IGNORECASE,
+)
+PROPERTY_IN_PARAMETER_FILTER = re.compile(
+    rf"^\s*({IDENTIFIER})\.({IDENTIFIER})\s+IN\s+\$({IDENTIFIER})\s*$",
     re.IGNORECASE,
 )
 VERIFIED_FILTER = re.compile(
@@ -480,6 +484,7 @@ class CypherValidator:
                 self._fail("CYPHER_WHERE_UNSUPPORTED", "empty WHERE predicate")
             graph_parameter = GRAPH_PARAMETER_FILTER.fullmatch(term)
             parameter_in_property = PARAMETER_IN_PROPERTY_FILTER.fullmatch(term)
+            property_in_parameter = PROPERTY_IN_PARAMETER_FILTER.fullmatch(term)
             verified = VERIFIED_FILTER.fullmatch(term)
             if graph_parameter:
                 variable, prop, parameter = graph_parameter.groups()
@@ -487,6 +492,9 @@ class CypherValidator:
             elif parameter_in_property:
                 parameter, variable, prop = parameter_in_property.groups()
                 operator = "PARAMETER_IN_PROPERTY"
+            elif property_in_parameter:
+                variable, prop, parameter = property_in_parameter.groups()
+                operator = "PROPERTY_IN_PARAMETER"
             elif verified:
                 variable, prop = verified.groups()
                 verified_sources.add((variable, prop.lower()))
@@ -607,6 +615,8 @@ class CypherValidator:
             "source_text",
             "evidence_verification_status",
         }
+        if plan.selection_mode is SelectionMode.SINGLE_COURSE:
+            required.add("course_identity")
         if set(sources) != required:
             self._fail(
                 "CYPHER_RETURN_FIELD_MISMATCH",
@@ -648,6 +658,18 @@ class CypherValidator:
                 "verification_status",
             ),
         }
+        if plan.selection_mode is SelectionMode.SINGLE_COURSE:
+            course_variables = [
+                variable
+                for variable, labels in variable_labels.items()
+                if "Course" in labels
+            ]
+            if len(course_variables) != 1:
+                self._fail(
+                    "CYPHER_COURSE_IDENTITY_REQUIRED",
+                    "SINGLE_COURSE must return one explicitly labeled Course identity",
+                )
+            expected["course_identity"] = (course_variables[0], "course_id")
         for alias, source in expected.items():
             if sources[alias] != source:
                 self._fail(

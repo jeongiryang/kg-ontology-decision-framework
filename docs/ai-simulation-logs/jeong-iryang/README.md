@@ -5,7 +5,7 @@
 - 파일명 규칙: `NNNN-short-task-name.md`
   - `NNNN`은 이 폴더에서 독립적으로 증가하는 4자리 번호다.
   - 작업명은 영문 소문자 kebab-case로 작성한다.
-- 현재 다음 로그 번호: `0010`
+- 현재 다음 로그 번호: `0013`
 - 중앙 템플릿: [AI 시뮬레이션 로그 템플릿](../_template.md)
 - 중앙 운영 규칙: [AI 시뮬레이션 로그 운영 규칙](../README.md)
 
@@ -20,3 +20,6 @@
 - [0007. Verified KG 읽기 전용 질의·Evidence 응답 계층](0007-query-evidence-api.md)
 - [0008. Text-to-Cypher 스키마·검증·실행 안전 기반](0008-text-to-cypher-safety.md)
 - [0009. PR #13 Text-to-Cypher 안전성 보완](0009-text-to-cypher-security-remediation.md)
+- [0010. RTX 4070 Ti 로컬 LLM Text-to-Cypher PoC](0010-local-llm-query-pipeline.md)
+- [0011. LLM provider 이식성과 질의 의미 회귀 보완](0011-llm-provider-portability.md)
+- [0012. LLM HTTP redirect 보안 강화](0012-llm-http-redirect-hardening.md)

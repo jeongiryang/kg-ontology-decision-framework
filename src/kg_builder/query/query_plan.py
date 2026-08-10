@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from enum import StrEnum
 from typing import Any, Mapping
 
 from .schema_catalog import SchemaCatalog
@@ -13,6 +14,15 @@ class QueryPlanError(ValueError):
 
 
 MAX_QUESTION_LENGTH = 2_000
+
+
+class SelectionMode(StrEnum):
+    """Expected result cardinality semantics carried through result validation."""
+
+    SINGLE_RULE = "SINGLE_RULE"
+    MULTIPLE_RULES = "MULTIPLE_RULES"
+    SINGLE_COURSE = "SINGLE_COURSE"
+    COURSE_LIST = "COURSE_LIST"
 
 
 @dataclass(frozen=True, slots=True)
@@ -36,11 +46,30 @@ FILTER_BINDINGS = {
     "credits": FilterBinding("CourseOffering", "credits"),
     "course_code": FilterBinding("Course", "course_code"),
     "name_ko": FilterBinding("Course", "name_ko"),
+    "rule_id": FilterBinding("Rule", "rule_id"),
+    "rule_ids": FilterBinding("Rule", "rule_id", "PROPERTY_IN_PARAMETER"),
+    "area_id": FilterBinding("EducationArea", "area_id"),
     "major_type": FilterBinding("ApplicabilityScope", "major_type"),
     "admission_type": FilterBinding("ApplicabilityScope", "admission_type"),
 }
 SUPPORTED_FILTERS = frozenset(FILTER_BINDINGS)
-REQUIRED_SCOPE_FILTERS = frozenset({"academic_year", "department_id"})
+REQUIRED_SCOPE_FILTERS = frozenset({"academic_year"})
+DEPARTMENT_SCOPED_FILTERS = frozenset(
+    {"grade_year", "semester", "completion_type", "credits", "course_code", "name_ko"}
+)
+DEPARTMENT_SCOPED_FIELDS = frozenset(
+    {
+        "course_code",
+        "name_ko",
+        "grade_year",
+        "semester",
+        "credits",
+        "lecture_hours",
+        "practice_hours",
+        "completion_type",
+        "offering_id",
+    }
+)
 VOCABULARY_FILTERS = {
     "semester": "semester",
     "completion_type": "completion_type",
@@ -67,13 +96,21 @@ class QueryPlan:
     requested_fields: tuple[str, ...]
     evidence_required: bool
     intent: str | None = None
+    selection_mode: SelectionMode | None = None
 
     @classmethod
     def from_dict(cls, payload: Mapping[str, Any], catalog: SchemaCatalog) -> "QueryPlan":
         if not isinstance(payload, Mapping):
             raise QueryPlanError("QueryPlan must be a JSON object")
         validate_filter_policy(catalog)
-        allowed = {"question", "filters", "requested_fields", "evidence_required", "intent"}
+        allowed = {
+            "question",
+            "filters",
+            "requested_fields",
+            "evidence_required",
+            "intent",
+            "selection_mode",
+        }
         unknown = set(payload) - allowed
         if unknown:
             raise QueryPlanError(f"unknown QueryPlan fields: {sorted(unknown)}")
@@ -107,12 +144,26 @@ class QueryPlan:
             isinstance(credits, bool) or not isinstance(credits, (int, float)) or credits < 0
         ):
             raise QueryPlanError("credits must be a non-negative number")
-        for name in ("department_id", "course_code", "name_ko"):
+        for name in ("department_id", "course_code", "name_ko", "rule_id", "area_id"):
             if name in filters:
                 value = filters[name]
                 if not isinstance(value, str) or not value.strip():
                     raise QueryPlanError(f"{name} must be a non-empty string")
                 filters[name] = value.strip()
+        # A stable catalog identifier takes precedence over a display name.  Keeping
+        # both would make an otherwise exact lookup fail when the display name is stale.
+        if "course_code" in filters and "name_ko" in filters:
+            filters.pop("name_ko")
+        if "rule_ids" in filters:
+            rule_ids = filters["rule_ids"]
+            if (
+                not isinstance(rule_ids, list)
+                or not rule_ids
+                or any(not isinstance(value, str) or not value.strip() for value in rule_ids)
+                or len(set(rule_ids)) != len(rule_ids)
+            ):
+                raise QueryPlanError("rule_ids must be a non-empty array of unique strings")
+            filters["rule_ids"] = [value.strip() for value in rule_ids]
         for name, vocabulary in VOCABULARY_FILTERS.items():
             if name in filters and filters[name] not in catalog.controlled_vocabularies[vocabulary]:
                 raise QueryPlanError(f"{name} is not in controlled vocabulary {vocabulary}")
@@ -130,6 +181,20 @@ class QueryPlan:
             raise QueryPlanError(
                 f"requested fields are absent from ontology_spec.json: {sorted(undeclared)}"
             )
+        department_scope_required = bool(
+            set(filters).intersection(DEPARTMENT_SCOPED_FILTERS)
+            or set(normalized_fields).intersection(DEPARTMENT_SCOPED_FIELDS)
+        )
+        if department_scope_required and "department_id" not in filters:
+            raise QueryPlanError(
+                "department_id is required for course and CourseOffering queries"
+            )
+        if "area_id" in filters and set(normalized_fields).issubset(
+            {"value", "operator", "unit"}
+        ):
+            raise QueryPlanError(
+                "area_id can match multiple rules; use an exact rule_id for one threshold"
+            )
 
         evidence_required = payload.get("evidence_required")
         if not isinstance(evidence_required, bool):
@@ -139,10 +204,26 @@ class QueryPlan:
         intent = payload.get("intent")
         if intent is not None and (not isinstance(intent, str) or not intent.strip()):
             raise QueryPlanError("intent, when present, is logging metadata only and must be text")
+        selection_mode_value = payload.get("selection_mode")
+        try:
+            selection_mode = (
+                SelectionMode(selection_mode_value)
+                if selection_mode_value is not None
+                else None
+            )
+        except ValueError as exc:
+            raise QueryPlanError("selection_mode is not supported") from exc
+        if selection_mode is SelectionMode.SINGLE_COURSE and not (
+            {"course_code", "name_ko"}.intersection(filters)
+        ):
+            raise QueryPlanError(
+                "SINGLE_COURSE requires a course_code or name_ko identity filter"
+            )
         return cls(
             question=question.strip(),
             filters=filters,
             requested_fields=normalized_fields,
             evidence_required=evidence_required,
             intent=intent.strip() if isinstance(intent, str) else None,
+            selection_mode=selection_mode,
         )

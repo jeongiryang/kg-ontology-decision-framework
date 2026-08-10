@@ -99,7 +99,7 @@ uv run python -m kg_builder.query.schema_exporter check
 
 ```text
 MATCH | OPTIONAL MATCH
-WHERE (AND로 연결된 제한된 속성-파라미터 조건)
+WHERE (AND로 연결된 제한된 속성-파라미터 조건, 각 조건 자체를 괄호로 감싸지 않음)
 WITH (기존 그래프 변수의 단순 전달만 허용)
 RETURN [DISTINCT] graphVariable.property AS alias
 ORDER BY returnedAlias [ASC|DESC]
@@ -220,7 +220,11 @@ Python의 private 명명과 승인 객체는 실수 방지 장치일 뿐 같은 
 
 런타임 파일은 `logs/query-runs/`에 기록되며 Git에서 제외한다. 이 로그는 실행 관찰 기록이고 `docs/ai-simulation-logs/`의 팀 작업 인수인계 로그와 별개다.
 
-기본 trace는 질문 원문을 저장하지 않고 질문 길이와 SHA-256만 기록한다. 원문 저장은 애플리케이션이 명시적으로 opt-in한 경우에만 허용하며 이메일·학번·전화번호의 단순 패턴을 마스킹한다. 패턴 탐지는 완전한 개인정보 탐지 수단이 아니므로 원문 저장은 운영상 최소화해야 한다. 기본 보존 정책은 30일이며 trace 접근은 애플리케이션 운영자로 제한한다. 실제 삭제 자동화는 아직 구현하지 않았으므로 배포 환경의 로그 수명주기 정책으로 강제해야 한다.
+기본 trace는 질문 원문과 fingerprint를 모두 저장하지 않고 질문 길이만 기록한다. 중복 질문 식별이 필요할 때만 `KG_QUERY_TRACE_FINGERPRINT=true`와 `KG_QUERY_TRACE_HMAC_KEY`를 함께 설정해 HMAC-SHA256 fingerprint를 opt-in할 수 있다. HMAC 키가 없으면 설정 오류로 중단하며 키와 질문은 trace에 기록하지 않는다. 원문 저장도 애플리케이션이 별도로 opt-in한 경우에만 허용하며 이메일·학번·전화번호의 단순 패턴을 마스킹한다. 패턴 탐지는 완전한 개인정보 탐지 수단이 아니므로 원문 저장은 운영상 최소화해야 한다. 기본 보존 정책은 30일이며 trace 접근은 애플리케이션 운영자로 제한한다. 실제 삭제 자동화는 아직 구현하지 않았으므로 배포 환경의 로그 수명주기 정책으로 강제해야 한다.
+
+`llm_query_schema.json`의 `query_policy.provenance.fact_labels`는 `SUPPORTED_BY`의 출발 라벨 중 상속 속성을 포함해 `status`가 선언된 라벨만 원본 명세에서 결정론적으로 파생한다. 따라서 과목 정체성인 `Course` 자체는 확정 편성 fact가 아니며, 학년·학기·학점·이수구분 질문에는 Evidence가 직접 연결된 `CourseOffering`을 fact로 사용해야 한다.
+
+현재 허용 WHERE 문법은 `alias.property = $parameter`, `$parameter IN alias.property`, 그리고 fact/Evidence의 VERIFIED 검사뿐이다. LLM 생성기는 `WHERE (cv.academic_year = $academic_year)`처럼 개별 조건을 불필요한 괄호로 감싸지 않아야 한다. 이 제약은 생성 프롬프트와 자동 생성 스키마에도 함께 제공하며, 이를 이유로 검증기의 허용 범위를 넓히지 않는다.
 
 ## 10. 검증 명령
 
@@ -238,19 +242,19 @@ KG_NEO4J_INTEGRATION=1 uv run pytest tests/test_dynamic_query_integration.py
 
 통합 테스트는 별도의 `NEO4J_QUERY_*` 읽기 전용 자격증명이 있을 때만 안전 쿼리의 EXPLAIN·실행·Evidence 검증을 수행한다. 실행 전후 노드 1,518개, 관계 3,260개, Evidence 511개가 동일해야 한다. GitHub Actions는 비밀값 없는 단위 테스트와 스키마 검사를 수행하며 로컬 Neo4j 통합 테스트를 통과한 것으로 가장하지 않는다.
 
-## 11. 다음 로컬 LLM 연결 계약
+## 11. 로컬 LLM 연결 상태
 
-다음 작업에서는 모델과 실행 방식을 먼저 결정한 뒤 다음 두 인터페이스를 구현한다.
+RTX 4070 Ti 로컬 PoC에서 다음 두 인터페이스를 구현했다.
 
-1. 자연어 질문과 `llm_query_schema.json`을 받아 `QueryPlan`을 반환하는 planner
-2. 검증된 QueryPlan과 관련 스키마만 받아 후보 Cypher를 반환하는 generator
+1. 자연어 질문과 온톨로지·Verified KG에서 파생한 범위 컨텍스트를 받아 `QueryPlan`을 반환하는 planner
+2. 검증된 QueryPlan과 관련 스키마 부분집합만 받아 후보 Cypher를 반환하는 generator
 
-두 출력은 현재 계약과 검증기를 반드시 통과해야 한다. 검증 실패 시 모델에 오류 코드와 제한된 스키마를 제공해 재시도할 수 있지만, 미검증 Cypher를 실행하는 fallback은 만들지 않는다.
+현재 실측 모델은 Ollama `qwen2.5-coder:14b` Q4_K_M이며 두 출력은 현재 계약과 검증기를 반드시 통과한다. 검증 실패 시 모델에 오류 코드만 제공해 한 번 재시도하고, 미검증 Cypher를 실행하는 fallback은 없다. planner와 generator는 provider-neutral `StructuredLLMClient`에만 의존하고 CLI는 factory로 Ollama 또는 OpenAI-compatible adapter를 선택한다. 실제 연구실 vLLM 연결은 아직 검증하지 않았다. 자세한 환경·benchmark·provider 전환·CLI는 [로컬 LLM PoC 문서](local-llm-query-pipeline.md)를 참고한다.
 
-아직 결정하지 않은 항목:
+LLM HTTP adapter는 최초 loopback endpoint 검증에만 의존하지 않는다. urllib의 자동 redirect를 비활성화하고 `301`, `302`, `303`, `307`, `308`을 모두 즉시 거부하므로 Authorization, prompt, 요청 본문과 JSON Schema가 redirect 목적지로 재전송되지 않는다. redirect는 재시도하지 않으며 안전한 오류 코드 `LLM_HTTP_REDIRECT_REJECTED`만 상위 서비스의 `SAFE_FAILURE` 경로로 전달한다.
 
-- 로컬 LLM 런타임과 모델
-- planner와 generator를 한 모델로 구성할지 여부
-- 재시도 횟수와 시간 제한
+아직 구현하지 않은 항목:
+
 - 검증된 행을 한국어 근거 답변으로 변환하는 renderer
 - 질문 평가셋과 정확도 기준
+- 프론트엔드 응답 계약 연결

@@ -93,6 +93,38 @@ def build_query_schema(spec_path: Path = DEFAULT_SPEC_PATH) -> dict[str, Any]:
     supported_by = next(
         item for item in spec["relationship_types"] if item["name"] == "SUPPORTED_BY"
     )
+
+    def properties_with_parents(label: str) -> set[str]:
+        found: set[str] = set()
+        pending = [label]
+        visited: set[str] = set()
+        while pending:
+            current = pending.pop()
+            if current in visited:
+                continue
+            visited.add(current)
+            definition = nodes_by_name[current]
+            found.update(prop["name"] for prop in definition.get("properties", []))
+            pending.extend(definition.get("parent_labels", []))
+        return found
+
+    def labels_with_parents(label: str) -> set[str]:
+        found: set[str] = set()
+        pending = [label]
+        while pending:
+            current = pending.pop()
+            if current in found:
+                continue
+            found.add(current)
+            pending.extend(nodes_by_name[current].get("parent_labels", []))
+        return found
+
+    supported_fact_labels = sorted(
+        label
+        for label in nodes_by_name
+        if "status" in properties_with_parents(label)
+        and labels_with_parents(label).intersection(supported_by["from_labels"])
+    )
     return {
         "schema_format_version": SCHEMA_FORMAT_VERSION,
         "artifact_role": "LLM_QUERY_SCHEMA",
@@ -124,10 +156,18 @@ def build_query_schema(spec_path: Path = DEFAULT_SPEC_PATH) -> dict[str, Any]:
             },
             "provenance": {
                 "relationship": "SUPPORTED_BY",
-                "fact_labels": sorted(supported_by["from_labels"]),
+                "fact_labels": supported_fact_labels,
                 "evidence_label": "Evidence",
                 "direct_path_required": True,
                 "fact_id_required": True,
+                "course_identity_is_not_a_fact": True,
+                "course_schedule_fact_label": "CourseOffering",
+            },
+            "cypher_generation_constraints": {
+                "where_predicates_must_not_be_parenthesized": True,
+                "all_user_filters_must_use_parameters": True,
+                "literal_limit_maximum": MAX_RESULT_ROWS,
+                "direct_verified_fact_evidence_path_required": True,
             },
         },
     }
