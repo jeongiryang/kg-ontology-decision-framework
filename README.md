@@ -120,6 +120,7 @@ kg-ontology-decision-framework/
 
 - [2026 학사 교육과정 온톨로지 V1 설계](docs/ontology/ontology-v1.md)
 - [Neo4j V0.2 스키마 적용 및 Verified KG 적재 가이드](docs/neo4j-ingestion.md)
+- [Verified KG 읽기 전용 질의·Evidence 응답 가이드](docs/query-evidence-api.md)
 
 Verified bundle 검증과 로컬 Neo4j 적재는 다음 순서로 실행합니다. 각 팀원은 자신의 빈 로컬 Neo4j 데이터베이스에서 독립적으로 수행합니다.
 
@@ -136,6 +137,15 @@ uv run python -m kg_builder.neo4j_ingest verify
 - `apply-schema`: 고유 제약조건과 조회 인덱스를 멱등 적용합니다.
 - `load`: 빈 DB에 같은 bundle을 두 번 적재하여 멱등성을 확인합니다.
 - `verify`: 전체 개수와 대표 학사 사실·Evidence를 실제 Cypher로 검증합니다.
+
+적재가 끝난 로컬 Neo4j에는 사전 정의된 Intent만 사용하는 읽기 전용 질의 CLI로 접근합니다.
+
+```bash
+uv run python -m kg_builder.query_cli \
+  --request '{"intent":"GET_GENERAL_EDUCATION_MIN_CREDITS","parameters":{"academic_year":2026}}'
+```
+
+현재 실제 구현은 `src/kg_builder/`의 `config.py`, `graph_bundle.py`, `neo4j_schema.py`, `neo4j_ingest.py`와 `query_*.py`에 있습니다. 위쪽 초기 디렉터리 설명의 0바이트 골격 모듈은 향후 구조 예시이며 구현 완료 상태를 뜻하지 않습니다.
 
 ### AI 시뮬레이션 로그
 
