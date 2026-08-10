@@ -14,6 +14,8 @@
 → ValidatedClaims
 → KoreanAnswerRenderer
 → CitationRenderer
+→ 내부 승인 Answerable payload
+→ ChatResponse 상태 factory
 → CurriculumChatService 응답
 ```
 
@@ -58,8 +60,9 @@ field, value, unit, operator, polarity, description과 provenance 전체가 일�
 
 `ValidatedClaims`에는 canonical Claim tuple, 직접 `(fact_id, evidence_id)` provenance,
 그리고 해당 실행에서 검증한 Citation 소스가 함께 묶인다. 승인 digest는 이 전체
-내용에 결합되므로 일반 생성자, `dataclasses.replace`, mutable list 변경 또는 다른
-실행의 Evidence 혼합으로는 유효한 승인 객체를 만들 수 없다.
+내용에 결합된다. 내용이 완전히 동일한 immutable `copy.copy()` 또는
+`dataclasses.replace()`는 같은 승인값의 복사로 허용한다. Claim·provenance·Citation
+소스·digest 중 하나라도 바꾼 복사는 거부되며 다른 실행의 Evidence도 섞을 수 없다.
 
 `ClaimValidator`는 다음을 원본 조회 행에서 다시 계산한다.
 
@@ -131,15 +134,34 @@ excerpt_page → source_pdf_page → printed_page → evidence_id → fact_id
 | `NOT_FOUND` | Verified 결과 없음 안전 문구, Grounding 데이터 없음 |
 | `SAFE_FAILURE` | 오류 코드별 중앙 고정 안전 문구와 내부 오류 코드만 반환 |
 
-`ChatResponse.safe_failure(error_code)`가 고정 문구를 선택한다. 직접 생성자를 쓰더라도
-오류 코드와 정확한 중앙 문구가 일치하지 않으면 거부하므로, 검증 실패한 답변 본문을
-`SAFE_FAILURE`에 재사용할 수 없다. 알 수 없는 오류 코드는 일반 안전 문구로 축약한다.
+`ChatResponse`는 읽기·직렬화용 공개 DTO이며 직접 생성할 수 없다. ANSWERABLE 응답은
+`CitationRenderer`가 `RenderedAnswer`와 Citation을 하나의 내부 승인 payload로 묶은 뒤
+`ChatResponse.from_approved_answer(...)`에 전달할 때만 발급된다. 호출자는 answer text,
+Claim, Citation, Fact ID 또는 Evidence ID를 개별 인자로 조립할 수 없다. 반환 DTO의
+속성 조회와 `to_dict()` wire 계약은 기존과 동일하다.
+
+비ANSWERABLE 응답은 `clarification_required`, `out_of_scope`, `unsupported`,
+`unresolved`, `not_found`, `safe_failure` 상태별 factory만 사용한다. 각 factory는 고정
+안전 문구와 Grounding 부재를 강제한다.
+
+`ChatErrorCode`는 다음 값만 wire JSON에 허용한다.
+
+- `QUERY_SAFE_FAILURE`
+- `ANSWER_CLAIM_VALIDATION_FAILED`
+- `ANSWER_RENDERING_UNSUPPORTED`
+- `UNKNOWN_SAFE_FAILURE`
+
+알려진 enum 또는 동일 문자열은 보존하고, 알 수 없는 문자열·빈 값·예외 메시지는
+`UNKNOWN_SAFE_FAILURE`로 치환한다. 따라서 DB 오류, 경로, Cypher, prompt, 비밀번호나
+token이 `error_code`에 그대로 반영되지 않는다.
 
 비ANSWERABLE 상태는 ClaimBuilder와 renderer에 진입하지 않는다. 내부 예외 메시지와 검증 실패 본문은 사용자 응답에 포함하지 않는다.
 
 ## 공식 API와 Python 경계의 범위
 
-패키지 루트의 공식 실행 API는 `CurriculumChatService`와 응답 DTO다.
+패키지 루트의 공식 실행 API는 `CurriculumChatService`이며 `ChatResponse`는 그 결과를
+읽고 직렬화하는 DTO다. PR #14를 포함한 후속 UI는 응답을 직접 만들지 않고 서비스가
+반환한 DTO의 공개 필드 또는 `to_dict()`만 사용한다.
 `ClaimBuilder`, `ClaimValidator`, `KoreanAnswerRenderer`, `CitationRenderer`와 승인 객체
 factory는 내부 모듈이며 패키지 `__all__`에 노출하지 않는다. 정상 어댑터는 이 내부
 단계를 개별 호출하지 않는다. `CurriculumChatService` 생성자는 query service만 받고
@@ -148,8 +170,9 @@ factory는 내부 모듈이며 패키지 `__all__`에 노출하지 않는다. �
 Python 타입과 module-private seal은 같은 프로세스에서 임의 코드를 실행할 수 있는
 공격자에 대한 완전한 보안 샌드박스가 아니다. private sentinel·digest 함수 탈취,
 monkey patching, `object.__setattr__`, 메모리 변조는 범위 밖이다. 이번 경계는 공개
-생성자, 일반 collection, 단순 dataclass 복사 및 후속 어댑터의 실수로 검증이
-우회되는 것을 차단한다. 프로세스 자체의 코드 실행 권한과 배포 신뢰 경계는 별도로
+생성자, 일반 collection, 변경된 dataclass 복사 및 후속 어댑터의 실수로 검증이
+우회되는 것을 차단한다. 내용이 동일한 immutable 승인값 복사는 사실과 provenance를
+바꾸지 않으므로 허용한다. 프로세스 자체의 코드 실행 권한과 배포 신뢰 경계는 별도로
 보호해야 한다.
 
 ## 실행
@@ -175,10 +198,11 @@ KG_NEO4J_INTEGRATION=1 uv run pytest -q
 KG_LOCAL_LLM_INTEGRATION=1 uv run pytest -q tests/test_answer_integration.py -s
 ```
 
-회귀 테스트는 raw Claim 렌더링, 승인 객체 직접 생성·복사, 다른 실행 Citation 혼합,
+회귀 테스트는 raw Claim 렌더링, 승인 객체 직접 생성·변경, 다른 실행 Citation 혼합,
 subject·unit·operator·polarity 변조, 이수구분 의미 반전, 과목 수·학점 합계 교환,
-면제 극성 반전, 최소·최대 연산자 교환, 학년·학기 교환과 고정 `SAFE_FAILURE`
-문구를 검사한다. 통합 테스트는 임시 trace 디렉터리를 사용하고 전후 노드 1,518개,
+면제 극성 반전, 최소·최대 연산자 교환, 학년·학기 교환, 공개 ChatResponse 위조,
+고정 `SAFE_FAILURE` 문구와 unknown 오류 코드 정제를 검사한다. 통합 테스트는 임시
+trace 디렉터리를 사용하고 전후 노드 1,518개,
 관계 3,260개, Evidence 511개 불변을 확인한다.
 
 ## 현재 범위와 확장 방법

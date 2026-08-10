@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import copy
+import json
 import unittest
 from dataclasses import FrozenInstanceError, replace
 from typing import Any
@@ -7,6 +9,7 @@ from typing import Any
 from kg_builder.answer.claim_builder import ClaimBuilder
 from kg_builder.answer.claim_validator import ClaimValidator, ValidatedClaims
 from kg_builder.answer.contracts import (
+    ChatErrorCode,
     ChatResponse,
     ChatStatus,
     Citation,
@@ -377,6 +380,12 @@ class ValidatedClaimApprovalBoundaryTests(unittest.TestCase):
             RenderedAnswer("위조 답변", self.validated)
 
     def test_approved_collections_are_immutable_and_copy_tampering_is_detected(self):
+        identical_copy = copy.copy(self.validated)
+        identical_replace = replace(self.validated)
+        self.assertTrue(identical_copy._is_approved())
+        self.assertTrue(identical_replace._is_approved())
+        self.assertEqual(identical_copy.claims, self.validated.claims)
+        self.assertEqual(identical_replace.provenance, self.validated.provenance)
         with self.assertRaises(FrozenInstanceError):
             self.validated.claims = ()
         with self.assertRaises(FrozenInstanceError):
@@ -440,29 +449,94 @@ class CitationAndResponseContractTests(unittest.TestCase):
         response = CitationRenderer().render("r", answer)
         self.assertEqual(response.citations[0].fact_ids, tuple(sorted(response.citations[0].fact_ids)))
 
-    def test_chat_response_invariants_reject_contradictory_states(self):
-        with self.assertRaises(ValueError):
+    def test_chat_response_direct_construction_and_forgery_are_rejected(self):
+        with self.assertRaises(TypeError):
             ChatResponse("r", ChatStatus.ANSWERABLE, "답변")
-        with self.assertRaises(ValueError):
+        with self.assertRaises(TypeError):
             ChatResponse("r", ChatStatus.CLARIFICATION_REQUIRED, "확인 필요")
-        with self.assertRaises(ValueError):
+        with self.assertRaises(TypeError):
             ChatResponse("r", ChatStatus.SAFE_FAILURE, "안전 실패")
-        with self.assertRaises(ValueError):
+        with self.assertRaises(TypeError):
             ChatResponse(
-                "r",
-                ChatStatus.SAFE_FAILURE,
-                "자료구조는 전공필수입니다.",
+                request_id="r",
+                status=ChatStatus.SAFE_FAILURE,
+                answer_text="자료구조는 전공필수입니다.",
                 error_code="ANSWER_CLAIM_VALIDATION_FAILED",
             )
+
+        validated = build_validated(
+            [offering_row()],
+            course_plan("completion_type", name_ko="자료구조"),
+        )
+        rendered = KoreanAnswerRenderer().render(validated)
+        normal = CitationRenderer().render("r", rendered)
+        with self.assertRaises(TypeError):
+            ChatResponse(
+                request_id="r",
+                status=ChatStatus.ANSWERABLE,
+                answer_text="자료구조는 전공필수입니다.",
+                citations=normal.citations,
+                used_fact_ids=normal.used_fact_ids,
+                used_evidence_ids=normal.used_evidence_ids,
+                grounded_claims=normal.grounded_claims,
+            )
+        with self.assertRaises(TypeError):
+            ChatResponse.from_approved_answer("r", rendered)
+        for field, value in (
+            ("answer_text", "자료구조는 전공필수입니다."),
+            ("grounded_claims", ()),
+            ("citations", ()),
+        ):
+            with self.subTest(field=field), self.assertRaises(TypeError):
+                replace(normal, **{field: value})
+
+        self.assertEqual(
+            tuple(normal.to_dict()),
+            (
+                "request_id", "status", "answer_text", "citations",
+                "used_fact_ids", "used_evidence_ids", "clarification", "error_code",
+            ),
+        )
 
     def test_safe_failure_uses_only_central_error_messages(self):
         known = ChatResponse.safe_failure("r", "ANSWER_CLAIM_VALIDATION_FAILED")
         self.assertEqual(
             known.answer_text, "답변의 근거를 검증하지 못했습니다."
         )
+        self.assertIs(known.error_code, ChatErrorCode.ANSWER_CLAIM_VALIDATION_FAILED)
+        self.assertEqual(
+            known.to_dict()["error_code"], "ANSWER_CLAIM_VALIDATION_FAILED"
+        )
+        known_enum = ChatResponse.safe_failure(
+            "r", ChatErrorCode.ANSWER_RENDERING_UNSUPPORTED
+        )
+        self.assertIs(
+            known_enum.error_code, ChatErrorCode.ANSWER_RENDERING_UNSUPPORTED
+        )
         unknown = ChatResponse.safe_failure("r", "UNKNOWN_INTERNAL_ERROR")
         self.assertEqual(unknown.answer_text, safe_failure_message("UNKNOWN_INTERNAL_ERROR"))
-        self.assertEqual(unknown.answer_text, "안전한 답변을 생성하지 못했습니다.")
+        self.assertEqual(unknown.answer_text, "요청을 안전하게 처리하지 못했습니다.")
+        self.assertIs(unknown.error_code, ChatErrorCode.UNKNOWN_SAFE_FAILURE)
+        self.assertEqual(unknown.to_dict()["error_code"], "UNKNOWN_SAFE_FAILURE")
+        for unsafe in (
+            None,
+            "",
+            "SYNTHETIC_INTERNAL_EXCEPTION: database password leaked: example",
+            "MATCH (n) RETURN n",
+            "/synthetic/private/path",
+            "synthetic-token-value",
+        ):
+            with self.subTest(unsafe=unsafe):
+                response = ChatResponse.safe_failure("r", unsafe)
+                wire = json.dumps(response.to_dict(), ensure_ascii=False)
+                self.assertIs(
+                    response.error_code, ChatErrorCode.UNKNOWN_SAFE_FAILURE
+                )
+                self.assertEqual(
+                    response.answer_text, "요청을 안전하게 처리하지 못했습니다."
+                )
+                if unsafe:
+                    self.assertNotIn(unsafe, wire)
         self.assertFalse(known.citations)
         self.assertFalse(known.used_fact_ids)
         self.assertFalse(known.used_evidence_ids)
@@ -470,19 +544,19 @@ class CitationAndResponseContractTests(unittest.TestCase):
         citation = Citation(
             "evidence:x", ("fact:x",), 1, 1, 1, "합성 근거"
         )
-        with self.assertRaises(ValueError):
+        with self.assertRaises(TypeError):
             ChatResponse(
-                "r",
-                ChatStatus.SAFE_FAILURE,
-                safe_failure_message("ANSWER_CLAIM_VALIDATION_FAILED"),
+                request_id="r",
+                status=ChatStatus.SAFE_FAILURE,
+                answer_text=safe_failure_message("ANSWER_CLAIM_VALIDATION_FAILED"),
                 citations=(citation,),
                 error_code="ANSWER_CLAIM_VALIDATION_FAILED",
             )
-        with self.assertRaises(ValueError):
+        with self.assertRaises(TypeError):
             ChatResponse(
-                "r",
-                ChatStatus.SAFE_FAILURE,
-                safe_failure_message("ANSWER_CLAIM_VALIDATION_FAILED"),
+                request_id="r",
+                status=ChatStatus.SAFE_FAILURE,
+                answer_text=safe_failure_message("ANSWER_CLAIM_VALIDATION_FAILED"),
                 used_fact_ids=("fact:x",),
                 used_evidence_ids=("evidence:x",),
                 error_code="ANSWER_CLAIM_VALIDATION_FAILED",
@@ -503,6 +577,38 @@ class CitationAndResponseContractTests(unittest.TestCase):
                 self.assertFalse(response.citations)
                 self.assertFalse(response.used_fact_ids)
                 self.assertFalse(response.grounded_claims)
+
+    def test_non_answerable_factories_use_fixed_messages(self):
+        responses = (
+            ChatResponse.clarification_required("r", "학수번호를 알려 주세요."),
+            ChatResponse.out_of_scope("r"),
+            ChatResponse.unsupported("r"),
+            ChatResponse.unresolved("r"),
+            ChatResponse.not_found("r"),
+        )
+        self.assertEqual(
+            tuple(response.status for response in responses),
+            (
+                ChatStatus.CLARIFICATION_REQUIRED,
+                ChatStatus.OUT_OF_SCOPE,
+                ChatStatus.UNSUPPORTED,
+                ChatStatus.UNRESOLVED,
+                ChatStatus.NOT_FOUND,
+            ),
+        )
+        for response in responses:
+            with self.subTest(status=response.status):
+                self.assertTrue(response.answer_text)
+                self.assertFalse(response.citations)
+                self.assertFalse(response.used_fact_ids)
+                self.assertFalse(response.used_evidence_ids)
+                self.assertFalse(response.grounded_claims)
+                self.assertIsNone(response.error_code)
+        self.assertEqual(
+            responses[0].clarification, "학수번호를 알려 주세요."
+        )
+        with self.assertRaises(ValueError):
+            ChatResponse.clarification_required("r", "")
 
     def test_citation_mismatch_and_size_limit_fail(self):
         rows = [offering_row()]

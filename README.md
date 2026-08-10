@@ -159,7 +159,7 @@ uv run python -m kg_builder.query.natural_language_cli \
 
 안전 정책은 [Text-to-Cypher 안전 기반 문서](docs/text-to-cypher-safety.md), 모델·실행·실측 결과는 [로컬 LLM PoC 문서](docs/local-llm-query-pipeline.md)를 참고합니다.
 
-`ResultValidator`가 승인한 Fact와 Evidence를 구조화 Claim으로 변환한 뒤 최종 한국어 답변과 Citation JSON으로 조립하려면 다음 CLI를 사용합니다. 최종 사실 문장은 LLM이 작성하지 않으며, Python이 Claim의 값·단위·극성·직접 provenance를 검증하고 결정론적으로 렌더링합니다. 검증 전 `GroundedClaim`은 직접 렌더링할 수 없고 `ClaimValidator`가 발급한 immutable `ValidatedClaims`만 답변·Citation 단계로 전달됩니다.
+`ResultValidator`가 승인한 Fact와 Evidence를 구조화 Claim으로 변환한 뒤 최종 한국어 답변과 Citation JSON으로 조립하려면 다음 CLI를 사용합니다. 최종 사실 문장은 LLM이 작성하지 않으며, Python이 Claim의 값·단위·극성·직접 provenance를 검증하고 결정론적으로 렌더링합니다. 검증 전 `GroundedClaim`은 직접 렌더링할 수 없고 `ClaimValidator`가 발급한 immutable `ValidatedClaims`만 답변·Citation 단계로 전달됩니다. 공개 `ChatResponse`는 읽기·직렬화 전용이며, ANSWERABLE 응답은 승인된 renderer와 Citation payload를 통해서만 발급됩니다. 프론트엔드는 응답을 직접 만들지 않고 서비스 결과의 기존 JSON 필드를 사용합니다.
 
 ```bash
 uv run python -m kg_builder.answer.cli \

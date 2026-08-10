@@ -2,10 +2,73 @@
 
 from __future__ import annotations
 
+import hashlib
+import hmac
+import secrets
+from dataclasses import dataclass, field
 from typing import Any
 
-from .contracts import ChatResponse, ChatStatus, Citation, GroundingError
+from .contracts import ChatResponse, Citation, GroundingError
 from .korean_renderer import RenderedAnswer
+
+
+_PAYLOAD_SEAL = object()
+_PAYLOAD_KEY = secrets.token_bytes(32)
+
+
+def _payload_digest(answer: RenderedAnswer, citations: tuple[Citation, ...]) -> str:
+    payload = repr((answer._approval, citations)).encode("utf-8")
+    return hmac.new(_PAYLOAD_KEY, payload, hashlib.sha256).hexdigest()
+
+
+@dataclass(frozen=True, slots=True, init=False)
+class _ApprovedAnswerPayload:
+    """CitationRenderer-issued answer and citations bound to one approval."""
+
+    answer: RenderedAnswer
+    citations: tuple[Citation, ...]
+    _approval: str = field(repr=False, compare=False)
+    _seal: object = field(repr=False, compare=False)
+
+    def __init__(
+        self,
+        answer: RenderedAnswer,
+        citations: tuple[Citation, ...],
+        *,
+        _approval: str = "",
+        _seal: object | None = None,
+    ) -> None:
+        expected = _payload_digest(answer, citations)
+        if (
+            _seal is not _PAYLOAD_SEAL
+            or not answer._is_approved()
+            or not hmac.compare_digest(_approval, expected)
+        ):
+            raise TypeError("answer payload can only be issued by CitationRenderer")
+        object.__setattr__(self, "answer", answer)
+        object.__setattr__(self, "citations", citations)
+        object.__setattr__(self, "_approval", _approval)
+        object.__setattr__(self, "_seal", _seal)
+
+    @classmethod
+    def _issue(
+        cls, answer: RenderedAnswer, citations: tuple[Citation, ...]
+    ) -> "_ApprovedAnswerPayload":
+        return cls(
+            answer,
+            citations,
+            _approval=_payload_digest(answer, citations),
+            _seal=_PAYLOAD_SEAL,
+        )
+
+    def _is_approved(self) -> bool:
+        return (
+            self._seal is _PAYLOAD_SEAL
+            and self.answer._is_approved()
+            and hmac.compare_digest(
+                self._approval, _payload_digest(self.answer, self.citations)
+            )
+        )
 
 
 class CitationRenderer:
@@ -95,14 +158,9 @@ class CitationRenderer:
         )
         if not citations:
             raise GroundingError("ANSWER_CITATION_INVALID", "no citations were assembled")
-        return ChatResponse(
-            request_id=request_id,
-            status=ChatStatus.ANSWERABLE,
-            answer_text=answer.answer_text,
-            citations=citations,
-            used_fact_ids=answer.used_fact_ids,
-            used_evidence_ids=answer.used_evidence_ids,
-            grounded_claims=answer.claims,
+        return ChatResponse.from_approved_answer(
+            request_id,
+            _ApprovedAnswerPayload._issue(answer, citations),
         )
 
     def _source(self, source: Any) -> str:
