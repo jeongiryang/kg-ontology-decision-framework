@@ -15,7 +15,7 @@
 → VERIFIED Evidence 포함 JSON
 ```
 
-개인 PC는 Python 애플리케이션·Neo4j·테스트와 이번 4070 Ti PoC를 담당한다. DSW A6000 서버는 더 큰 모델을 평가할 후속 배포 후보이며 현재 실행 경로에 필요하지 않다. 자연어 최종 답변 생성과 프론트엔드 연결은 아직 구현하지 않았다.
+개인 PC는 Python 애플리케이션·Neo4j·테스트와 이번 4070 Ti PoC를 담당한다. DSW A6000 서버는 더 큰 모델을 평가할 후속 배포 후보이며 현재 실행 경로에 필요하지 않다. 후속 답변 계층은 검증 행에서 구조화 Claim을 만들고 Python으로 최종 문장을 렌더링하며, 프론트엔드 연결은 아직 구현하지 않았다.
 
 ## 2. 엔진과 모델 선정
 
@@ -126,7 +126,7 @@ uv run python -m kg_builder.query.natural_language_cli \
   "2026년 컴퓨터공학과 3학년 2학기 전공선택 중 3학점 과목을 알려줘"
 ```
 
-출력은 `request_id`, 상태, 질문 원문이 제거된 QueryPlan, 검증된 Cypher, result rows, Evidence, 오류 단계·코드, 모델명과 시간을 포함한다. 자연어 답변 렌더링은 하지 않는다.
+이 구조화 조회 CLI 출력은 `request_id`, 상태, 질문 원문이 제거된 QueryPlan, 검증된 Cypher, result rows, Evidence, 오류 단계·코드, 모델명과 시간을 포함하며 자연어 답변 렌더링은 하지 않는다. 별도 `kg_builder.answer.cli`가 구조화 Claim 기반 최종 답변을 제공한다.
 
 ## 8. 실제 14B smoke 결과
 
@@ -178,4 +178,4 @@ Provider adapter 단위 테스트는 네트워크 없이 Ollama와 OpenAI-compat
 - OpenAI-compatible adapter는 구현·단위 테스트됐지만 실제 연구실 vLLM과의 호환성은 아직 검증하지 않았다.
 - Neo4j Community 로컬 사용자는 권한 수준의 읽기 전용 경계가 아니다.
 - 자연어 모델 출력은 결정론을 보장하지 않으므로 회귀 질문셋을 반복 평가해야 한다.
-- 다음 작업은 검증된 result rows와 Evidence를 한국어 답변으로 렌더링하고 황대겸 프론트엔드 응답 계약에 연결하는 것이다.
+- 구조화 Claim 기반 한국어 답변 렌더링은 후속 계층에서 구현되었으며, 다음 작업은 황대겸 프론트엔드 응답 계약에 연결하는 것이다.

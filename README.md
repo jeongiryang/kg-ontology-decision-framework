@@ -123,6 +123,7 @@ kg-ontology-decision-framework/
 - [Verified KG 읽기 전용 질의·Evidence 응답 가이드](docs/query-evidence-api.md)
 - [Text-to-Cypher 스키마·검증·실행 안전 기반](docs/text-to-cypher-safety.md)
 - [RTX 4070 Ti 로컬 LLM Text-to-Cypher PoC](docs/local-llm-query-pipeline.md)
+- [VERIFIED Evidence 기반 한국어 답변 계층](docs/evidence-answer-renderer.md)
 
 Verified bundle 검증과 로컬 Neo4j 적재는 다음 순서로 실행합니다. 각 팀원은 자신의 빈 로컬 Neo4j 데이터베이스에서 독립적으로 수행합니다.
 
@@ -149,7 +150,7 @@ uv run python -m kg_builder.query_cli \
 
 현재 실제 구현은 `src/kg_builder/`의 `config.py`, `graph_bundle.py`, `neo4j_schema.py`, `neo4j_ingest.py`와 `query_*.py`에 있습니다. 위쪽 초기 디렉터리 설명의 0바이트 골격 모듈은 향후 구조 예시이며 구현 완료 상태를 뜻하지 않습니다.
 
-동적 Text-to-Cypher는 명세-derived LLM 스키마, 제한 문법 후보 검증, Neo4j `EXPLAIN`, Evidence provenance에 더해 provider-neutral 로컬 LLM planner·Cypher generator까지 연결되어 있습니다. 현재 실측 provider는 Ollama이고 OpenAI-compatible adapter로 SSH 터널 뒤 연구실 vLLM을 연결할 수 있습니다. 실행 시 명시적인 `NEO4J_QUERY_*`와 로컬 `KG_LLM_*` 설정이 필요하며 자연어 최종 답변 생성은 아직 포함하지 않습니다.
+동적 Text-to-Cypher는 명세-derived LLM 스키마, 제한 문법 후보 검증, Neo4j `EXPLAIN`, Evidence provenance에 더해 provider-neutral 로컬 LLM planner·Cypher generator까지 연결되어 있습니다. 현재 실측 provider는 Ollama이고 OpenAI-compatible adapter로 SSH 터널 뒤 연구실 vLLM을 연결할 수 있습니다. 실행 시 명시적인 `NEO4J_QUERY_*`와 로컬 `KG_LLM_*` 설정이 필요합니다.
 
 ```bash
 uv run python -m kg_builder.query.natural_language_cli \
@@ -157,6 +158,15 @@ uv run python -m kg_builder.query.natural_language_cli \
 ```
 
 안전 정책은 [Text-to-Cypher 안전 기반 문서](docs/text-to-cypher-safety.md), 모델·실행·실측 결과는 [로컬 LLM PoC 문서](docs/local-llm-query-pipeline.md)를 참고합니다.
+
+`ResultValidator`가 승인한 Fact와 Evidence를 구조화 Claim으로 변환한 뒤 최종 한국어 답변과 Citation JSON으로 조립하려면 다음 CLI를 사용합니다. 최종 사실 문장은 LLM이 작성하지 않으며, Python이 Claim의 값·단위·극성·직접 provenance를 검증하고 결정론적으로 렌더링합니다. 검증 전 `GroundedClaim`은 직접 렌더링할 수 없고 `ClaimValidator`가 발급한 immutable `ValidatedClaims`만 답변·Citation 단계로 전달됩니다. 공개 `ChatResponse`는 읽기·직렬화 전용이며, ANSWERABLE 응답은 승인된 renderer와 Citation payload를 통해서만 발급됩니다. 프론트엔드는 응답을 직접 만들지 않고 서비스 결과의 기존 JSON 필드를 사용합니다.
+
+```bash
+uv run python -m kg_builder.answer.cli \
+  "2026학년도 컴퓨터공학과 전공필수 과목을 알려줘"
+```
+
+응답 상태, Claim 유형, Citation 필드와 안전 실패 정책은 [Evidence 기반 한국어 답변 계층 문서](docs/evidence-answer-renderer.md)를 참고합니다.
 
 ### AI 시뮬레이션 로그
 

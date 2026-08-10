@@ -67,6 +67,26 @@ def ready_planner_payload() -> dict[str, Any]:
 
 
 class LocalLLMContractTests(unittest.TestCase):
+    def test_numeric_rule_plan_is_enriched_with_semantic_claim_fields(self) -> None:
+        payload = {
+            "status": "READY",
+            "intent": "minimum",
+            "filters": {
+                "academic_year": 2026,
+                "rule_ids": ["rule:cwnu:2026:general:min-total-default"],
+            },
+            "requested_fields": ["value"],
+            "evidence_required": True,
+            "selection_mode": "SINGLE_RULE",
+            "message": None,
+        }
+        outcome = LocalQueryPlanner(SequenceClient([payload])).plan("최소학점은?")
+        self.assertEqual(outcome.status, PlanningStatus.READY)
+        self.assertEqual(
+            set(outcome.plan.requested_fields),
+            {"value", "rule_type", "operator", "unit", "description_ko"},
+        )
+
     def test_settings_are_local_only(self) -> None:
         with self.assertRaises(LLMConfigurationError):
             LLMSettings(
