@@ -1,0 +1,2030 @@
+{
+  "metadata": {
+    "artifact_role": "원문은 확인됐지만 ontology_spec.json v0.1.0으로 손실 없이 표현할 수 없거나 원문 자체 확인이 필요한 항목",
+    "source_document_sha256": "8ee5ee9d45fde0b00f8c42dc5aa513a46ec6a28bed4db50af25a049ae2dac004",
+    "schema_name": "cwnu_2026_academic_curriculum_ontology_v1",
+    "schema_version": "0.1.0",
+    "generated_on": "2026-08-10",
+    "policy": "이 파일의 항목은 해결 전까지 운영 질의의 확정 답변 근거로 사용하지 않음"
+  },
+  "summary": {
+    "schema_gap_count": 13,
+    "unsupported_or_identity_conflict_general_rows": 5,
+    "omitted_cse_offering_rows": 6,
+    "partially_modeled_transition_rows": 14,
+    "modeled_cse_basic_credit_structure_rows": 2,
+    "unmodeled_cse_structural_source_facts": 20,
+    "unmodeled_narrative_fact_groups": 7,
+    "source_internal_inconsistencies": 3
+  },
+  "schema_gaps": [
+    {
+      "issue_id": "SG-001",
+      "severity": "high",
+      "title_ko": "교양 CourseOffering의 개설 학년 부재",
+      "affected_records": 282,
+      "current_representation": "grade_year=[]로 보존하고 correction_note에 원문 부재를 명시함.",
+      "decision_needed": "빈 배열을 전학년/미지정 중 무엇으로 해석할지 데이터 계약에 명시한다."
+    },
+    {
+      "issue_id": "SG-002",
+      "severity": "high",
+      "title_ko": "학수번호 GEA8617 정체성 충돌",
+      "affected_records": 2,
+      "current_representation": "두 Evidence와 원문 행은 보존했으나 Course와 Offering은 생성하지 않음.",
+      "decision_needed": "기관 원문 오류인지 학수번호 재사용인지 확인하고 Course identity rule을 확정한다."
+    },
+    {
+      "issue_id": "SG-003",
+      "severity": "high",
+      "title_ko": "개설학기 '이룸' 통제어휘 부재",
+      "affected_records": 4,
+      "current_representation": "Course와 Evidence만 만들고 Offering은 보류함.",
+      "decision_needed": "이룸 학기의 의미와 semester 확장값을 확인한다."
+    },
+    {
+      "issue_id": "SG-004",
+      "severity": "high",
+      "title_ko": "현장실습 실기값의 단위가 주(週)",
+      "affected_records": 6,
+      "current_representation": "Course와 Evidence만 만들고 Offering은 보류함.",
+      "decision_needed": "practice_hours 외 practice_weeks 또는 workload 구조를 추가한다."
+    },
+    {
+      "issue_id": "SG-005",
+      "severity": "high",
+      "title_ko": "경과조치의 교육과정 연도 범위 표현 불가",
+      "affected_records": 14,
+      "current_representation": "TransitionRule.description/source/normalized_value에 보존하고 APPLIES_TO는 생성하지 않음.",
+      "decision_needed": "ApplicabilityScope에 curriculum_year_from/to 또는 별도 TemporalScope를 추가한다."
+    },
+    {
+      "issue_id": "SG-006",
+      "severity": "medium",
+      "title_ko": "교양 관련학과와 학과별 수강제한의 정규화 구조 부재",
+      "affected_records": 287,
+      "current_representation": "related_department는 CourseOffering.source/normalized_value 문자열에, 제한 학과는 student_type에 보존함.",
+      "decision_needed": "Department 참조 관계와 수강제한 전용 규칙/관계를 정의한다."
+    },
+    {
+      "issue_id": "SG-007",
+      "severity": "medium",
+      "title_ko": "공통 교육과정과 Institution 연결 관계 부재",
+      "affected_records": 1,
+      "current_representation": "공통 CurriculumVersion 노드는 생성했으나 Institution으로 직접 연결하지 않음.",
+      "decision_needed": "FOR_INSTITUTION 또는 동등한 관계를 추가한다."
+    },
+    {
+      "issue_id": "SG-008",
+      "severity": "medium",
+      "title_ko": "목표·역량·로드맵·권장과목 구조 부재",
+      "affected_records": 7,
+      "current_representation": "unmodeled_source_facts에 구조화해 보존함.",
+      "decision_needed": "PoC 질의 범위에 필요할 때 Goal, Competency, RECOMMENDS, ROADMAP 관계를 확장한다."
+    },
+    {
+      "issue_id": "SG-009",
+      "severity": "medium",
+      "title_ko": "전공 학점배분 및 역량 집계 사실의 규칙 유형 부재",
+      "affected_records": 20,
+      "current_representation": "unmodeled_source_facts에 원문 구조를 그대로 보존함.",
+      "decision_needed": "Allocation/AggregateFact 모델을 추가할지 결정한다."
+    },
+    {
+      "issue_id": "SG-010",
+      "severity": "medium",
+      "title_ko": "ApplicabilityScope ID 패턴에 학생·대학 범주 식별자 부재",
+      "affected_records": 21,
+      "current_representation": "충돌 방지를 위해 마지막 ID 토큰에 범주 식별자를 포함함.",
+      "decision_needed": "scope identity rule에 student_type/college_category discriminator를 공식 추가한다."
+    },
+    {
+      "issue_id": "SG-011",
+      "severity": "low",
+      "title_ko": "하계·동계 복합 학기",
+      "affected_records": 3,
+      "current_representation": "SUMMER와 WINTER CourseOffering 두 개로 분리하고 REVIEW_REQUIRED로 표시함.",
+      "decision_needed": "복합 편성을 분리하는 현재 정규화 정책을 승인한다."
+    },
+    {
+      "issue_id": "SG-012",
+      "severity": "medium",
+      "title_ko": "교양 이수구분의 명시값 부재",
+      "affected_records": 282,
+      "current_representation": "기초교양은 GENERAL_REQUIRED, 균형·확대교양은 GENERAL_ELECTIVE로 정규화함.",
+      "decision_needed": "영역에서 이수구분으로 변환하는 현재 매핑 규칙을 데이터 계약으로 승인한다."
+    },
+    {
+      "issue_id": "SG-013",
+      "severity": "high",
+      "title_ko": "CSE 학점구조표의 공통 교양 규칙 배치",
+      "affected_records": 8,
+      "current_representation": "CSE CurriculumVersion 아래에 중복 집계 규칙을 만들되 REVIEW_REQUIRED로 표시함.",
+      "decision_needed": "ontology_spec OD-001에 따라 공통 CurriculumVersion만 사용할지 CSE 집계 규칙을 유지할지 결정한다."
+    }
+  ],
+  "unsupported_or_identity_conflict_general_rows": [
+    {
+      "excerpt_page": 3,
+      "area_group": "균형교양",
+      "area_name": "디지털커뮤니케이션",
+      "course_code": "GEA8694",
+      "name_ko": "AI+디지털리터러시",
+      "name_en": "AI+ Digital Literacy",
+      "credits": 2,
+      "lecture_hours": 2,
+      "practice_hours": 0,
+      "semester_raw": "이룸",
+      "competency": [
+        "실용적 융복합"
+      ],
+      "related_department": "교양교육원(사림아너스)",
+      "note": "개설학기 원문 '이룸'은 ontology_spec.json semester 통제어휘에 없음",
+      "verification_status": "REVIEW_REQUIRED",
+      "evidence_id": "evidence:document:2026-curriculum-excerpt:8ee5ee9d45fd:excerpt-p3:gea8694",
+      "graph_action": "Course와 Evidence 생성; CourseOffering 보류"
+    },
+    {
+      "excerpt_page": 10,
+      "area_group": "균형교양",
+      "area_name": "자연·과학·기술의이해",
+      "course_code": "GEA8617",
+      "name_ko": "수식없는물리로보는세상",
+      "name_en": "The physical world without formula",
+      "credits": 3,
+      "lecture_hours": 3,
+      "practice_hours": 0,
+      "semester_raw": "2",
+      "competency": [
+        "창의적사고"
+      ],
+      "related_department": "교양교육원(반도체물리)",
+      "note": "발췌 13쪽의 '융합프로젝트Ⅰ'도 동일 학수번호 GEA8617을 사용하므로 Course 식별 충돌 검토 필요",
+      "verification_status": "REVIEW_REQUIRED",
+      "evidence_id": "evidence:document:2026-curriculum-excerpt:8ee5ee9d45fd:excerpt-p10:gea8617",
+      "graph_action": "Evidence만 생성; Course와 CourseOffering 보류"
+    },
+    {
+      "excerpt_page": 13,
+      "area_group": "확대교양",
+      "area_name": "소양교육",
+      "course_code": "GEA8617",
+      "name_ko": "융합프로젝트Ⅰ",
+      "name_en": "Convergence ProjectⅠ",
+      "credits": 3,
+      "lecture_hours": 3,
+      "practice_hours": 0,
+      "semester_raw": "이룸",
+      "competency": [
+        "실용적융복합"
+      ],
+      "related_department": "교양교육원(사림아너스)",
+      "note": "발췌 10쪽의 '수식없는물리로보는세상'과 학수번호 GEA8617이 중복되며, 개설학기 '이룸'은 ontology semester 통제어휘 밖임",
+      "verification_status": "REVIEW_REQUIRED",
+      "evidence_id": "evidence:document:2026-curriculum-excerpt:8ee5ee9d45fd:excerpt-p13:gea8617",
+      "graph_action": "Evidence만 생성; Course와 CourseOffering 보류"
+    },
+    {
+      "excerpt_page": 13,
+      "area_group": "확대교양",
+      "area_name": "소양교육",
+      "course_code": "GEA8818",
+      "name_ko": "융합프로젝트Ⅱ",
+      "name_en": "Convergence ProjectⅡ",
+      "credits": 1,
+      "lecture_hours": 1,
+      "practice_hours": 0,
+      "semester_raw": "이룸",
+      "competency": [
+        "실용적융복합"
+      ],
+      "related_department": "교양교육원(사림아너스)",
+      "note": "개설학기 '이룸'은 ontology semester 통제어휘 밖임",
+      "verification_status": "REVIEW_REQUIRED",
+      "evidence_id": "evidence:document:2026-curriculum-excerpt:8ee5ee9d45fd:excerpt-p13:gea8818",
+      "graph_action": "Course와 Evidence 생성; CourseOffering 보류"
+    },
+    {
+      "excerpt_page": 13,
+      "area_group": "확대교양",
+      "area_name": "소양교육",
+      "course_code": "GEA8689",
+      "name_ko": "탐방실습",
+      "name_en": "Exploration & Practice",
+      "credits": 1,
+      "lecture_hours": 0,
+      "practice_hours": 2,
+      "semester_raw": "이룸",
+      "competency": [
+        "창의적사고"
+      ],
+      "related_department": "교양교육원(사림아너스)",
+      "note": "개설학기 '이룸'은 ontology semester 통제어휘 밖임",
+      "verification_status": "REVIEW_REQUIRED",
+      "evidence_id": "evidence:document:2026-curriculum-excerpt:8ee5ee9d45fd:excerpt-p13:gea8689",
+      "graph_action": "Course와 Evidence 생성; CourseOffering 보류"
+    }
+  ],
+  "omitted_cse_offering_rows": [
+    {
+      "excerpt_page": 18,
+      "source_pdf_page": 263,
+      "printed_page": 255,
+      "section_title": "Ⅱ 전공 교과목 편성표",
+      "table_name": "전공 교과목 편성표",
+      "row_key": "CDA0147",
+      "grade_year": [
+        2,
+        3,
+        4
+      ],
+      "semester_raw": "1,2",
+      "completion_type_raw": "전공선택",
+      "course_code": "CDA0147",
+      "name_ko": "현장실습4",
+      "name_en": "Field Practice4",
+      "credits": 12,
+      "lecture_hours": 0,
+      "practice_hours": null,
+      "competency": [
+        "대학핵심역량[주]:실용적융복합",
+        "전공능력[주]:문제해결",
+        "전공능력[부]:주체적창의력",
+        "전공능력[부]:연구"
+      ],
+      "minor_required": false,
+      "note": "실기 열 원문은 '12주'로 주 단위이다. ontology_spec의 number형 실습 시수로 의미 손실 없이 정규화할 수 없음.",
+      "raw_text": "2·3·4학년 1,2학기 전공선택 CDA0147 현장실습4 / Field Practice4 / 12학점 / 이론 0 / 실기 12주",
+      "verification_status": "REVIEW_REQUIRED",
+      "evidence_id": "evidence:document:2026-curriculum-excerpt:8ee5ee9d45fd:excerpt-p18:cda0147",
+      "graph_action": "Course와 Evidence 생성; CourseOffering 보류"
+    },
+    {
+      "excerpt_page": 18,
+      "source_pdf_page": 263,
+      "printed_page": 255,
+      "section_title": "Ⅱ 전공 교과목 편성표",
+      "table_name": "전공 교과목 편성표",
+      "row_key": "CDA0173",
+      "grade_year": [
+        2,
+        3,
+        4
+      ],
+      "semester_raw": "1,2",
+      "completion_type_raw": "전공선택",
+      "course_code": "CDA0173",
+      "name_ko": "표준현장실습4",
+      "name_en": "Co-op4",
+      "credits": 12,
+      "lecture_hours": 0,
+      "practice_hours": null,
+      "competency": [
+        "대학핵심역량[주]:실용적융복합",
+        "전공능력[주]:문제해결",
+        "전공능력[부]:주체적창의력",
+        "전공능력[부]:연구"
+      ],
+      "minor_required": false,
+      "note": "실기 열 원문은 '12주'로 주 단위이다. ontology_spec의 number형 실습 시수로 의미 손실 없이 정규화할 수 없음.",
+      "raw_text": "2·3·4학년 1,2학기 전공선택 CDA0173 표준현장실습4 / Co-op4 / 12학점 / 이론 0 / 실기 12주",
+      "verification_status": "REVIEW_REQUIRED",
+      "evidence_id": "evidence:document:2026-curriculum-excerpt:8ee5ee9d45fd:excerpt-p18:cda0173",
+      "graph_action": "Course와 Evidence 생성; CourseOffering 보류"
+    },
+    {
+      "excerpt_page": 18,
+      "source_pdf_page": 263,
+      "printed_page": 255,
+      "section_title": "Ⅱ 전공 교과목 편성표",
+      "table_name": "전공 교과목 편성표",
+      "row_key": "CDA0144",
+      "grade_year": [
+        2,
+        3,
+        4
+      ],
+      "semester_raw": "하계·동계",
+      "completion_type_raw": "전공선택",
+      "course_code": "CDA0144",
+      "name_ko": "현장실습1",
+      "name_en": "Working Practices1",
+      "credits": 3,
+      "lecture_hours": 0,
+      "practice_hours": null,
+      "competency": [
+        "대학핵심역량[주]:실용적융복합",
+        "전공능력[주]:문제해결",
+        "전공능력[부]:주체적창의력",
+        "전공능력[부]:연구"
+      ],
+      "minor_required": false,
+      "note": "실기 열 원문은 '4주'이다. semester 통제어휘에는 하계·동계 동시값이 없어 단일 편성으로 직접 정규화할 수 없음.",
+      "raw_text": "2·3·4학년 하계·동계 전공선택 CDA0144 현장실습1 / Working Practices1 / 3학점 / 이론 0 / 실기 4주",
+      "verification_status": "REVIEW_REQUIRED",
+      "evidence_id": "evidence:document:2026-curriculum-excerpt:8ee5ee9d45fd:excerpt-p18:cda0144",
+      "graph_action": "Course와 Evidence 생성; CourseOffering 보류"
+    },
+    {
+      "excerpt_page": 18,
+      "source_pdf_page": 263,
+      "printed_page": 255,
+      "section_title": "Ⅱ 전공 교과목 편성표",
+      "table_name": "전공 교과목 편성표",
+      "row_key": "CDA0145",
+      "grade_year": [
+        2,
+        3,
+        4
+      ],
+      "semester_raw": "하계·동계",
+      "completion_type_raw": "전공선택",
+      "course_code": "CDA0145",
+      "name_ko": "현장실습3",
+      "name_en": "Working Practices3",
+      "credits": 6,
+      "lecture_hours": 0,
+      "practice_hours": null,
+      "competency": [
+        "대학핵심역량[주]:실용적융복합",
+        "전공능력[주]:문제해결",
+        "전공능력[부]:주체적창의력",
+        "전공능력[부]:연구"
+      ],
+      "minor_required": false,
+      "note": "실기 열 원문은 '8주'이다. semester 통제어휘에는 하계·동계 동시값이 없어 단일 편성으로 직접 정규화할 수 없음.",
+      "raw_text": "2·3·4학년 하계·동계 전공선택 CDA0145 현장실습3 / Working Practices3 / 6학점 / 이론 0 / 실기 8주",
+      "verification_status": "REVIEW_REQUIRED",
+      "evidence_id": "evidence:document:2026-curriculum-excerpt:8ee5ee9d45fd:excerpt-p18:cda0145",
+      "graph_action": "Course와 Evidence 생성; CourseOffering 보류"
+    },
+    {
+      "excerpt_page": 18,
+      "source_pdf_page": 263,
+      "printed_page": 255,
+      "section_title": "Ⅱ 전공 교과목 편성표",
+      "table_name": "전공 교과목 편성표",
+      "row_key": "CDA0171",
+      "grade_year": [
+        2,
+        3,
+        4
+      ],
+      "semester_raw": "하계·동계",
+      "completion_type_raw": "전공선택",
+      "course_code": "CDA0171",
+      "name_ko": "표준현장실습1",
+      "name_en": "Co-op1",
+      "credits": 3,
+      "lecture_hours": 0,
+      "practice_hours": null,
+      "competency": [
+        "대학핵심역량[주]:실용적융복합",
+        "전공능력[주]:문제해결",
+        "전공능력[부]:주체적창의력",
+        "전공능력[부]:연구"
+      ],
+      "minor_required": false,
+      "note": "실기 열 원문은 '4주'이다. semester 통제어휘에는 하계·동계 동시값이 없어 단일 편성으로 직접 정규화할 수 없음.",
+      "raw_text": "2·3·4학년 하계·동계 전공선택 CDA0171 표준현장실습1 / Co-op1 / 3학점 / 이론 0 / 실기 4주",
+      "verification_status": "REVIEW_REQUIRED",
+      "evidence_id": "evidence:document:2026-curriculum-excerpt:8ee5ee9d45fd:excerpt-p18:cda0171",
+      "graph_action": "Course와 Evidence 생성; CourseOffering 보류"
+    },
+    {
+      "excerpt_page": 18,
+      "source_pdf_page": 263,
+      "printed_page": 255,
+      "section_title": "Ⅱ 전공 교과목 편성표",
+      "table_name": "전공 교과목 편성표",
+      "row_key": "CDA0172",
+      "grade_year": [
+        2,
+        3,
+        4
+      ],
+      "semester_raw": "하계·동계",
+      "completion_type_raw": "전공선택",
+      "course_code": "CDA0172",
+      "name_ko": "표준현장실습3",
+      "name_en": "Co-op3",
+      "credits": 6,
+      "lecture_hours": 0,
+      "practice_hours": null,
+      "competency": [
+        "대학핵심역량[주]:실용적융복합",
+        "전공능력[주]:문제해결",
+        "전공능력[부]:주체적창의력",
+        "전공능력[부]:연구"
+      ],
+      "minor_required": false,
+      "note": "실기 열 원문은 '8주'이다. semester 통제어휘에는 하계·동계 동시값이 없어 단일 편성으로 직접 정규화할 수 없음.",
+      "raw_text": "2·3·4학년 하계·동계 전공선택 CDA0172 표준현장실습3 / Co-op3 / 6학점 / 이론 0 / 실기 8주",
+      "verification_status": "REVIEW_REQUIRED",
+      "evidence_id": "evidence:document:2026-curriculum-excerpt:8ee5ee9d45fd:excerpt-p18:cda0172",
+      "graph_action": "Course와 Evidence 생성; CourseOffering 보류"
+    }
+  ],
+  "partially_modeled_transition_rows": [
+    {
+      "transition_id": "cse-transition-2002-2007-graduation-after-2012-02",
+      "applicable_curriculum_years": {
+        "from": 2002,
+        "to": 2007
+      },
+      "condition": {
+        "field": "graduation_target_date",
+        "operator": "GTE",
+        "value_raw": "2012년 2월 이후"
+      },
+      "action_type": "APPLY_CURRICULUM_VERSION",
+      "action": {
+        "target_academic_year": 2008
+      },
+      "excerpt_page": 19,
+      "source_pdf_page": 264,
+      "printed_page": 256,
+      "section_title": "Ⅲ 연도별 경과조치",
+      "table_name": "연도별 경과조치",
+      "row_key": "2002-2007:2012-02-after",
+      "raw_text": "2012년 2월 이후 졸업대상자들은 2008학년도 교육과정 적용",
+      "verification_status": "VERIFIED",
+      "ontology_modeling_note": "ApplicabilityScope.academic_year가 단일 정수라 연도 구간과 졸업시점 조건을 직접 표현하기 어려움.",
+      "graph_rule_id": "rule:cwnu:2026:major:cse:cse-transition-2002-2007-graduation-after-2012-02",
+      "graph_action": "TransitionRule과 Evidence는 생성했으나 연도 범위 APPLIES_TO는 보류"
+    },
+    {
+      "transition_id": "cse-transition-2002-2012-capstone-design2",
+      "applicable_curriculum_years": {
+        "from": 2002,
+        "to": 2012
+      },
+      "condition": {
+        "field": "completed_course_name",
+        "operator": "NOT_IN",
+        "value_raw": "Capstone Design2"
+      },
+      "action_type": "COURSE_REQUIREMENT_REPLACEMENT",
+      "action": {
+        "required_course_name": "산학캡스톤디자인2"
+      },
+      "excerpt_page": 19,
+      "source_pdf_page": 264,
+      "printed_page": 256,
+      "section_title": "Ⅲ 연도별 경과조치",
+      "table_name": "연도별 경과조치",
+      "row_key": "2002-2012:capstone-design2",
+      "raw_text": "‘Capstone Design2’를 이수하지 않은 학생은 ‘산학캡스톤디자인2’를 필히 이수하여야 함",
+      "verification_status": "VERIFIED",
+      "ontology_modeling_note": "현재 TARGETS만으로 구과목과 신과목의 대체 방향을 명시하기 어려움.",
+      "graph_rule_id": "rule:cwnu:2026:major:cse:cse-transition-2002-2012-capstone-design2",
+      "graph_action": "TransitionRule과 Evidence는 생성했으나 연도 범위 APPLIES_TO는 보류"
+    },
+    {
+      "transition_id": "cse-transition-credit-retroactive-2002-2010",
+      "applicable_curriculum_years": {
+        "from": 2002,
+        "to": 2010
+      },
+      "condition": null,
+      "action_type": "RETROACTIVE_CREDIT_REQUIREMENT",
+      "action": {
+        "general_credits": 26,
+        "major_required_credits": 15,
+        "major_elective_credits": 48
+      },
+      "excerpt_page": 19,
+      "source_pdf_page": 264,
+      "printed_page": 256,
+      "section_title": "Ⅲ 연도별 경과조치",
+      "table_name": "2002~2020 교양 및 전공 이수 학점 소급표",
+      "row_key": "2002-2010:credits",
+      "raw_text": "2002~2010: 교양 26, 전공필수 15, 전공선택 48",
+      "verification_status": "VERIFIED",
+      "ontology_modeling_note": "연도 범위별 세 개의 CreditRequirement로 분해 가능하나 범위 표현 방식 결정 필요.",
+      "graph_rule_id": "rule:cwnu:2026:major:cse:cse-transition-credit-retroactive-2002-2010",
+      "graph_action": "TransitionRule과 Evidence는 생성했으나 연도 범위 APPLIES_TO는 보류"
+    },
+    {
+      "transition_id": "cse-transition-credit-retroactive-2011-2020",
+      "applicable_curriculum_years": {
+        "from": 2011,
+        "to": 2020
+      },
+      "condition": null,
+      "action_type": "RETROACTIVE_CREDIT_REQUIREMENT",
+      "action": {
+        "general_credits": 26,
+        "major_required_credits": 21,
+        "major_elective_credits": 48
+      },
+      "excerpt_page": 19,
+      "source_pdf_page": 264,
+      "printed_page": 256,
+      "section_title": "Ⅲ 연도별 경과조치",
+      "table_name": "2002~2020 교양 및 전공 이수 학점 소급표",
+      "row_key": "2011-2020:credits",
+      "raw_text": "2011~2020: 교양 26, 전공필수 21, 전공선택 48",
+      "verification_status": "VERIFIED",
+      "ontology_modeling_note": "연도 범위별 세 개의 CreditRequirement로 분해 가능하나 범위 표현 방식 결정 필요.",
+      "graph_rule_id": "rule:cwnu:2026:major:cse:cse-transition-credit-retroactive-2011-2020",
+      "graph_action": "TransitionRule과 Evidence는 생성했으나 연도 범위 APPLIES_TO는 보류"
+    },
+    {
+      "transition_id": "cse-transition-2002-2020-msc-professional-general-waiver",
+      "applicable_curriculum_years": {
+        "from": 2002,
+        "to": 2020
+      },
+      "condition": null,
+      "action_type": "REQUIREMENT_WAIVER",
+      "action": {
+        "targets": [
+          {
+            "name": "MSC",
+            "credits": 30
+          },
+          {
+            "name": "전문교양",
+            "credits": 20
+          }
+        ]
+      },
+      "excerpt_page": 19,
+      "source_pdf_page": 264,
+      "printed_page": 256,
+      "section_title": "Ⅲ 연도별 경과조치",
+      "table_name": "연도별 경과조치",
+      "row_key": "2002-2020:msc-professional-general-waiver",
+      "raw_text": "MSC(30학점), 전문교양(20학점) 이수 해제",
+      "verification_status": "VERIFIED",
+      "ontology_modeling_note": "MSC와 전문교양을 EducationArea로 만들지 여부가 현재 명세에서 확정되지 않음.",
+      "graph_rule_id": "rule:cwnu:2026:major:cse:cse-transition-2002-2020-msc-professional-general-waiver",
+      "graph_action": "TransitionRule과 Evidence는 생성했으나 연도 범위 APPLIES_TO는 보류"
+    },
+    {
+      "transition_id": "cse-transition-2002-2020-msc-professional-general-recognition",
+      "applicable_curriculum_years": {
+        "from": 2002,
+        "to": 2020
+      },
+      "condition": {
+        "field": "previously_completed_area",
+        "operator": "IN",
+        "value_raw": [
+          "전문교양",
+          "MSC"
+        ]
+      },
+      "action_type": "CREDIT_RECOGNITION",
+      "action": {
+        "recognized_as": "교양학점",
+        "method": "일괄 인정"
+      },
+      "excerpt_page": 19,
+      "source_pdf_page": 264,
+      "printed_page": 256,
+      "section_title": "Ⅲ 연도별 경과조치",
+      "table_name": "연도별 경과조치",
+      "row_key": "2002-2020:msc-professional-general-recognition",
+      "raw_text": "기 이수한 전문교양, MSC 교과목은 교양학점으로 일괄 인정",
+      "verification_status": "VERIFIED",
+      "ontology_modeling_note": "기존 명세에 학점 인정 변환 관계가 없어 TransitionRule.description_ko 중심 표현이 필요함.",
+      "graph_rule_id": "rule:cwnu:2026:major:cse:cse-transition-2002-2020-msc-professional-general-recognition",
+      "graph_action": "TransitionRule과 Evidence는 생성했으나 연도 범위 APPLIES_TO는 보류"
+    },
+    {
+      "transition_id": "cse-transition-2002-2020-foundational-balanced-waiver",
+      "applicable_curriculum_years": {
+        "from": 2002,
+        "to": 2020
+      },
+      "condition": null,
+      "action_type": "REQUIREMENT_WAIVER",
+      "action": {
+        "targets": [
+          "기초교양",
+          "균형교양"
+        ]
+      },
+      "excerpt_page": 19,
+      "source_pdf_page": 264,
+      "printed_page": 256,
+      "section_title": "Ⅲ 연도별 경과조치",
+      "table_name": "연도별 경과조치",
+      "row_key": "2002-2020:foundational-balanced-waiver",
+      "raw_text": "기초교양 및 균형교양 이수 의무 면제",
+      "verification_status": "VERIFIED",
+      "ontology_modeling_note": "ExemptionRule이 일반 규칙을 OVERRIDES하도록 모델링 가능하나 연도 범위 표현 결정 필요.",
+      "graph_rule_id": "rule:cwnu:2026:major:cse:cse-transition-2002-2020-foundational-balanced-waiver",
+      "graph_action": "TransitionRule과 Evidence는 생성했으나 연도 범위 APPLIES_TO는 보류"
+    },
+    {
+      "transition_id": "cse-transition-2002-2020-general-cap-excess-recognition",
+      "applicable_curriculum_years": {
+        "from": 2002,
+        "to": 2020
+      },
+      "condition": {
+        "field": "general_credits",
+        "operator": "ABOVE_MAXIMUM",
+        "value_raw": "교양 최대 상한 학점 초과"
+      },
+      "action_type": "CREDIT_RECOGNITION",
+      "action": {
+        "recognized_as": "잔여학점"
+      },
+      "excerpt_page": 19,
+      "source_pdf_page": 264,
+      "printed_page": 256,
+      "section_title": "Ⅲ 연도별 경과조치",
+      "table_name": "연도별 경과조치",
+      "row_key": "2002-2020:general-cap-excess",
+      "raw_text": "교양 최대 상한 학점 초과 시 잔여학점으로 인정",
+      "verification_status": "VERIFIED",
+      "ontology_modeling_note": "ABOVE_MAXIMUM은 원문 의미를 설명하기 위한 임시 표기이며 현재 comparison_operator 통제어휘에는 없음.",
+      "graph_rule_id": "rule:cwnu:2026:major:cse:cse-transition-2002-2020-general-cap-excess-recognition",
+      "graph_action": "TransitionRule과 Evidence는 생성했으나 연도 범위 APPLIES_TO는 보류"
+    },
+    {
+      "transition_id": "cse-transition-2002-2020-design-credit-waiver",
+      "applicable_curriculum_years": {
+        "from": 2002,
+        "to": 2020
+      },
+      "condition": null,
+      "action_type": "REQUIREMENT_WAIVER",
+      "action": {
+        "target": "설계학점",
+        "credits": 12
+      },
+      "excerpt_page": 19,
+      "source_pdf_page": 264,
+      "printed_page": 256,
+      "section_title": "Ⅲ 연도별 경과조치",
+      "table_name": "연도별 경과조치",
+      "row_key": "2002-2020:design-credit-waiver",
+      "raw_text": "설계학점 12학점 이수 해제",
+      "verification_status": "VERIFIED",
+      "ontology_modeling_note": "설계학점을 EducationArea 또는 별도 규칙 대상으로 둘지 결정 필요.",
+      "graph_rule_id": "rule:cwnu:2026:major:cse:cse-transition-2002-2020-design-credit-waiver",
+      "graph_action": "TransitionRule과 Evidence는 생성했으나 연도 범위 APPLIES_TO는 보류"
+    },
+    {
+      "transition_id": "cse-transition-2002-2020-consultation-waiver",
+      "applicable_curriculum_years": {
+        "from": 2002,
+        "to": 2020
+      },
+      "condition": null,
+      "action_type": "REQUIREMENT_WAIVER",
+      "action": {
+        "target_course_name": "심층상담",
+        "minimum_count": 6,
+        "unit": "회"
+      },
+      "excerpt_page": 19,
+      "source_pdf_page": 264,
+      "printed_page": 256,
+      "section_title": "Ⅲ 연도별 경과조치",
+      "table_name": "연도별 경과조치",
+      "row_key": "2002-2020:consultation-six-waiver",
+      "raw_text": "심층상담 6회 이상 이수 해제",
+      "verification_status": "VERIFIED",
+      "ontology_modeling_note": "CDA0088 심층상담 Course를 TARGETS하고 횟수 조건을 description/Condition으로 표현 가능.",
+      "graph_rule_id": "rule:cwnu:2026:major:cse:cse-transition-2002-2020-consultation-waiver",
+      "graph_action": "TransitionRule과 Evidence는 생성했으나 연도 범위 APPLIES_TO는 보류"
+    },
+    {
+      "transition_id": "cse-transition-2012-2016-field-practice-waiver",
+      "applicable_curriculum_years": {
+        "from": 2012,
+        "to": 2016
+      },
+      "parent_transition_scope": {
+        "from": 2002,
+        "to": 2020
+      },
+      "condition": null,
+      "action_type": "REQUIREMENT_WAIVER",
+      "action": {
+        "target": "현장실습",
+        "minimum_credits": 4
+      },
+      "excerpt_page": 19,
+      "source_pdf_page": 264,
+      "printed_page": 256,
+      "section_title": "Ⅲ 연도별 경과조치",
+      "table_name": "연도별 경과조치",
+      "row_key": "2012-2016:field-practice-four-waiver",
+      "raw_text": "현장실습 4학점 이상 이수 해제(2012~2016학년도)",
+      "verification_status": "VERIFIED",
+      "ontology_modeling_note": "현장실습 계열 다수 Course를 대상으로 묶는 기준이 필요함.",
+      "graph_rule_id": "rule:cwnu:2026:major:cse:cse-transition-2012-2016-field-practice-waiver",
+      "graph_action": "TransitionRule과 Evidence는 생성했으나 연도 범위 APPLIES_TO는 보류"
+    },
+    {
+      "transition_id": "cse-transition-2014-2017-korean-history-waiver",
+      "applicable_curriculum_years": {
+        "from": 2014,
+        "to": 2017
+      },
+      "parent_transition_scope": {
+        "from": 2002,
+        "to": 2020
+      },
+      "condition": null,
+      "action_type": "REQUIREMENT_WAIVER",
+      "action": {
+        "target_area_raw": "핵심교양-인문예술영역",
+        "target_course_name": "한국사의 이해"
+      },
+      "excerpt_page": 19,
+      "source_pdf_page": 264,
+      "printed_page": 256,
+      "section_title": "Ⅲ 연도별 경과조치",
+      "table_name": "연도별 경과조치",
+      "row_key": "2014-2017:korean-history-waiver",
+      "raw_text": "핵심교양-인문예술영역 ‘한국사의 이해’ 교과목 이수 해제(2014~2017학년도)",
+      "verification_status": "VERIFIED",
+      "ontology_modeling_note": "과거 영역명과 2026 영역 체계의 매핑을 임의로 동일시하지 않아야 함.",
+      "graph_rule_id": "rule:cwnu:2026:major:cse:cse-transition-2014-2017-korean-history-waiver",
+      "graph_action": "TransitionRule과 Evidence는 생성했으나 연도 범위 APPLIES_TO는 보류"
+    },
+    {
+      "transition_id": "cse-transition-credit-retroactive-2021-2024",
+      "applicable_curriculum_years": {
+        "from": 2021,
+        "to": 2024
+      },
+      "condition": null,
+      "action_type": "RETROACTIVE_CREDIT_REQUIREMENT",
+      "action": {
+        "general_credits": 26,
+        "major_required_credits": 21,
+        "major_elective_credits": 57,
+        "minimum_major_recognition_credits": 35
+      },
+      "excerpt_page": 19,
+      "source_pdf_page": 264,
+      "printed_page": 256,
+      "section_title": "Ⅲ 연도별 경과조치",
+      "table_name": "2021~2024 교양 및 전공 이수 학점 소급표",
+      "row_key": "2021-2024:credits",
+      "raw_text": "2021~2024: 교양 26, 전공필수 21, 전공선택 57(35); ( )학점: 최소전공인정학점",
+      "verification_status": "VERIFIED",
+      "ontology_modeling_note": "전공선택 57과 괄호 안 최소전공인정학점 35를 별도 의미로 보존해야 함.",
+      "graph_rule_id": "rule:cwnu:2026:major:cse:cse-transition-credit-retroactive-2021-2024",
+      "graph_action": "TransitionRule과 Evidence는 생성했으나 연도 범위 APPLIES_TO는 보류"
+    },
+    {
+      "transition_id": "cse-transition-2021-2024-department-designated-course-waiver",
+      "applicable_curriculum_years": {
+        "from": 2021,
+        "to": 2024
+      },
+      "condition": null,
+      "action_type": "REQUIREMENT_WAIVER",
+      "action": {
+        "target": "학과지정 교과목"
+      },
+      "excerpt_page": 19,
+      "source_pdf_page": 264,
+      "printed_page": 256,
+      "section_title": "Ⅲ 연도별 경과조치",
+      "table_name": "연도별 경과조치",
+      "row_key": "2021-2024:department-designated-course-waiver",
+      "raw_text": "학과지정 교과목 이수 해제",
+      "verification_status": "VERIFIED",
+      "ontology_modeling_note": "어떤 과목이 학과지정 교과목인지 이 페이지에서 열거되지 않음.",
+      "graph_rule_id": "rule:cwnu:2026:major:cse:cse-transition-2021-2024-department-designated-course-waiver",
+      "graph_action": "TransitionRule과 Evidence는 생성했으나 연도 범위 APPLIES_TO는 보류"
+    }
+  ],
+  "modeled_cse_basic_credit_structure_source_facts": [
+    {
+      "rule_id": "cse-basic-credit-structure-single-minor",
+      "category": "BASIC_CREDIT_STRUCTURE",
+      "applicability": {
+        "department": "컴퓨터공학과",
+        "major_types": [
+          "SINGLE_MAJOR",
+          "MINOR"
+        ],
+        "major_types_raw": [
+          "단일전공",
+          "부전공"
+        ]
+      },
+      "values": {
+        "general_foundational_credits": 9,
+        "general_balanced_credits": 12,
+        "general_expanded_credits": null,
+        "general_remaining_credits": 13,
+        "general_total_credits": 34,
+        "major_foundation_credits": null,
+        "major_required_credits": 21,
+        "major_elective_credits": 24,
+        "advanced_major_credits": 33,
+        "major_total_credits": 78,
+        "graduation_remaining_credits": 18,
+        "graduation_credits": 130,
+        "minimum_major_credit_system_applies": true
+      },
+      "excerpt_page": 16,
+      "source_pdf_page": 261,
+      "printed_page": 253,
+      "section_title": "Ⅰ 교육과정 체계",
+      "table_name": "10. 기본이수 학점구조표",
+      "row_key": "컴퓨터공학과:단일전공-부전공",
+      "raw_text": "단일전공·부전공: 기초교양 9, 균형교양 12, 교양잔여 13, 교양계 34, 전공필수 21, 전공선택 24, 심화전공 33, 전공계 78, 졸업잔여 18, 졸업학점 130",
+      "verification_status": "VERIFIED",
+      "note": "병합 셀이 단일전공과 부전공 두 행에 공통 적용됨. 확대교양과 전공기초는 빈 칸이며 0으로 변환하지 않음."
+    },
+    {
+      "rule_id": "cse-basic-credit-structure-double-linked-convergence",
+      "category": "BASIC_CREDIT_STRUCTURE",
+      "applicability": {
+        "department": "컴퓨터공학과",
+        "major_types": [
+          "DOUBLE_MAJOR",
+          "LINKED_MAJOR",
+          "CONVERGENCE_MAJOR"
+        ],
+        "major_types_raw": [
+          "복수전공",
+          "연계전공",
+          "융합전공"
+        ]
+      },
+      "values": {
+        "general_foundational_credits": 9,
+        "general_balanced_credits": 12,
+        "general_expanded_credits": null,
+        "general_remaining_credits": 13,
+        "general_total_credits": 34,
+        "major_foundation_credits": null,
+        "major_required_credits": 21,
+        "major_elective_credits": 24,
+        "advanced_major_credits": null,
+        "advanced_major_credits_raw": "-",
+        "major_total_credits": 45,
+        "graduation_remaining_credits": 51,
+        "graduation_credits": 130,
+        "minimum_major_credit_system_applies": true
+      },
+      "excerpt_page": 16,
+      "source_pdf_page": 261,
+      "printed_page": 253,
+      "section_title": "Ⅰ 교육과정 체계",
+      "table_name": "10. 기본이수 학점구조표",
+      "row_key": "컴퓨터공학과:복수전공-연계전공-융합전공",
+      "raw_text": "복수전공·연계전공·융합전공: 기초교양 9, 균형교양 12, 교양잔여 13, 교양계 34, 전공필수 21, 전공선택 24, 심화전공 -, 전공계 45, 졸업잔여 51, 졸업학점 130",
+      "verification_status": "VERIFIED",
+      "note": "병합 셀이 복수전공·연계전공·융합전공 세 행에 공통 적용됨. 확대교양과 전공기초는 빈 칸이며 0으로 변환하지 않음."
+    }
+  ],
+  "unmodeled_cse_structural_source_facts": [
+    {
+      "rule_id": "cse-minimum-major-credit-system",
+      "category": "MINIMUM_MAJOR_CREDIT_SYSTEM",
+      "applicability": {
+        "department": "컴퓨터공학과",
+        "major_types": [
+          "SINGLE_MAJOR",
+          "MINOR",
+          "DOUBLE_MAJOR",
+          "LINKED_MAJOR",
+          "CONVERGENCE_MAJOR"
+        ]
+      },
+      "values": {
+        "applies": true,
+        "source_symbol": "○"
+      },
+      "excerpt_page": 16,
+      "source_pdf_page": 261,
+      "printed_page": 253,
+      "section_title": "Ⅰ 교육과정 체계",
+      "table_name": "10. 기본이수 학점구조표",
+      "row_key": "컴퓨터공학과:최소전공학점시행여부",
+      "raw_text": "최소전공학점 시행여부 ○",
+      "verification_status": "VERIFIED",
+      "note": "○ 표시는 컴퓨터공학과 전체 병합 셀에 기재됨."
+    },
+    {
+      "rule_id": "cse-competency-course-count-foundation",
+      "category": "MAJOR_COMPETENCY_COURSE_COUNT",
+      "applicability": {
+        "department": "컴퓨터공학과",
+        "competency": "전공기초능력"
+      },
+      "values": {
+        "course_count": 14,
+        "credits": 42
+      },
+      "excerpt_page": 16,
+      "source_pdf_page": 261,
+      "printed_page": 253,
+      "section_title": "Ⅰ 교육과정 체계",
+      "table_name": "11. 전공능력별 전공 과목수(학점)",
+      "row_key": "전공기초능력",
+      "raw_text": "전공기초능력 14(42)",
+      "verification_status": "VERIFIED",
+      "note": "괄호 안 값은 학점. 43개 전공 편성행의 전공능력[주] 집계와 일치함."
+    },
+    {
+      "rule_id": "cse-competency-course-count-self-directed-creativity",
+      "category": "MAJOR_COMPETENCY_COURSE_COUNT",
+      "applicability": {
+        "department": "컴퓨터공학과",
+        "competency": "주체적 창의력"
+      },
+      "values": {
+        "course_count": 9,
+        "credits": 21
+      },
+      "excerpt_page": 16,
+      "source_pdf_page": 261,
+      "printed_page": 253,
+      "section_title": "Ⅰ 교육과정 체계",
+      "table_name": "11. 전공능력별 전공 과목수(학점)",
+      "row_key": "주체적 창의력",
+      "raw_text": "주체적 창의력 9(21)",
+      "verification_status": "VERIFIED",
+      "note": "괄호 안 값은 학점. 43개 전공 편성행의 전공능력[주] 집계와 일치함."
+    },
+    {
+      "rule_id": "cse-competency-course-count-teamwork",
+      "category": "MAJOR_COMPETENCY_COURSE_COUNT",
+      "applicability": {
+        "department": "컴퓨터공학과",
+        "competency": "팀워크 능력"
+      },
+      "values": {
+        "course_count": 4,
+        "credits": 12
+      },
+      "excerpt_page": 16,
+      "source_pdf_page": 261,
+      "printed_page": 253,
+      "section_title": "Ⅰ 교육과정 체계",
+      "table_name": "11. 전공능력별 전공 과목수(학점)",
+      "row_key": "팀워크 능력",
+      "raw_text": "팀워크 능력 4(12)",
+      "verification_status": "VERIFIED",
+      "note": "괄호 안 값은 학점. 43개 전공 편성행의 전공능력[주] 집계와 일치함."
+    },
+    {
+      "rule_id": "cse-competency-course-count-problem-solving",
+      "category": "MAJOR_COMPETENCY_COURSE_COUNT",
+      "applicability": {
+        "department": "컴퓨터공학과",
+        "competency": "문제해결 능력"
+      },
+      "values": {
+        "course_count": 14,
+        "credits": 66
+      },
+      "excerpt_page": 16,
+      "source_pdf_page": 261,
+      "printed_page": 253,
+      "section_title": "Ⅰ 교육과정 체계",
+      "table_name": "11. 전공능력별 전공 과목수(학점)",
+      "row_key": "문제해결 능력",
+      "raw_text": "문제해결 능력 14(66)",
+      "verification_status": "VERIFIED",
+      "note": "괄호 안 값은 학점. 43개 전공 편성행의 전공능력[주] 집계와 일치함."
+    },
+    {
+      "rule_id": "cse-competency-course-count-research",
+      "category": "MAJOR_COMPETENCY_COURSE_COUNT",
+      "applicability": {
+        "department": "컴퓨터공학과",
+        "competency": "연구 능력"
+      },
+      "values": {
+        "course_count": 2,
+        "credits": 3
+      },
+      "excerpt_page": 16,
+      "source_pdf_page": 261,
+      "printed_page": 253,
+      "section_title": "Ⅰ 교육과정 체계",
+      "table_name": "11. 전공능력별 전공 과목수(학점)",
+      "row_key": "연구 능력",
+      "raw_text": "연구 능력 2(3)",
+      "verification_status": "VERIFIED",
+      "note": "괄호 안 값은 학점. 43개 전공 편성행의 전공능력[주] 집계와 일치함."
+    },
+    {
+      "rule_id": "cse-competency-course-count-total",
+      "category": "MAJOR_COMPETENCY_COURSE_COUNT",
+      "applicability": {
+        "department": "컴퓨터공학과",
+        "competency": "합계"
+      },
+      "values": {
+        "course_count": 43,
+        "credits": 144
+      },
+      "excerpt_page": 16,
+      "source_pdf_page": 261,
+      "printed_page": 253,
+      "section_title": "Ⅰ 교육과정 체계",
+      "table_name": "11. 전공능력별 전공 과목수(학점)",
+      "row_key": "합계",
+      "raw_text": "합계 43(144)",
+      "verification_status": "VERIFIED",
+      "note": "괄호 안 값은 학점. 편성표 43개 행 및 총 144학점과 일치함."
+    },
+    {
+      "rule_id": "cse-credit-distribution-general-foundational",
+      "category": "SEMESTER_CREDIT_DISTRIBUTION",
+      "applicability": {
+        "department": "컴퓨터공학과",
+        "credit_category": "기초교양"
+      },
+      "values": {
+        "g1_s1": 4,
+        "g1_s2": 5,
+        "g2_s1": null,
+        "g2_s2": null,
+        "g3_s1": null,
+        "g3_s2": null,
+        "g4_s1": null,
+        "g4_s2": null,
+        "total": 9
+      },
+      "excerpt_page": 16,
+      "source_pdf_page": 261,
+      "printed_page": 253,
+      "section_title": "Ⅰ 교육과정 체계",
+      "table_name": "12. 학점배분구조표",
+      "row_key": "교양:기초교양",
+      "raw_text": "기초교양: 1-1 4, 1-2 5, 총계 9",
+      "verification_status": "VERIFIED",
+      "note": "빈 셀은 null로 보존함."
+    },
+    {
+      "rule_id": "cse-credit-distribution-general-balanced",
+      "category": "SEMESTER_CREDIT_DISTRIBUTION",
+      "applicability": {
+        "department": "컴퓨터공학과",
+        "credit_category": "균형교양"
+      },
+      "values": {
+        "g1_s1": 6,
+        "g1_s2": 3,
+        "g2_s1": 3,
+        "g2_s2": null,
+        "g3_s1": null,
+        "g3_s2": null,
+        "g4_s1": null,
+        "g4_s2": null,
+        "total": 12
+      },
+      "excerpt_page": 16,
+      "source_pdf_page": 261,
+      "printed_page": 253,
+      "section_title": "Ⅰ 교육과정 체계",
+      "table_name": "12. 학점배분구조표",
+      "row_key": "교양:균형교양",
+      "raw_text": "균형교양: 1-1 6, 1-2 3, 2-1 3, 총계 12",
+      "verification_status": "VERIFIED",
+      "note": "빈 셀은 null로 보존함."
+    },
+    {
+      "rule_id": "cse-credit-distribution-general-expanded",
+      "category": "SEMESTER_CREDIT_DISTRIBUTION",
+      "applicability": {
+        "department": "컴퓨터공학과",
+        "credit_category": "확대교양"
+      },
+      "values": {
+        "g1_s1": null,
+        "g1_s2": null,
+        "g2_s1": null,
+        "g2_s2": null,
+        "g3_s1": null,
+        "g3_s2": null,
+        "g4_s1": null,
+        "g4_s2": null,
+        "total": null
+      },
+      "excerpt_page": 16,
+      "source_pdf_page": 261,
+      "printed_page": 253,
+      "section_title": "Ⅰ 교육과정 체계",
+      "table_name": "12. 학점배분구조표",
+      "row_key": "교양:확대교양",
+      "raw_text": "확대교양 행은 전 학기 및 총계가 빈 칸",
+      "verification_status": "VERIFIED",
+      "note": "빈 셀을 숫자 0으로 변환하지 않음."
+    },
+    {
+      "rule_id": "cse-credit-distribution-general-remaining",
+      "category": "SEMESTER_CREDIT_DISTRIBUTION",
+      "applicability": {
+        "department": "컴퓨터공학과",
+        "credit_category": "교양잔여학점"
+      },
+      "values": {
+        "g1_s1": 4,
+        "g1_s2": 6,
+        "g2_s1": 3,
+        "g2_s2": null,
+        "g3_s1": null,
+        "g3_s2": null,
+        "g4_s1": null,
+        "g4_s2": null,
+        "total": 13
+      },
+      "excerpt_page": 16,
+      "source_pdf_page": 261,
+      "printed_page": 253,
+      "section_title": "Ⅰ 교육과정 체계",
+      "table_name": "12. 학점배분구조표",
+      "row_key": "교양:잔여학점",
+      "raw_text": "교양잔여학점: 1-1 4, 1-2 6, 2-1 3, 총계 13",
+      "verification_status": "VERIFIED",
+      "note": "빈 셀은 null로 보존함."
+    },
+    {
+      "rule_id": "cse-credit-distribution-general-subtotal",
+      "category": "SEMESTER_CREDIT_DISTRIBUTION",
+      "applicability": {
+        "department": "컴퓨터공학과",
+        "credit_category": "교양소계"
+      },
+      "values": {
+        "g1_s1": 14,
+        "g1_s2": 14,
+        "g2_s1": 6,
+        "g2_s2": null,
+        "g3_s1": null,
+        "g3_s2": null,
+        "g4_s1": null,
+        "g4_s2": null,
+        "total": 34
+      },
+      "excerpt_page": 16,
+      "source_pdf_page": 261,
+      "printed_page": 253,
+      "section_title": "Ⅰ 교육과정 체계",
+      "table_name": "12. 학점배분구조표",
+      "row_key": "교양:소계",
+      "raw_text": "교양 소계: 1-1 14, 1-2 14, 2-1 6, 총계 34",
+      "verification_status": "VERIFIED",
+      "note": "빈 셀은 null로 보존함."
+    },
+    {
+      "rule_id": "cse-credit-distribution-minimum-major-required",
+      "category": "SEMESTER_CREDIT_DISTRIBUTION",
+      "applicability": {
+        "department": "컴퓨터공학과",
+        "credit_category": "최소전공:전공필수"
+      },
+      "values": {
+        "g1_s1": null,
+        "g1_s2": null,
+        "g2_s1": null,
+        "g2_s2": 3,
+        "g3_s1": 12,
+        "g3_s2": 6,
+        "g4_s1": null,
+        "g4_s2": null,
+        "total": 21
+      },
+      "excerpt_page": 16,
+      "source_pdf_page": 261,
+      "printed_page": 253,
+      "section_title": "Ⅰ 교육과정 체계",
+      "table_name": "12. 학점배분구조표",
+      "row_key": "전공:최소전공:전공필수",
+      "raw_text": "최소전공 전공필수: 2-2 3, 3-1 12, 3-2 6, 총계 21",
+      "verification_status": "VERIFIED",
+      "note": "빈 셀은 null로 보존함."
+    },
+    {
+      "rule_id": "cse-credit-distribution-minimum-major-elective",
+      "category": "SEMESTER_CREDIT_DISTRIBUTION",
+      "applicability": {
+        "department": "컴퓨터공학과",
+        "credit_category": "최소전공:전공선택"
+      },
+      "values": {
+        "g1_s1": 3,
+        "g1_s2": 3,
+        "g2_s1": 6,
+        "g2_s2": 3,
+        "g3_s1": 3,
+        "g3_s2": 3,
+        "g4_s1": 3,
+        "g4_s2": null,
+        "total": 24
+      },
+      "excerpt_page": 16,
+      "source_pdf_page": 261,
+      "printed_page": 253,
+      "section_title": "Ⅰ 교육과정 체계",
+      "table_name": "12. 학점배분구조표",
+      "row_key": "전공:최소전공:전공선택",
+      "raw_text": "최소전공 전공선택: 1-1 3, 1-2 3, 2-1 6, 2-2 3, 3-1 3, 3-2 3, 4-1 3, 총계 24",
+      "verification_status": "VERIFIED",
+      "note": "4-2 셀은 빈 칸이며 0으로 변환하지 않음."
+    },
+    {
+      "rule_id": "cse-credit-distribution-minimum-major-subtotal",
+      "category": "SEMESTER_CREDIT_DISTRIBUTION",
+      "applicability": {
+        "department": "컴퓨터공학과",
+        "credit_category": "최소전공:소계"
+      },
+      "values": {
+        "g1_s1": 3,
+        "g1_s2": 3,
+        "g2_s1": 6,
+        "g2_s2": 6,
+        "g3_s1": 15,
+        "g3_s2": 9,
+        "g4_s1": 3,
+        "g4_s2": 0,
+        "total": 45
+      },
+      "excerpt_page": 16,
+      "source_pdf_page": 261,
+      "printed_page": 253,
+      "section_title": "Ⅰ 교육과정 체계",
+      "table_name": "12. 학점배분구조표",
+      "row_key": "전공:최소전공:소계",
+      "raw_text": "최소전공 소계: 3, 3, 6, 6, 15, 9, 3, 0, 총계 45",
+      "verification_status": "VERIFIED",
+      "note": "4-2의 0은 원문에 명시된 실제 0임."
+    },
+    {
+      "rule_id": "cse-credit-distribution-advanced-major-elective",
+      "category": "SEMESTER_CREDIT_DISTRIBUTION",
+      "applicability": {
+        "department": "컴퓨터공학과",
+        "credit_category": "심화전공:전공선택"
+      },
+      "values": {
+        "g1_s1": null,
+        "g1_s2": null,
+        "g2_s1": 6,
+        "g2_s2": 6,
+        "g3_s1": null,
+        "g3_s2": 6,
+        "g4_s1": 9,
+        "g4_s2": 6,
+        "total": 33
+      },
+      "excerpt_page": 16,
+      "source_pdf_page": 261,
+      "printed_page": 253,
+      "section_title": "Ⅰ 교육과정 체계",
+      "table_name": "12. 학점배분구조표",
+      "row_key": "전공:심화전공:전공선택",
+      "raw_text": "심화전공 전공선택: 2-1 6, 2-2 6, 3-2 6, 4-1 9, 4-2 6, 총계 33",
+      "verification_status": "VERIFIED",
+      "note": "1학년 및 3-1 셀은 빈 칸이며 0으로 변환하지 않음."
+    },
+    {
+      "rule_id": "cse-credit-distribution-major-total",
+      "category": "SEMESTER_CREDIT_DISTRIBUTION",
+      "applicability": {
+        "department": "컴퓨터공학과",
+        "credit_category": "전공소계(최소전공+심화전공)"
+      },
+      "values": {
+        "g1_s1": 3,
+        "g1_s2": 3,
+        "g2_s1": 12,
+        "g2_s2": 12,
+        "g3_s1": 15,
+        "g3_s2": 15,
+        "g4_s1": 12,
+        "g4_s2": 6,
+        "total": 78
+      },
+      "excerpt_page": 16,
+      "source_pdf_page": 261,
+      "printed_page": 253,
+      "section_title": "Ⅰ 교육과정 체계",
+      "table_name": "12. 학점배분구조표",
+      "row_key": "전공:소계",
+      "raw_text": "전공 소계: 3, 3, 12, 12, 15, 15, 12, 6, 총계 78",
+      "verification_status": "VERIFIED",
+      "note": null
+    },
+    {
+      "rule_id": "cse-credit-distribution-general-plus-major",
+      "category": "SEMESTER_CREDIT_DISTRIBUTION",
+      "applicability": {
+        "department": "컴퓨터공학과",
+        "credit_category": "교양+전공"
+      },
+      "values": {
+        "g1_s1": 17,
+        "g1_s2": 17,
+        "g2_s1": 18,
+        "g2_s2": 12,
+        "g3_s1": 15,
+        "g3_s2": 15,
+        "g4_s1": 12,
+        "g4_s2": 6,
+        "total": 112
+      },
+      "excerpt_page": 16,
+      "source_pdf_page": 261,
+      "printed_page": 253,
+      "section_title": "Ⅰ 교육과정 체계",
+      "table_name": "12. 학점배분구조표",
+      "row_key": "교양+전공=계",
+      "raw_text": "교양+전공=계: 17, 17, 18, 12, 15, 15, 12, 6, 총계 112",
+      "verification_status": "VERIFIED",
+      "note": null
+    },
+    {
+      "rule_id": "cse-credit-distribution-graduation-remaining",
+      "category": "SEMESTER_CREDIT_DISTRIBUTION",
+      "applicability": {
+        "department": "컴퓨터공학과",
+        "credit_category": "졸업잔여학점"
+      },
+      "values": {
+        "g1_s1": null,
+        "g1_s2": null,
+        "g2_s1": null,
+        "g2_s2": 6,
+        "g3_s1": 3,
+        "g3_s2": 3,
+        "g4_s1": 3,
+        "g4_s2": 3,
+        "total": 18
+      },
+      "excerpt_page": 16,
+      "source_pdf_page": 261,
+      "printed_page": 253,
+      "section_title": "Ⅰ 교육과정 체계",
+      "table_name": "12. 학점배분구조표",
+      "row_key": "졸업잔여학점",
+      "raw_text": "졸업잔여학점: 2-2 6, 3-1 3, 3-2 3, 4-1 3, 4-2 3, 총계 18",
+      "verification_status": "VERIFIED",
+      "note": "1학년 및 2-1 셀은 빈 칸이며 0으로 변환하지 않음."
+    },
+    {
+      "rule_id": "cse-credit-distribution-graduation-total",
+      "category": "SEMESTER_CREDIT_DISTRIBUTION",
+      "applicability": {
+        "department": "컴퓨터공학과",
+        "credit_category": "졸업학점"
+      },
+      "values": {
+        "g1_s1": 17,
+        "g1_s2": 17,
+        "g2_s1": 18,
+        "g2_s2": 18,
+        "g3_s1": 18,
+        "g3_s2": 18,
+        "g4_s1": 15,
+        "g4_s2": 9,
+        "total": 130
+      },
+      "excerpt_page": 16,
+      "source_pdf_page": 261,
+      "printed_page": 253,
+      "section_title": "Ⅰ 교육과정 체계",
+      "table_name": "12. 학점배분구조표",
+      "row_key": "졸업학점",
+      "raw_text": "졸업학점: 17, 17, 18, 18, 18, 18, 15, 9, 총계 130",
+      "verification_status": "VERIFIED",
+      "note": null
+    }
+  ],
+  "unmodeled_narrative_source_facts": [
+    {
+      "fact_group_id": "cse-talent-profile",
+      "excerpt_page": 14,
+      "source_pdf_page": 259,
+      "printed_page": 251,
+      "section_title": "1. 전공 인재상",
+      "records": [
+        "컴퓨터 전문지식을 가지고 끊임없이 자기계발에도 노력하는 인재",
+        "창의력과 책임감을 가지고 진취적으로 도전하는 인재",
+        "직업의식, 윤리의식을 가지고 업무에 충실하며 협력적인 인재"
+      ],
+      "verification_status": "VERIFIED",
+      "reason_not_in_graph": "현재 명세에 인재상 노드가 없음."
+    },
+    {
+      "fact_group_id": "cse-education-goals",
+      "excerpt_page": 14,
+      "source_pdf_page": 259,
+      "printed_page": 251,
+      "section_title": "2. 전공 교육목표",
+      "heading": "인공지능 시대를 선도할 인재양성",
+      "records": [
+        "컴퓨터공학에 기반을 둔 미래지향적인 정보 기술인 양성",
+        "이론과 실험실습을 통한 시스템적인 접근 방법을 구사할 수 있는 전문지식인 양성",
+        "AI·정보화·지식화 사회를 올바르게 인식하고 선도할 수 있는 인재 양성",
+        "협동 정신과 국제적 감각을 갖춘 정보기술 인력 양성"
+      ],
+      "verification_status": "VERIFIED",
+      "reason_not_in_graph": "현재 명세에 교육목표 노드가 없음."
+    },
+    {
+      "fact_group_id": "cse-career-fields",
+      "excerpt_page": 14,
+      "source_pdf_page": 259,
+      "printed_page": 251,
+      "section_title": "3. 전공 진출분야",
+      "records": [
+        "기업체/연구소/금융기관의 프로그램 개발실",
+        "소프트웨어 개발업체 및 벤처기업 창업",
+        "전산직 공무원, 교육기관의 컴퓨터강사"
+      ],
+      "verification_status": "VERIFIED",
+      "reason_not_in_graph": "현재 명세에 진출분야 노드가 없음."
+    },
+    {
+      "fact_group_id": "cse-major-competencies",
+      "excerpt_page": 14,
+      "source_pdf_page": 259,
+      "printed_page": 251,
+      "section_title": "5. 전공능력",
+      "records": [
+        {
+          "name": "전공기초능력",
+          "description": "컴퓨터 전공 기초능력"
+        },
+        {
+          "name": "주체적 창의력",
+          "description": "주체적인 전문인"
+        },
+        {
+          "name": "팀워크 능력",
+          "description": "팀워크를 통해 다양한 구성원의 능력을 최대한 살릴 수 있는 능력"
+        },
+        {
+          "name": "문제해결 능력",
+          "description": "전공지식을 이용한 체계적인 문제해결 능력"
+        },
+        {
+          "name": "연구 능력",
+          "description": "최신 컴퓨터 내용을 학습 및 연구능력"
+        }
+      ],
+      "verification_status": "VERIFIED",
+      "reason_not_in_graph": "CourseOffering.competency 문자열은 있으나 능력 자체와 설명을 표현하는 노드가 없음."
+    },
+    {
+      "fact_group_id": "cse-linkage-matrices",
+      "excerpt_pages": [
+        14,
+        15
+      ],
+      "source_pdf_pages": [
+        259,
+        260
+      ],
+      "printed_pages": [
+        251,
+        252
+      ],
+      "section_titles": [
+        "4. 학과 교육목표와 대학의 교육목표 연계성",
+        "6. 학과 교육목표와 전공능력 연계성",
+        "7. 학과 전공능력과 대학의 핵심역량 연계성"
+      ],
+      "legend": {
+        "HIGH": "연계성 높음(◉)",
+        "LOW": "연계성 적음(○)",
+        "NONE": "공란"
+      },
+      "records": {
+        "university_goal_to_department_goal": {
+          "department_goal_columns": [
+            "목표 1",
+            "목표 2",
+            "목표 3",
+            "목표 4"
+          ],
+          "rows": [
+            {
+              "university_goal": "주체적 창조인",
+              "detail": "폭 넓은 교양, 글로벌 역량, 창의적 문제해결",
+              "values": [
+                "HIGH",
+                "NONE",
+                "LOW",
+                "NONE"
+              ]
+            },
+            {
+              "university_goal": "실용적 전문인",
+              "detail": "심도있는 전공, 현장적응 능력, 융합능력",
+              "values": [
+                "LOW",
+                "HIGH",
+                "NONE",
+                "LOW"
+              ]
+            },
+            {
+              "university_goal": "소통적 감성인",
+              "detail": "의사소통능력, 협동과 인간관계능력, 실천적 봉사정신",
+              "values": [
+                "NONE",
+                "NONE",
+                "LOW",
+                "HIGH"
+              ]
+            }
+          ]
+        },
+        "department_goal_to_major_competency": {
+          "competency_columns": [
+            "전공기초능력",
+            "주체적 창의력",
+            "팀워크 능력",
+            "문제해결 능력",
+            "연구 능력"
+          ],
+          "rows": [
+            {
+              "department_goal": "목표 1",
+              "values": [
+                "HIGH",
+                "LOW",
+                "LOW",
+                "LOW",
+                "NONE"
+              ]
+            },
+            {
+              "department_goal": "목표 2",
+              "values": [
+                "NONE",
+                "HIGH",
+                "NONE",
+                "HIGH",
+                "LOW"
+              ]
+            },
+            {
+              "department_goal": "목표 3",
+              "values": [
+                "LOW",
+                "LOW",
+                "NONE",
+                "HIGH",
+                "LOW"
+              ]
+            },
+            {
+              "department_goal": "목표 4",
+              "values": [
+                "NONE",
+                "NONE",
+                "HIGH",
+                "LOW",
+                "LOW"
+              ]
+            }
+          ]
+        },
+        "university_core_competency_to_major_competency": {
+          "competency_columns": [
+            "전공기초능력",
+            "주체적 창의력",
+            "팀워크 능력",
+            "문제해결 능력",
+            "연구 능력"
+          ],
+          "rows": [
+            {
+              "university_core_competency": "지역형 리더 역량",
+              "values": [
+                "HIGH",
+                "LOW",
+                "LOW",
+                "LOW",
+                "NONE"
+              ]
+            },
+            {
+              "university_core_competency": "창의적사고 역량",
+              "values": [
+                "NONE",
+                "HIGH",
+                "NONE",
+                "NONE",
+                "LOW"
+              ]
+            },
+            {
+              "university_core_competency": "실용적융복합 역량",
+              "values": [
+                "LOW",
+                "NONE",
+                "NONE",
+                "HIGH",
+                "LOW"
+              ]
+            },
+            {
+              "university_core_competency": "의사소통 역량",
+              "values": [
+                "NONE",
+                "LOW",
+                "HIGH",
+                "NONE",
+                "NONE"
+              ]
+            },
+            {
+              "university_core_competency": "글로벌 역량",
+              "values": [
+                "NONE",
+                "NONE",
+                "LOW",
+                "NONE",
+                "LOW"
+              ]
+            }
+          ]
+        }
+      },
+      "verification_status": "VERIFIED",
+      "reason_not_in_graph": "현재 명세에 목표·역량 노드와 연계 강도 관계가 없음."
+    },
+    {
+      "fact_group_id": "cse-curriculum-roadmap",
+      "excerpt_page": 15,
+      "source_pdf_page": 260,
+      "printed_page": 252,
+      "section_title": "8. 교육과정 로드맵(이수체계도)",
+      "records": {
+        "1-1": {
+          "문제해결 능력": [
+            "웹프로그래밍",
+            "피지컬AI입문"
+          ]
+        },
+        "1-2": {
+          "전공기초능력": [
+            "이산수학"
+          ],
+          "연구 능력": [
+            "컴퓨터공학기술세미나"
+          ]
+        },
+        "2-1": {
+          "전공기초능력": [
+            "자료구조",
+            "논리설계"
+          ],
+          "주체적 창의력": [
+            "컴퓨터그래픽스"
+          ],
+          "팀워크 능력": [
+            "객체지향프로그래밍",
+            "오픈소스소프트웨어"
+          ]
+        },
+        "2-2": {
+          "전공기초능력": [
+            "고급자료구조*",
+            "프로그래밍언어론",
+            "시스템프로그래밍",
+            "임베디드시스템"
+          ],
+          "문제해결 능력": [
+            "모바일프로그래밍"
+          ]
+        },
+        "3-1": {
+          "전공기초능력": [
+            "컴퓨터구조*"
+          ],
+          "주체적 창의력": [
+            "알고리즘*",
+            "데이타베이스개론*"
+          ],
+          "팀워크 능력": [
+            "소프트웨어공학*"
+          ],
+          "문제해결 능력": [
+            "네트워크프로그래밍",
+            "빅데이터"
+          ]
+        },
+        "3-2": {
+          "전공기초능력": [
+            "운영체제*",
+            "데이타통신*",
+            "영상처리"
+          ],
+          "주체적 창의력": [
+            "산학캡스톤디자인1",
+            "데이터마이닝"
+          ],
+          "문제해결 능력": [
+            "소프트웨어설계"
+          ]
+        },
+        "4-1": {
+          "전공기초능력": [
+            "컴파일러"
+          ],
+          "주체적 창의력": [
+            "컴퓨터네트워크"
+          ],
+          "팀워크 능력": [
+            "산학캡스톤디자인2"
+          ],
+          "문제해결 능력": [
+            "인공지능",
+            "클라우드컴퓨팅"
+          ],
+          "비교과": [
+            "봉림소프트웨어전"
+          ]
+        },
+        "4-2": {
+          "전공기초능력": [
+            "정보보안",
+            "컴퓨터비전"
+          ],
+          "주체적 창의력": [
+            "사물인터넷",
+            "딥러닝과자연어처리"
+          ],
+          "연구 능력": [
+            "졸업논문*"
+          ],
+          "비교과": [
+            "봉림소프트웨어전"
+          ]
+        }
+      },
+      "notes": [
+        "* 표기 교과목은 필수교과목.",
+        "로드맵은 권장 이수 위치이며 실제 CourseOffering 개설학기와 같은 의미가 아님.",
+        "심층상담은 전학년 1·2학기 신청 가능.",
+        "현장실습1·3 및 표준현장실습1·3은 2·3·4학년 계절학기 신청 가능.",
+        "현장실습4 및 표준현장실습4는 2·3·4학년 1·2학기 신청 가능."
+      ],
+      "verification_status": "VERIFIED",
+      "reason_not_in_graph": "현재 명세에 권장 이수 로드맵과 비교과 활동을 표현하는 구조가 없음."
+    },
+    {
+      "fact_group_id": "cse-recommended-general-courses",
+      "excerpt_page": 16,
+      "source_pdf_page": 261,
+      "printed_page": 253,
+      "section_title": "9. 학과 권장 교과목",
+      "records": [
+        {
+          "area": "균형교양(4영역)",
+          "course_code": "GEA7260",
+          "name_ko": "컴퓨터개론",
+          "credits": 3,
+          "total_hours": 3,
+          "recommended_term": "1-1",
+          "offering_department": "컴퓨터공학과"
+        },
+        {
+          "area": "균형교양(1영역)",
+          "course_code": "GEA7261",
+          "name_ko": "컴퓨터프로그래밍",
+          "credits": 3,
+          "total_hours": 4,
+          "recommended_term": "1-2",
+          "offering_department": "컴퓨터공학과"
+        },
+        {
+          "area": "균형교양(4영역)",
+          "course_code": "GEA7301",
+          "name_ko": "공업수학",
+          "credits": 3,
+          "total_hours": 3,
+          "recommended_term": "2-1",
+          "offering_department": "컴퓨터공학과"
+        }
+      ],
+      "verification_status": "VERIFIED",
+      "reason_not_in_graph": "현재 명세에 RECOMMENDS 관계 또는 권장 학기 속성이 없음."
+    }
+  ],
+  "source_internal_inconsistencies": [
+    {
+      "issue_id": "DQ-001",
+      "severity": "high",
+      "excerpt_pages": [
+        10,
+        13
+      ],
+      "description_ko": "GEA8617이 '수식없는물리로보는세상'과 '융합프로젝트Ⅰ' 두 과목에 사용됨.",
+      "records": [
+        {
+          "excerpt_page": 10,
+          "area_group": "균형교양",
+          "area_name": "자연·과학·기술의이해",
+          "course_code": "GEA8617",
+          "name_ko": "수식없는물리로보는세상",
+          "name_en": "The physical world without formula",
+          "credits": 3,
+          "lecture_hours": 3,
+          "practice_hours": 0,
+          "semester_raw": "2",
+          "competency": [
+            "창의적사고"
+          ],
+          "related_department": "교양교육원(반도체물리)",
+          "note": "발췌 13쪽의 '융합프로젝트Ⅰ'도 동일 학수번호 GEA8617을 사용하므로 Course 식별 충돌 검토 필요",
+          "verification_status": "REVIEW_REQUIRED"
+        },
+        {
+          "excerpt_page": 13,
+          "area_group": "확대교양",
+          "area_name": "소양교육",
+          "course_code": "GEA8617",
+          "name_ko": "융합프로젝트Ⅰ",
+          "name_en": "Convergence ProjectⅠ",
+          "credits": 3,
+          "lecture_hours": 3,
+          "practice_hours": 0,
+          "semester_raw": "이룸",
+          "competency": [
+            "실용적융복합"
+          ],
+          "related_department": "교양교육원(사림아너스)",
+          "note": "발췌 10쪽의 '수식없는물리로보는세상'과 학수번호 GEA8617이 중복되며, 개설학기 '이룸'은 ontology semester 통제어휘 밖임",
+          "verification_status": "REVIEW_REQUIRED"
+        }
+      ]
+    },
+    {
+      "issue_id": "DQ-002",
+      "severity": "medium",
+      "excerpt_page": 18,
+      "description_ko": "전공편성 개별 숫자형 실기값 합계는 14이나 원문 표 하단 합계는 12로 기재됨.",
+      "current_action": "원문 각 행을 우선 보존하고 총계 불일치는 자동 정정하지 않음."
+    },
+    {
+      "issue_id": "DQ-003",
+      "severity": "low",
+      "description_ko": "영문명 철자, 한·영명 불일치, 관련학과 오탈자 후보가 있음.",
+      "records": [
+        {
+          "excerpt_page": 8,
+          "area_group": "균형교양",
+          "area_name": "사회와문화",
+          "course_code": "GEA8662",
+          "name_ko": "인간관계와의사소통",
+          "name_en": "Human Realationship and Communication",
+          "credits": 3,
+          "lecture_hours": 3,
+          "practice_hours": 0,
+          "semester_raw": "1,2",
+          "competency": [
+            "의사소통"
+          ],
+          "related_department": "교양교육원(사회복지)",
+          "note": "원문 영문명 'Realationship' 철자를 그대로 보존함",
+          "verification_status": "REVIEW_REQUIRED"
+        },
+        {
+          "excerpt_page": 8,
+          "area_group": "균형교양",
+          "area_name": "사회와문화",
+          "course_code": "GEA8518",
+          "name_ko": "기업가정신",
+          "name_en": "Entrepreneurt ship",
+          "credits": 3,
+          "lecture_hours": 3,
+          "practice_hours": 0,
+          "semester_raw": "1,2",
+          "competency": [
+            "창의적사고"
+          ],
+          "related_department": "교양교육원(RISE사업단)",
+          "note": "원문 영문명 'Entrepreneurt ship' 철자·띄어쓰기를 그대로 보존함",
+          "verification_status": "REVIEW_REQUIRED"
+        },
+        {
+          "excerpt_page": 10,
+          "area_group": "균형교양",
+          "area_name": "자연·과학·기술의이해",
+          "course_code": "GEA4009",
+          "name_ko": "인체와질병",
+          "name_en": "Human Anatomy and Disease",
+          "credits": 3,
+          "lecture_hours": 3,
+          "practice_hours": 0,
+          "semester_raw": "1,2",
+          "competency": [
+            "실용적융복합"
+          ],
+          "related_department": "생면보건",
+          "note": "관련학과가 원문에 '생면보건'으로 보이며 다음 행의 '생명보건'과 달라 원문 오탈자 여부 검토 필요",
+          "verification_status": "REVIEW_REQUIRED"
+        },
+        {
+          "excerpt_page": 10,
+          "area_group": "균형교양",
+          "area_name": "자연·과학·기술의이해",
+          "course_code": "GEA8803",
+          "name_ko": "과학기술사",
+          "name_en": "History of Science and )Technology",
+          "credits": 3,
+          "lecture_hours": 3,
+          "practice_hours": 0,
+          "semester_raw": "2",
+          "competency": [
+            "실용적융복합"
+          ],
+          "related_department": "공학융합학부",
+          "note": "원문 영문명에 닫는 괄호 ')'가 단독으로 포함되어 있어 오탈자 검토 필요",
+          "verification_status": "REVIEW_REQUIRED"
+        },
+        {
+          "excerpt_page": 10,
+          "area_group": "확대교양",
+          "area_name": "언어의세계",
+          "course_code": "GEA8528",
+          "name_ko": "초급영어읽기",
+          "name_en": "Elementary English Speaking",
+          "credits": 3,
+          "lecture_hours": 3,
+          "practice_hours": 0,
+          "semester_raw": "1,2",
+          "competency": [
+            "글로벌"
+          ],
+          "related_department": "영어영문",
+          "note": "한글명은 '초급영어읽기', 영문명은 'Elementary English Speaking'으로 의미가 달라 원문 오탈자 여부 검토 필요",
+          "verification_status": "REVIEW_REQUIRED"
+        },
+        {
+          "excerpt_page": 11,
+          "area_group": "확대교양",
+          "area_name": "언어의세계",
+          "course_code": "GEA8822",
+          "name_ko": "한국어기초말하기와문법Ⅱ",
+          "name_en": "Basic Korean Speaking and GrammarⅠ",
+          "credits": 3,
+          "lecture_hours": 3,
+          "practice_hours": 0,
+          "semester_raw": "2",
+          "competency": [
+            "의사소통"
+          ],
+          "related_department": "글로벌자율전공학부",
+          "note": "한글명은 Ⅱ, 원문 영문명은 GrammarⅠ로 표기되어 있어 오탈자 여부 검토 필요",
+          "verification_status": "REVIEW_REQUIRED"
+        },
+        {
+          "excerpt_page": 11,
+          "area_group": "확대교양",
+          "area_name": "언어의세계",
+          "course_code": "GEA8824",
+          "name_ko": "한국어듣기와읽기Ⅱ",
+          "name_en": "Korean Listening and ReadingⅠ",
+          "credits": 3,
+          "lecture_hours": 3,
+          "practice_hours": 0,
+          "semester_raw": "2",
+          "competency": [
+            "의사소통"
+          ],
+          "related_department": "글로벌자율전공학부",
+          "note": "한글명은 Ⅱ, 원문 영문명은 ReadingⅠ로 표기되어 있어 오탈자 여부 검토 필요",
+          "verification_status": "REVIEW_REQUIRED"
+        },
+        {
+          "excerpt_page": 12,
+          "area_group": "확대교양",
+          "area_name": "소양교육",
+          "course_code": "GEA7555",
+          "name_ko": "진정한기업가정신과혁신챌린지",
+          "name_en": "Authentic Entrepreneurship and Inovation Challenge",
+          "credits": 3,
+          "lecture_hours": 3,
+          "practice_hours": 0,
+          "semester_raw": "2",
+          "competency": [
+            "창의적사고"
+          ],
+          "related_department": "경영",
+          "note": "원문 영문명 'Inovation' 철자를 그대로 보존함",
+          "verification_status": "REVIEW_REQUIRED"
+        }
+      ],
+      "current_action": "원문을 수정하지 않고 해당 CourseOffering을 REVIEW_REQUIRED로 유지함."
+    }
+  ]
+}
