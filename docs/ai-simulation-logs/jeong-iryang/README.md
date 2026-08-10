@@ -5,7 +5,7 @@
 - 파일명 규칙: `NNNN-short-task-name.md`
   - `NNNN`은 이 폴더에서 독립적으로 증가하는 4자리 번호다.
   - 작업명은 영문 소문자 kebab-case로 작성한다.
-- 현재 다음 로그 번호: `0017`
+- 현재 다음 로그 번호: `0018`
 - 중앙 템플릿: [AI 시뮬레이션 로그 템플릿](../_template.md)
 - 중앙 운영 규칙: [AI 시뮬레이션 로그 운영 규칙](../README.md)
 
@@ -27,3 +27,4 @@
 - [0014. 구조화 Claim 기반 답변 Grounding 보안 수정](0014-structured-claim-grounding.md)
 - [0015. ValidatedClaims 승인 경계와 Claim 전체 검증 보완](0015-validated-claims-approval-boundary.md)
 - [0016. ChatResponse 승인 발급 경계와 오류 코드 정제](0016-chat-response-issuance-boundary.md)
+- [0017. PR #14 최신 백엔드·프론트 통합](0017-evidence-chat-integration.md)

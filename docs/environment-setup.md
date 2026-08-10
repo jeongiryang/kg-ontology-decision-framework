@@ -95,6 +95,32 @@ docker run --rm hello-world
 
 Docker 명령은 WSL 안에서 실행하되 Docker 데몬은 Docker Desktop이 제공한다. 프로젝트 디렉터리 안에 Neo4j 데이터 파일을 직접 생성하지 않고 named volume을 사용한다.
 
+### 5.1 WSL Integration이 비활성인 환경의 대체 경로
+
+WSL Integration을 활성화하지 않은 환경에서는 Ubuntu 안에 `docker` 실행 파일이 없고 다음 안내만 출력된다.
+
+```text
+The command 'docker' could not be found in this WSL 2 distro.
+We recommend to activate the WSL integration in Docker Desktop settings.
+```
+
+이 경우 3절의 통합 활성화가 정식 해결책이다. 통합을 켜지 않고 임시로 진행해야 하면 Windows 쪽 `docker.exe`를 사용한다. `docker` 대신 `docker.exe`를 쓰는 점만 다르고 컨테이너 운영 명령은 8절과 동일하다.
+
+```bash
+docker.exe version --format '{{.Server.Version}}'
+docker.exe ps --filter name=neo4j-db
+```
+
+Docker Desktop이 실행 중이 아니면 다음 오류가 발생하므로 Windows에서 Docker Desktop을 먼저 시작한다. 설치 위치는 환경에 따라 `%ProgramFiles%\Docker\Docker\` 또는 `%LOCALAPPDATA%\Programs\DockerDesktop\`이다.
+
+```text
+failed to connect to the docker API at npipe:////./pipe/dockerDesktopLinuxEngine
+```
+
+`docker.exe`로 컨테이너를 띄워도 WSL에서 `localhost:7687`과 `localhost:7474`로 접속할 수 있다. 2026-08-10에 `wslinfo --networking-mode`가 `nat`인 환경에서 `127.0.0.1`과 `localhost` 양쪽 TCP 연결과 Bolt 접속이 성공함을 확인했다. 따라서 적재기의 로컬 URI 검사(`localhost` 또는 `127.0.0.1`의 7687 포트만 허용)를 우회하기 위한 추가 설정은 필요하지 않다.
+
+`docker.exe`는 대체 경로이므로 계속 사용하지 않고 WSL Integration 활성화로 정리한다.
+
 ## 6. uv와 Python 3.12.3 설치
 
 공식 설치 스크립트로 `uv`를 설치한 뒤 새 터미널을 열거나 안내된 PATH 설정을 적용한다.
@@ -182,6 +208,18 @@ docker stop neo4j-db
 docker start neo4j-db
 ```
 
+### 8.1 볼륨 구성 실제 확인
+
+`-v neo4j_data:/data`와 `-v neo4j_logs:/logs` 없이 컨테이너를 만들면 Neo4j 이미지가 익명 볼륨을 자동 생성한다. 이 경우 이름이 해시 문자열이라 재생성 시 데이터를 다시 연결하기 어렵다. 실제 마운트를 확인한다.
+
+```bash
+docker inspect neo4j-db --format '{{range .Mounts}}[{{.Type}} {{.Name}} -> {{.Destination}}]{{end}}'
+```
+
+출력의 볼륨 이름이 `neo4j_data`, `neo4j_logs`가 아니라 64자 해시면 익명 볼륨이다. 2026-08-10 기준 이 환경의 `neo4j-db`는 익명 볼륨을 사용하고 있어 문서 규격과 다르다. 컨테이너를 재생성할 기회에 named volume으로 정리한다.
+
+`docker volume ls`에 이름은 비슷하지만 어떤 컨테이너도 사용하지 않는 볼륨(`neo4j-data` 등)이 남아 있을 수 있다. 삭제 전에 사용 중인지 확인한다.
+
 ## 9. 환경변수 설정
 
 프로젝트 루트의 `.env`는 로컬 전용이며 Git에 커밋하지 않는다. 변수 이름은 다음과 같이 통일하되 비밀번호 값은 비워 둔 예시만 문서에 남긴다.
@@ -192,6 +230,10 @@ NEO4J_USER=neo4j
 NEO4J_PASSWORD=
 NEO4J_DATABASE=neo4j
 ```
+
+동적 Text-to-Cypher와 웹 챗봇은 ingestion 계정으로 자동 fallback하지 않고 별도
+`NEO4J_QUERY_*` 계약을 사용한다. 로컬 LLM 설정과 함께 비밀값 없는 예시는 루트
+`.env.example`과 [학사규정 근거 챗봇 가이드](evidence-chat.md)를 따른다.
 
 로컬 파일을 편집한 뒤 파일 권한을 제한한다.
 

@@ -5,8 +5,12 @@ description = "Neo4j ingestion tooling for the verified CWNU curriculum knowledg
 readme = "README.md"
 requires-python = ">=3.12,<3.13"
 dependencies = [
+    "anyio>=4.14.2",
     "neo4j>=6.2.0",
+    "pymupdf>=1.28.2",
     "python-dotenv>=1.2.2",
+    "starlette>=1.6.0",
+    "uvicorn>=0.52.1",
 ]
 
 [build-system]
@@ -19,7 +23,11 @@ package-dir = {"" = "src"}
 [tool.setuptools.packages.find]
 where = ["src"]
 
+[tool.setuptools.package-data]
+evidence_chat = ["static/*"]
+
 [dependency-groups]
 dev = [
+    "httpx2>=0.2.0",
     "pytest>=9.1.1",
 ]

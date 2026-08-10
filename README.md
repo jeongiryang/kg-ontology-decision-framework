@@ -121,6 +121,7 @@ kg-ontology-decision-framework/
 - [2026 학사 교육과정 온톨로지 V1 설계](docs/ontology/ontology-v1.md)
 - [Neo4j V0.2 스키마 적용 및 Verified KG 적재 가이드](docs/neo4j-ingestion.md)
 - [Verified KG 읽기 전용 질의·Evidence 응답 가이드](docs/query-evidence-api.md)
+- [CurriculumChatService 기반 학사규정 근거 챗봇 가이드](docs/evidence-chat.md)
 - [Text-to-Cypher 스키마·검증·실행 안전 기반](docs/text-to-cypher-safety.md)
 - [RTX 4070 Ti 로컬 LLM Text-to-Cypher PoC](docs/local-llm-query-pipeline.md)
 - [VERIFIED Evidence 기반 한국어 답변 계층](docs/evidence-answer-renderer.md)
@@ -148,7 +149,15 @@ uv run python -m kg_builder.query_cli \
   --request '{"intent":"GET_GENERAL_EDUCATION_MIN_CREDITS","parameters":{"academic_year":2026}}'
 ```
 
-현재 실제 구현은 `src/kg_builder/`의 `config.py`, `graph_bundle.py`, `neo4j_schema.py`, `neo4j_ingest.py`와 `query_*.py`에 있습니다. 위쪽 초기 디렉터리 설명의 0바이트 골격 모듈은 향후 구조 예시이며 구현 완료 상태를 뜻하지 않습니다.
+최종 사용자 화면은 Starlette의 기존 `/api/ask` 안에서 `CurriculumChatService`를 직접 호출하는 로컬 웹 챗봇입니다. 별도 API 서버나 고정 Intent 경로 없이 자연어 QueryPlan, 안전한 Cypher 실행, 구조화 Claim, 결정론적 한국어 답변과 Citation을 한 프로세스에서 연결합니다.
+
+```bash
+uv run python -m evidence_chat.server
+```
+
+기본 주소는 `http://127.0.0.1:8501`입니다. `NEO4J_QUERY_*`와 `KG_LLM_*` 설정이 필요하며, 근거 페이지 이미지와 강조 표시를 보려면 발췌 PDF를 로컬에 두고 `CURRICULUM_PDF_PATH`로 경로를 지정합니다. PDF가 없어도 근거 원문과 세 종류 페이지 번호는 표시됩니다. 상태별 화면, Citation, 동시성·타임아웃 정책은 [학사규정 근거 챗봇 가이드](docs/evidence-chat.md)를 참고합니다.
+
+현재 실제 구현은 `src/kg_builder/`의 `config.py`, `graph_bundle.py`, `neo4j_schema.py`, `neo4j_ingest.py`, `query_*.py`와 `src/evidence_chat/`에 있습니다. 위쪽 초기 디렉터리 설명의 0바이트 골격 모듈은 향후 구조 예시이며 구현 완료 상태를 뜻하지 않습니다.
 
 동적 Text-to-Cypher는 명세-derived LLM 스키마, 제한 문법 후보 검증, Neo4j `EXPLAIN`, Evidence provenance에 더해 provider-neutral 로컬 LLM planner·Cypher generator까지 연결되어 있습니다. 현재 실측 provider는 Ollama이고 OpenAI-compatible adapter로 SSH 터널 뒤 연구실 vLLM을 연결할 수 있습니다. 실행 시 명시적인 `NEO4J_QUERY_*`와 로컬 `KG_LLM_*` 설정이 필요합니다.
 
