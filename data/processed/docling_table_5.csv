@@ -1,0 +1,13 @@
+﻿이수 구분.이수 구분,학수번호.학수번호,과 목 명.과 목 명,학점.학점,시간수.강의,시간수.실습 실기,개설 학년 학기.개설 학년 학기,전공능력 기반 연관성.전공능력 기반 연관성
+,CDA0143,고급자료구조(Advanced Data Structure),3,3,,2-2,①③④
+,CDA0065,데이터베이스개론(Database Theory),3,3,,3-1,②④⑤
+,CDA0027,알고리즘(Algorithms),3,3,,3-1,①④
+,CDA0017,운영체제(Operating System) ※,3,3,,3-2,①④
+,CDA0016,컴퓨터구조(Computer Architechture) ※,3,3,,3-1,①③④
+,CDA0023,데이터통신(Data Communication),3,3,,3-2,①③④
+,CDA0028,소프트웨어공학(Software Engineering),3,3,,3-2,①③④
+,CDA0088,심층상담(Consultation),0,,,"전학년 - 1,2",②
+,CDA0034,졸업논문(Graduation Thesis),0,,,"4-1,2",②③④⑤
+,CDA0155,객체지향프로그래밍(Object-oriented Programming),3,2,2,2-1,①②④
+,CDA0156,오픈소스소프트웨어(Open Source Software),3,2,2,2-1,①②③
+,CDA0157,이산수학(Discrete mathematics),3,3,,2-1,①④
