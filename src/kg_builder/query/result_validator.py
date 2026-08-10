@@ -129,6 +129,8 @@ class ResultValidator:
             actual = row.get(name)
             if name == "grade_year" and isinstance(actual, list):
                 matches = expected in actual
+            elif name == "rule_ids" and isinstance(expected, list):
+                matches = actual in expected
             else:
                 matches = actual == expected
             if not matches:

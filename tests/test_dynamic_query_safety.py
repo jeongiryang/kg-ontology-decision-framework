@@ -19,7 +19,7 @@ from kg_builder.query.cypher_validator import (
 from kg_builder.query.query_explainer import ExplainedCypher, unsafe_plan_operators
 from kg_builder.query.query_executor import DynamicQueryExecutor, QueryExecutionError
 from kg_builder.query.query_plan import QueryPlan, QueryPlanError
-from kg_builder.query.query_trace import TraceStatus
+from kg_builder.query.query_trace import TracePolicy, TraceStatus
 from kg_builder.query.result_validator import ResultValidationError, ResultValidator
 from kg_builder.query.safety_pipeline import SafetyPipeline, SafetyPipelineError
 from kg_builder.query.schema_catalog import (
@@ -103,6 +103,10 @@ class SchemaExportTests(unittest.TestCase):
             {item["type"] for item in generated["relationships"]},
             {item["name"] for item in spec["relationship_types"]},
         )
+        fact_labels = set(generated["query_policy"]["provenance"]["fact_labels"])
+        self.assertIn("CourseOffering", fact_labels)
+        self.assertIn("CreditRequirement", fact_labels)
+        self.assertNotIn("Course", fact_labels)
 
     def test_stale_or_modified_schema_is_detected(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -133,6 +137,16 @@ class QueryPlanTests(unittest.TestCase):
         self.assertEqual(plan.filters["department_id"], "department:cwnu:cse")
         self.assertEqual(plan.requested_fields, ("course_code", "name_ko", "credits"))
         self.assertIsNotNone(plan.intent)
+
+        rule_plan = plan_payload()
+        rule_plan["filters"] = {
+            "academic_year": 2026,
+            "rule_id": "rule:cwnu:2026:general:min-total-default",
+        }
+        rule_plan["requested_fields"] = ["value", "operator", "unit"]
+        self.assertNotIn(
+            "department_id", QueryPlan.from_dict(rule_plan, self.catalog).filters
+        )
 
     def test_invalid_plan_contracts(self) -> None:
         mutations = []
@@ -455,8 +469,9 @@ class PipelineTraceTests(unittest.TestCase):
             trace = json.loads(outcome.trace_path.read_text(encoding="utf-8"))
             self.assertEqual([event["status"] for event in trace["events"]], ["PASS"] * 6)
             self.assertNotIn("raw_question", trace)
+            self.assertNotIn("question_fingerprint", trace)
+            self.assertNotIn("question_sha256", trace)
             self.assertEqual(trace["question_length"], len(plan_payload()["question"]))
-            self.assertEqual(len(trace["question_sha256"]), 64)
 
             with self.assertRaises(SafetyPipelineError) as raised:
                 pipeline.run(plan_payload(), SAFE_QUERY.replace("LIMIT 100", "LIMIT 1000"))
@@ -484,6 +499,34 @@ class PipelineTraceTests(unittest.TestCase):
             self.assertNotIn("student@example.invalid", payload["raw_question"])
             self.assertNotIn("010-1234-5678", payload["raw_question"])
             self.assertEqual(payload["retention_days"], 7)
+
+    def test_opt_in_fingerprint_uses_hmac_and_requires_key(self) -> None:
+        with patch.dict(
+            os.environ,
+            {"KG_QUERY_TRACE_FINGERPRINT": "true"},
+            clear=True,
+        ), self.assertRaisesRegex(ValueError, "HMAC_KEY"):
+            TracePolicy.from_env()
+
+        with tempfile.TemporaryDirectory() as directory, patch.dict(
+            os.environ,
+            {
+                "KG_QUERY_TRACE_FINGERPRINT": "true",
+                "KG_QUERY_TRACE_HMAC_KEY": "test-only-secret-key",
+            },
+            clear=True,
+        ):
+            pipeline = SafetyPipeline(
+                FakeExplainer(), FakeExecutor([valid_row()]), trace_dir=Path(directory)
+            )
+            outcome = pipeline.run(plan_payload(), SAFE_QUERY)
+            payload = json.loads(outcome.trace_path.read_text(encoding="utf-8"))
+            self.assertEqual(len(payload["question_fingerprint"]), 64)
+            self.assertNotEqual(
+                payload["question_fingerprint"],
+                __import__("hashlib").sha256(plan_payload()["question"].encode()).hexdigest(),
+            )
+            self.assertNotIn("test-only-secret-key", json.dumps(payload))
 
 
 if __name__ == "__main__":

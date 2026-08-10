@@ -122,6 +122,7 @@ kg-ontology-decision-framework/
 - [Neo4j V0.2 스키마 적용 및 Verified KG 적재 가이드](docs/neo4j-ingestion.md)
 - [Verified KG 읽기 전용 질의·Evidence 응답 가이드](docs/query-evidence-api.md)
 - [Text-to-Cypher 스키마·검증·실행 안전 기반](docs/text-to-cypher-safety.md)
+- [RTX 4070 Ti 로컬 LLM Text-to-Cypher PoC](docs/local-llm-query-pipeline.md)
 
 Verified bundle 검증과 로컬 Neo4j 적재는 다음 순서로 실행합니다. 각 팀원은 자신의 빈 로컬 Neo4j 데이터베이스에서 독립적으로 수행합니다.
 
@@ -148,7 +149,14 @@ uv run python -m kg_builder.query_cli \
 
 현재 실제 구현은 `src/kg_builder/`의 `config.py`, `graph_bundle.py`, `neo4j_schema.py`, `neo4j_ingest.py`와 `query_*.py`에 있습니다. 위쪽 초기 디렉터리 설명의 0바이트 골격 모듈은 향후 구조 예시이며 구현 완료 상태를 뜻하지 않습니다.
 
-동적 Text-to-Cypher의 현재 범위는 명세-derived LLM 스키마 생성, 제한 문법 후보 Cypher 검증, Neo4j `EXPLAIN`, Evidence provenance 검증까지입니다. 실행 시 ingestion 자격증명과 분리된 `NEO4J_QUERY_*` 읽기 전용 계정이 필수이며, 실제 LLM 호출과 자연어 답변 생성은 아직 포함하지 않습니다. 상세 정책은 [Text-to-Cypher 안전 기반 문서](docs/text-to-cypher-safety.md)를 참고합니다.
+동적 Text-to-Cypher는 명세-derived LLM 스키마, 제한 문법 후보 검증, Neo4j `EXPLAIN`, Evidence provenance에 더해 로컬 Ollama planner·Cypher generator까지 연결되어 있습니다. 실행 시 명시적인 `NEO4J_QUERY_*`와 로컬 `KG_LLM_*` 설정이 필요하며 자연어 최종 답변 생성은 아직 포함하지 않습니다.
+
+```bash
+uv run python -m kg_builder.query.natural_language_cli \
+  "2026학년도 컴퓨터공학과 자료구조의 이수구분은?"
+```
+
+안전 정책은 [Text-to-Cypher 안전 기반 문서](docs/text-to-cypher-safety.md), 모델·실행·실측 결과는 [로컬 LLM PoC 문서](docs/local-llm-query-pipeline.md)를 참고합니다.
 
 ### AI 시뮬레이션 로그
 

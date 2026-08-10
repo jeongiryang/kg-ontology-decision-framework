@@ -70,6 +70,7 @@ class SafetyPipeline:
             if store_raw_question is None
             else store_raw_question
         )
+        self.trace_fingerprint_hmac_key = trace_policy.fingerprint_hmac_key
         self.trace_retention_days = (
             trace_policy.retention_days
             if trace_retention_days is None
@@ -84,6 +85,7 @@ class SafetyPipeline:
             parameters=raw_filters if isinstance(raw_filters, Mapping) else {},
             trace_dir=self.trace_dir,
             store_raw_question=self.store_raw_question,
+            fingerprint_hmac_key=self.trace_fingerprint_hmac_key,
             retention_days=self.trace_retention_days,
         )
 

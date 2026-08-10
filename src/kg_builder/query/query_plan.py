@@ -36,11 +36,30 @@ FILTER_BINDINGS = {
     "credits": FilterBinding("CourseOffering", "credits"),
     "course_code": FilterBinding("Course", "course_code"),
     "name_ko": FilterBinding("Course", "name_ko"),
+    "rule_id": FilterBinding("Rule", "rule_id"),
+    "rule_ids": FilterBinding("Rule", "rule_id", "PROPERTY_IN_PARAMETER"),
+    "area_id": FilterBinding("EducationArea", "area_id"),
     "major_type": FilterBinding("ApplicabilityScope", "major_type"),
     "admission_type": FilterBinding("ApplicabilityScope", "admission_type"),
 }
 SUPPORTED_FILTERS = frozenset(FILTER_BINDINGS)
-REQUIRED_SCOPE_FILTERS = frozenset({"academic_year", "department_id"})
+REQUIRED_SCOPE_FILTERS = frozenset({"academic_year"})
+DEPARTMENT_SCOPED_FILTERS = frozenset(
+    {"grade_year", "semester", "completion_type", "credits", "course_code", "name_ko"}
+)
+DEPARTMENT_SCOPED_FIELDS = frozenset(
+    {
+        "course_code",
+        "name_ko",
+        "grade_year",
+        "semester",
+        "credits",
+        "lecture_hours",
+        "practice_hours",
+        "completion_type",
+        "offering_id",
+    }
+)
 VOCABULARY_FILTERS = {
     "semester": "semester",
     "completion_type": "completion_type",
@@ -107,12 +126,22 @@ class QueryPlan:
             isinstance(credits, bool) or not isinstance(credits, (int, float)) or credits < 0
         ):
             raise QueryPlanError("credits must be a non-negative number")
-        for name in ("department_id", "course_code", "name_ko"):
+        for name in ("department_id", "course_code", "name_ko", "rule_id", "area_id"):
             if name in filters:
                 value = filters[name]
                 if not isinstance(value, str) or not value.strip():
                     raise QueryPlanError(f"{name} must be a non-empty string")
                 filters[name] = value.strip()
+        if "rule_ids" in filters:
+            rule_ids = filters["rule_ids"]
+            if (
+                not isinstance(rule_ids, list)
+                or not rule_ids
+                or any(not isinstance(value, str) or not value.strip() for value in rule_ids)
+                or len(set(rule_ids)) != len(rule_ids)
+            ):
+                raise QueryPlanError("rule_ids must be a non-empty array of unique strings")
+            filters["rule_ids"] = [value.strip() for value in rule_ids]
         for name, vocabulary in VOCABULARY_FILTERS.items():
             if name in filters and filters[name] not in catalog.controlled_vocabularies[vocabulary]:
                 raise QueryPlanError(f"{name} is not in controlled vocabulary {vocabulary}")
@@ -129,6 +158,20 @@ class QueryPlan:
         if undeclared:
             raise QueryPlanError(
                 f"requested fields are absent from ontology_spec.json: {sorted(undeclared)}"
+            )
+        department_scope_required = bool(
+            set(filters).intersection(DEPARTMENT_SCOPED_FILTERS)
+            or set(normalized_fields).intersection(DEPARTMENT_SCOPED_FIELDS)
+        )
+        if department_scope_required and "department_id" not in filters:
+            raise QueryPlanError(
+                "department_id is required for course and CourseOffering queries"
+            )
+        if "area_id" in filters and set(normalized_fields).issubset(
+            {"value", "operator", "unit"}
+        ):
+            raise QueryPlanError(
+                "area_id can match multiple rules; use an exact rule_id for one threshold"
             )
 
         evidence_required = payload.get("evidence_required")

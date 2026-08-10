@@ -4,10 +4,11 @@ from __future__ import annotations
 
 import json
 import hashlib
+import hmac
 import os
 import re
 import uuid
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, field
 from datetime import UTC, datetime
 from enum import StrEnum
 from pathlib import Path
@@ -41,6 +42,8 @@ class TraceStatus(StrEnum):
 @dataclass(frozen=True, slots=True)
 class TracePolicy:
     store_raw_question: bool = False
+    fingerprint_enabled: bool = False
+    fingerprint_hmac_key: str | None = field(default=None, repr=False)
     retention_days: int = DEFAULT_RETENTION_DAYS
 
     @classmethod
@@ -48,6 +51,17 @@ class TracePolicy:
         raw_setting = os.getenv("KG_QUERY_TRACE_RAW_QUESTION", "false").strip().lower()
         if raw_setting not in {"true", "false"}:
             raise ValueError("KG_QUERY_TRACE_RAW_QUESTION must be true or false")
+        fingerprint_setting = os.getenv(
+            "KG_QUERY_TRACE_FINGERPRINT", "false"
+        ).strip().lower()
+        if fingerprint_setting not in {"true", "false"}:
+            raise ValueError("KG_QUERY_TRACE_FINGERPRINT must be true or false")
+        fingerprint_enabled = fingerprint_setting == "true"
+        fingerprint_hmac_key = os.getenv("KG_QUERY_TRACE_HMAC_KEY")
+        if fingerprint_enabled and not fingerprint_hmac_key:
+            raise ValueError(
+                "KG_QUERY_TRACE_HMAC_KEY is required when fingerprinting is enabled"
+            )
         retention_text = os.getenv(
             "KG_QUERY_TRACE_RETENTION_DAYS", str(DEFAULT_RETENTION_DAYS)
         ).strip()
@@ -57,7 +71,12 @@ class TracePolicy:
             raise ValueError("KG_QUERY_TRACE_RETENTION_DAYS must be an integer") from exc
         if not 1 <= retention_days <= 365:
             raise ValueError("KG_QUERY_TRACE_RETENTION_DAYS must be between 1 and 365")
-        return cls(raw_setting == "true", retention_days)
+        return cls(
+            store_raw_question=raw_setting == "true",
+            fingerprint_enabled=fingerprint_enabled,
+            fingerprint_hmac_key=fingerprint_hmac_key if fingerprint_enabled else None,
+            retention_days=retention_days,
+        )
 
 
 @dataclass(frozen=True, slots=True)
@@ -77,12 +96,21 @@ class QueryTrace:
         parameters: Mapping[str, Any],
         trace_dir: Path = DEFAULT_TRACE_DIR,
         store_raw_question: bool = False,
+        fingerprint_hmac_key: str | None = None,
         retention_days: int = DEFAULT_RETENTION_DAYS,
     ):
         self.request_id = str(uuid.uuid4())
         self.created_at = datetime.now(UTC).isoformat()
         self.question_length = len(question)
-        self.question_sha256 = hashlib.sha256(question.encode("utf-8")).hexdigest()
+        self.question_fingerprint = (
+            hmac.new(
+                fingerprint_hmac_key.encode("utf-8"),
+                question.encode("utf-8"),
+                hashlib.sha256,
+            ).hexdigest()
+            if fingerprint_hmac_key is not None
+            else None
+        )
         self.raw_question = self._mask_question(question) if store_raw_question else None
         self.parameters = self._sanitize(parameters)
         self.trace_dir = trace_dir
@@ -117,7 +145,6 @@ class QueryTrace:
             "created_at": self.created_at,
             "ontology_version": self.ontology_version,
             "question_length": self.question_length,
-            "question_sha256": self.question_sha256,
             "parameters": self.parameters,
             "retention_days": self.retention_days,
             "access_policy": "application-operator-only",
@@ -125,6 +152,8 @@ class QueryTrace:
         }
         if self.raw_question is not None:
             payload["raw_question"] = self.raw_question
+        if self.question_fingerprint is not None:
+            payload["question_fingerprint"] = self.question_fingerprint
         path.write_text(
             json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True) + "\n",
             encoding="utf-8",

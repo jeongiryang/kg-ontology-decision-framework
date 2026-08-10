@@ -123,6 +123,10 @@ PARAMETER_IN_PROPERTY_FILTER = re.compile(
     rf"^\s*\$({IDENTIFIER})\s+IN\s+({IDENTIFIER})\.({IDENTIFIER})\s*$",
     re.IGNORECASE,
 )
+PROPERTY_IN_PARAMETER_FILTER = re.compile(
+    rf"^\s*({IDENTIFIER})\.({IDENTIFIER})\s+IN\s+\$({IDENTIFIER})\s*$",
+    re.IGNORECASE,
+)
 VERIFIED_FILTER = re.compile(
     rf"^\s*({IDENTIFIER})\.(status|verification_status)\s*=\s*$",
     re.IGNORECASE,
@@ -480,6 +484,7 @@ class CypherValidator:
                 self._fail("CYPHER_WHERE_UNSUPPORTED", "empty WHERE predicate")
             graph_parameter = GRAPH_PARAMETER_FILTER.fullmatch(term)
             parameter_in_property = PARAMETER_IN_PROPERTY_FILTER.fullmatch(term)
+            property_in_parameter = PROPERTY_IN_PARAMETER_FILTER.fullmatch(term)
             verified = VERIFIED_FILTER.fullmatch(term)
             if graph_parameter:
                 variable, prop, parameter = graph_parameter.groups()
@@ -487,6 +492,9 @@ class CypherValidator:
             elif parameter_in_property:
                 parameter, variable, prop = parameter_in_property.groups()
                 operator = "PARAMETER_IN_PROPERTY"
+            elif property_in_parameter:
+                variable, prop, parameter = property_in_parameter.groups()
+                operator = "PROPERTY_IN_PARAMETER"
             elif verified:
                 variable, prop = verified.groups()
                 verified_sources.add((variable, prop.lower()))
