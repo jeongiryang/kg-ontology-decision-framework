@@ -4,12 +4,11 @@ import os
 import tempfile
 import unittest
 from pathlib import Path
+from time import perf_counter
 
 from neo4j import GraphDatabase
 
-from kg_builder.answer.generator import EvidenceAnswerGenerator
 from kg_builder.answer.service import CurriculumChatService
-from kg_builder.answer.validator import AnswerValidator
 from kg_builder.config import Neo4jQuerySettings
 from kg_builder.llm.client import LLMSettings, create_llm_client
 from kg_builder.llm.cypher_generator import LocalCypherGenerator
@@ -34,19 +33,15 @@ class RecordingQueryService:
         return self.last_result
 
 
-class RecordingAnswerValidator(AnswerValidator):
-    def __init__(self):
-        super().__init__()
-        self.last_error_code: str | None = None
+class CountingClient:
+    def __init__(self, wrapped):
+        self.wrapped = wrapped
+        self.model = wrapped.model
+        self.calls = 0
 
-    def validate(self, draft, rows, *, question=None):
-        try:
-            result = super().validate(draft, rows, question=question)
-            self.last_error_code = None
-            return result
-        except Exception as exc:
-            self.last_error_code = getattr(exc, "code", exc.__class__.__name__)
-            raise
+    def generate_json(self, **kwargs):
+        self.calls += 1
+        return self.wrapped.generate_json(**kwargs)
 
 
 @unittest.skipUnless(
@@ -65,7 +60,8 @@ class EvidenceAnswerIntegrationTests(unittest.TestCase):
         cls.before = cls._counts()
         cls.trace_temp = tempfile.TemporaryDirectory()
         cls.trace_dir = Path(cls.trace_temp.name)
-        client = create_llm_client(cls.llm)
+        client = CountingClient(create_llm_client(cls.llm))
+        cls.client = client
         dynamic = NaturalLanguageQueryService(
             LocalQueryPlanner(client),
             LocalCypherGenerator(client),
@@ -79,13 +75,7 @@ class EvidenceAnswerIntegrationTests(unittest.TestCase):
             generator_retries=cls.llm.max_retries,
         )
         cls.query_service = RecordingQueryService(dynamic)
-        cls.answer_validator = RecordingAnswerValidator()
-        cls.chat = CurriculumChatService(
-            cls.query_service,
-            EvidenceAnswerGenerator(client),
-            validator=cls.answer_validator,
-            answer_retries=cls.llm.max_retries,
-        )
+        cls.chat = CurriculumChatService(cls.query_service)
 
     @classmethod
     def tearDownClass(cls) -> None:
@@ -127,7 +117,10 @@ class EvidenceAnswerIntegrationTests(unittest.TestCase):
         results = {}
         source_results = {}
         for name, question in questions.items():
+            calls_before = self.client.calls
+            started = perf_counter()
             result = self.chat.ask(question)
+            elapsed = perf_counter() - started
             results[name] = result
             source_results[name] = self.query_service.last_result
             print(
@@ -137,8 +130,19 @@ class EvidenceAnswerIntegrationTests(unittest.TestCase):
                     "answer": result.answer_text,
                     "citations": len(result.citations),
                     "error": result.error_code,
-                    "validation_error": self.answer_validator.last_error_code,
+                    "claims": len(result.grounded_claims),
+                    "elapsed_seconds": round(elapsed, 3),
+                    "query_seconds": round(self.query_service.last_result.elapsed_seconds, 3),
+                    "model_calls": self.client.calls - calls_before,
                 }
+            )
+            self.assertIn(
+                self.client.calls - calls_before,
+                {2, 3, 4},
+                msg=(
+                    "only planner/Cypher calls (including their one allowed retry) "
+                    "may occur; there is no final-answer model call"
+                ),
             )
 
         for name, response in results.items():

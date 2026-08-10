@@ -219,6 +219,18 @@ class LocalQueryPlanner:
                     or not {"academic_year", "department_id"}.issubset(filters)
                 ):
                     raise QueryPlanError("COURSE_LIST requires year and department")
+                # A numeric Rule value is not a grounded semantic Claim without
+                # its operator, unit, type, and verified description.  Small
+                # models sometimes request only ``value``; expand the structural
+                # result contract here without adding any answer value or
+                # question-specific branch.
+                if isinstance(requested_fields, list) and "value" in requested_fields:
+                    requested_fields = list(
+                        dict.fromkeys(
+                            requested_fields
+                            + ["rule_type", "operator", "unit", "description_ko"]
+                        )
+                    )
                 plan_payload = {
                     "question": question.strip(),
                     "intent": payload.get("intent"),

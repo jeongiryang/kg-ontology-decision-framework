@@ -150,7 +150,7 @@ uv run python -m kg_builder.query_cli \
 
 현재 실제 구현은 `src/kg_builder/`의 `config.py`, `graph_bundle.py`, `neo4j_schema.py`, `neo4j_ingest.py`와 `query_*.py`에 있습니다. 위쪽 초기 디렉터리 설명의 0바이트 골격 모듈은 향후 구조 예시이며 구현 완료 상태를 뜻하지 않습니다.
 
-동적 Text-to-Cypher는 명세-derived LLM 스키마, 제한 문법 후보 검증, Neo4j `EXPLAIN`, Evidence provenance에 더해 provider-neutral 로컬 LLM planner·Cypher generator까지 연결되어 있습니다. 현재 실측 provider는 Ollama이고 OpenAI-compatible adapter로 SSH 터널 뒤 연구실 vLLM을 연결할 수 있습니다. 실행 시 명시적인 `NEO4J_QUERY_*`와 로컬 `KG_LLM_*` 설정이 필요하며 자연어 최종 답변 생성은 아직 포함하지 않습니다.
+동적 Text-to-Cypher는 명세-derived LLM 스키마, 제한 문법 후보 검증, Neo4j `EXPLAIN`, Evidence provenance에 더해 provider-neutral 로컬 LLM planner·Cypher generator까지 연결되어 있습니다. 현재 실측 provider는 Ollama이고 OpenAI-compatible adapter로 SSH 터널 뒤 연구실 vLLM을 연결할 수 있습니다. 실행 시 명시적인 `NEO4J_QUERY_*`와 로컬 `KG_LLM_*` 설정이 필요합니다.
 
 ```bash
 uv run python -m kg_builder.query.natural_language_cli \
@@ -159,14 +159,14 @@ uv run python -m kg_builder.query.natural_language_cli \
 
 안전 정책은 [Text-to-Cypher 안전 기반 문서](docs/text-to-cypher-safety.md), 모델·실행·실측 결과는 [로컬 LLM PoC 문서](docs/local-llm-query-pipeline.md)를 참고합니다.
 
-`ResultValidator`가 승인한 Fact와 Evidence를 최종 한국어 답변과 Citation JSON으로 조립하려면 다음 CLI를 사용합니다. 답변 모델은 본문과 사용 ID만 제안하며, 페이지와 Evidence 원문은 Python이 검증된 조회 결과에서 조립합니다.
+`ResultValidator`가 승인한 Fact와 Evidence를 구조화 Claim으로 변환한 뒤 최종 한국어 답변과 Citation JSON으로 조립하려면 다음 CLI를 사용합니다. 최종 사실 문장은 LLM이 작성하지 않으며, Python이 Claim의 값·단위·극성·직접 provenance를 검증하고 결정론적으로 렌더링합니다.
 
 ```bash
 uv run python -m kg_builder.answer.cli \
   "2026학년도 컴퓨터공학과 전공필수 과목을 알려줘"
 ```
 
-응답 상태, Citation 필드, 검증·재시도 정책은 [Evidence 기반 한국어 답변 계층 문서](docs/evidence-answer-renderer.md)를 참고합니다.
+응답 상태, Claim 유형, Citation 필드와 안전 실패 정책은 [Evidence 기반 한국어 답변 계층 문서](docs/evidence-answer-renderer.md)를 참고합니다.
 
 ### AI 시뮬레이션 로그
 

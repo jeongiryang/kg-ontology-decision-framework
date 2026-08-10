@@ -19,7 +19,6 @@ from kg_builder.query.query_explainer import QueryExplainer
 from kg_builder.query.safety_pipeline import SafetyPipeline
 from kg_builder.query.schema_selector import QuerySchemaSelector
 
-from .generator import EvidenceAnswerGenerator
 from .service import CurriculumChatService
 
 
@@ -51,11 +50,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 model=llm_settings.model,
                 generator_retries=llm_settings.max_retries,
             )
-            service = CurriculumChatService(
-                query_service,
-                EvidenceAnswerGenerator(client),
-                answer_retries=llm_settings.max_retries,
-            )
+            service = CurriculumChatService(query_service)
             result = service.ask(args.question)
         print(json.dumps(result.to_dict(), ensure_ascii=False, indent=2))
         return 0 if result.status.value in {"ANSWERABLE", "NOT_FOUND"} else 2

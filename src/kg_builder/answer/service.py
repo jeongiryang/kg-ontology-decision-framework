@@ -1,16 +1,16 @@
-"""Official chat composition root after the validated natural-language query layer."""
+"""Official deterministic chat composition root after verified query validation."""
 
 from __future__ import annotations
 
 from typing import Protocol
 
-from kg_builder.llm.client import LLMResponseError
 from kg_builder.query.natural_language_service import NaturalLanguageResult
 
-from .contracts import AnswerContractError, ChatResponse, ChatStatus
-from .generator import EvidenceAnswerGenerator
+from .claim_builder import ClaimBuilder
+from .claim_validator import ClaimValidator
+from .contracts import ChatResponse, ChatStatus, GroundingError
+from .korean_renderer import KoreanAnswerRenderer
 from .renderer import CitationRenderer
-from .validator import AnswerValidationError, AnswerValidator
 
 
 class QueryService(Protocol):
@@ -25,72 +25,50 @@ NON_ANSWERABLE_MESSAGES = {
     ChatStatus.NOT_FOUND: "현재 검증된 데이터에서 일치하는 결과를 찾지 못했습니다.",
     ChatStatus.SAFE_FAILURE: "안전한 답변을 생성하지 못했습니다.",
 }
-RETRYABLE_GENERATION_CODES = frozenset(
-    {
-        "ANSWER_DRAFT_INVALID",
-        "LLM_INVALID_JSON",
-        "LLM_JSON_OBJECT_REQUIRED",
-        "LLM_RESPONSE_MISSING",
-    }
-)
 
 
 class CurriculumChatService:
-    """Compose only ResultValidator-approved rows into a grounded Korean answer."""
+    """Render only ResultValidator-approved rows; no final answer LLM is used."""
 
     def __init__(
         self,
         query_service: QueryService,
-        answer_generator: EvidenceAnswerGenerator,
         *,
-        validator: AnswerValidator | None = None,
-        renderer: CitationRenderer | None = None,
-        answer_retries: int = 1,
+        claim_builder: ClaimBuilder | None = None,
+        claim_validator: ClaimValidator | None = None,
+        answer_renderer: KoreanAnswerRenderer | None = None,
+        citation_renderer: CitationRenderer | None = None,
     ):
-        if answer_retries not in {0, 1}:
-            raise ValueError("answer_retries must be 0 or 1")
         self.query_service = query_service
-        self.answer_generator = answer_generator
-        self.validator = validator or AnswerValidator()
-        self.renderer = renderer or CitationRenderer()
-        self.answer_retries = answer_retries
+        self.claim_builder = claim_builder or ClaimBuilder()
+        self.claim_validator = claim_validator or ClaimValidator()
+        self.answer_renderer = answer_renderer or KoreanAnswerRenderer()
+        self.citation_renderer = citation_renderer or CitationRenderer()
 
     def ask(self, question: str) -> ChatResponse:
         query_result = self.query_service.ask(question)
         if query_result.status != ChatStatus.ANSWERABLE.value:
             return self._deterministic(query_result)
-
-        previous_error: str | None = None
-        for attempt in range(self.answer_retries + 1):
-            try:
-                draft = self.answer_generator.generate(
-                    question,
-                    query_result.rows,
-                    previous_error_code=previous_error,
-                )
-                validated = self.validator.validate(
-                    draft, query_result.rows, question=question
-                )
-                return self.renderer.render(
-                    query_result.request_id, validated, query_result.rows
-                )
-            except (AnswerContractError, AnswerValidationError) as exc:
-                previous_error = exc.code
-                if attempt < self.answer_retries:
-                    continue
-                break
-            except LLMResponseError as exc:
-                previous_error = exc.code
-                if exc.code in RETRYABLE_GENERATION_CODES and attempt < self.answer_retries:
-                    continue
-                break
-            except Exception:
-                break
+        try:
+            claims = self.claim_builder.build(query_result.rows, query_result.query_plan)
+            claims = self.claim_validator.validate(claims, query_result.rows)
+            answer = self.answer_renderer.render(claims)
+            return self.citation_renderer.render(
+                query_result.request_id, answer, query_result.rows
+            )
+        except GroundingError as exc:
+            code = (
+                "ANSWER_RENDERING_UNSUPPORTED"
+                if exc.code in {"ANSWER_RENDERING_UNSUPPORTED", "ANSWER_CLAIM_TYPE_UNSUPPORTED"}
+                else "ANSWER_CLAIM_VALIDATION_FAILED"
+            )
+        except Exception:
+            code = "ANSWER_CLAIM_VALIDATION_FAILED"
         return ChatResponse(
             request_id=query_result.request_id,
             status=ChatStatus.SAFE_FAILURE,
             answer_text=NON_ANSWERABLE_MESSAGES[ChatStatus.SAFE_FAILURE],
-            error_code="ANSWER_VALIDATION_FAILED",
+            error_code=code,
         )
 
     @staticmethod
@@ -100,10 +78,10 @@ class CurriculumChatService:
         except ValueError:
             status = ChatStatus.SAFE_FAILURE
         if status is ChatStatus.ANSWERABLE:
-            raise AssertionError("ANSWERABLE must use the grounded answer path")
-        clarification = (
-            result.message if status is ChatStatus.CLARIFICATION_REQUIRED else None
-        )
+            raise AssertionError("ANSWERABLE must use the deterministic Claim path")
+        clarification = result.message if status is ChatStatus.CLARIFICATION_REQUIRED else None
+        if status is ChatStatus.CLARIFICATION_REQUIRED and not clarification:
+            clarification = "학년도, 학과 또는 학수번호를 추가로 알려 주세요."
         error_code = "QUERY_SAFE_FAILURE" if status is ChatStatus.SAFE_FAILURE else None
         return ChatResponse(
             request_id=result.request_id,

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from enum import StrEnum
-from typing import Any, Mapping
+from typing import Any
 
 
 class ChatStatus(StrEnum):
@@ -17,55 +17,84 @@ class ChatStatus(StrEnum):
     SAFE_FAILURE = "SAFE_FAILURE"
 
 
-class AnswerContractError(ValueError):
+class ClaimType(StrEnum):
+    FIELD_VALUE = "FIELD_VALUE"
+    NUMERIC_REQUIREMENT = "NUMERIC_REQUIREMENT"
+    BOOLEAN_POLICY = "BOOLEAN_POLICY"
+    VERIFIED_RULE_TEXT = "VERIFIED_RULE_TEXT"
+    COURSE_LIST = "COURSE_LIST"
+    AGGREGATE = "AGGREGATE"
+
+
+class ClaimPolarity(StrEnum):
+    POSITIVE = "POSITIVE"
+    NEGATIVE = "NEGATIVE"
+    EXEMPT = "EXEMPT"
+
+
+class GroundingError(ValueError):
     def __init__(self, code: str, message: str):
         super().__init__(message)
         self.code = code
 
 
+@dataclass(frozen=True, slots=True, order=True)
+class FactEvidenceLink:
+    fact_id: str
+    evidence_id: str
+
+
 @dataclass(frozen=True, slots=True)
-class AnswerDraft:
-    """The complete output surface granted to the answer-writing model."""
+class ClaimSubject:
+    entity_id: str
+    display_name: str
 
+
+@dataclass(frozen=True, slots=True)
+class CourseClaimItem:
+    fact_id: str
+    entity_id: str
+    display_name: str
+    course_code: str | None
+    credits: int | float | None
+
+
+@dataclass(frozen=True, slots=True)
+class GroundedClaim:
+    """A semantic assertion derived exclusively from ResultValidator-approved rows."""
+
+    claim_id: str
+    claim_type: ClaimType
+    provenance: tuple[FactEvidenceLink, ...]
+    field: str
+    value: Any
+    subject: ClaimSubject | None = None
+    unit: str | None = None
+    operator: str | None = None
+    polarity: ClaimPolarity = ClaimPolarity.POSITIVE
+    description_ko: str | None = None
+
+    @property
+    def fact_ids(self) -> tuple[str, ...]:
+        return tuple(sorted({link.fact_id for link in self.provenance}))
+
+    @property
+    def evidence_ids(self) -> tuple[str, ...]:
+        return tuple(sorted({link.evidence_id for link in self.provenance}))
+
+
+@dataclass(frozen=True, slots=True)
+class RenderedAnswer:
     answer_text: str
-    used_fact_ids: tuple[str, ...]
-    used_evidence_ids: tuple[str, ...]
+    claims: tuple[GroundedClaim, ...]
 
-    @classmethod
-    def from_payload(cls, payload: Mapping[str, Any]) -> "AnswerDraft":
-        if not isinstance(payload, Mapping):
-            raise AnswerContractError("ANSWER_DRAFT_INVALID", "answer draft must be an object")
-        expected = {"answer_text", "used_fact_ids", "used_evidence_ids"}
-        unknown = set(payload) - expected
-        missing = expected - set(payload)
-        if unknown or missing:
-            raise AnswerContractError(
-                "ANSWER_DRAFT_INVALID",
-                "answer draft fields do not match the restricted contract",
-            )
-        answer_text = payload["answer_text"]
-        if not isinstance(answer_text, str):
-            raise AnswerContractError("ANSWER_DRAFT_INVALID", "answer_text must be text")
-        fact_ids = cls._id_array(payload["used_fact_ids"], "used_fact_ids")
-        evidence_ids = cls._id_array(payload["used_evidence_ids"], "used_evidence_ids")
-        return cls(answer_text.strip(), fact_ids, evidence_ids)
+    @property
+    def used_fact_ids(self) -> tuple[str, ...]:
+        return tuple(sorted({item for claim in self.claims for item in claim.fact_ids}))
 
-    @staticmethod
-    def _id_array(value: Any, field_name: str) -> tuple[str, ...]:
-        if (
-            not isinstance(value, list)
-            or not value
-            or any(not isinstance(item, str) or not item.strip() for item in value)
-        ):
-            raise AnswerContractError(
-                "ANSWER_DRAFT_INVALID", f"{field_name} must be a non-empty string array"
-            )
-        normalized = tuple(item.strip() for item in value)
-        if len(set(normalized)) != len(normalized):
-            raise AnswerContractError(
-                "ANSWER_DRAFT_INVALID", f"{field_name} must not contain duplicates"
-            )
-        return normalized
+    @property
+    def used_evidence_ids(self) -> tuple[str, ...]:
+        return tuple(sorted({item for claim in self.claims for item in claim.evidence_ids}))
 
 
 @dataclass(frozen=True, slots=True)
@@ -98,14 +127,48 @@ class ChatResponse:
     used_evidence_ids: tuple[str, ...] = ()
     clarification: str | None = None
     error_code: str | None = None
+    # Claims remain an internal audit contract.  The stable UI JSON contract does not
+    # expose them; it exposes their IDs and server-assembled citations instead.
+    grounded_claims: tuple[GroundedClaim, ...] = ()
 
     def __post_init__(self) -> None:
-        if self.status is ChatStatus.ANSWERABLE and (
-            not self.answer_text.strip() or not self.citations
-        ):
-            raise ValueError("ANSWERABLE chat responses require text and citations")
-        if self.status is not ChatStatus.ANSWERABLE and self.citations:
-            raise ValueError("non-ANSWERABLE chat responses cannot contain citations")
+        if not self.request_id or not self.answer_text.strip():
+            raise ValueError("chat responses require request_id and safe answer_text")
+        if self.status is ChatStatus.ANSWERABLE:
+            if not (
+                self.citations
+                and self.used_fact_ids
+                and self.used_evidence_ids
+                and self.grounded_claims
+            ):
+                raise ValueError(
+                    "ANSWERABLE requires claims, citations, facts, and Evidence"
+                )
+            if self.clarification is not None or self.error_code is not None:
+                raise ValueError("ANSWERABLE cannot contain clarification or error_code")
+            claim_facts = {
+                item for claim in self.grounded_claims for item in claim.fact_ids
+            }
+            claim_evidence = {
+                item for claim in self.grounded_claims for item in claim.evidence_ids
+            }
+            if set(self.used_fact_ids) != claim_facts or set(self.used_evidence_ids) != claim_evidence:
+                raise ValueError("response IDs must equal grounded Claim provenance")
+            return
+        if self.citations or self.used_fact_ids or self.used_evidence_ids or self.grounded_claims:
+            raise ValueError("non-ANSWERABLE responses cannot contain grounded data")
+        if self.status is ChatStatus.CLARIFICATION_REQUIRED:
+            if not self.clarification or not self.clarification.strip():
+                raise ValueError("CLARIFICATION_REQUIRED requires clarification")
+            if self.error_code is not None:
+                raise ValueError("CLARIFICATION_REQUIRED cannot contain error_code")
+        elif self.clarification is not None:
+            raise ValueError("clarification is exclusive to CLARIFICATION_REQUIRED")
+        if self.status is ChatStatus.SAFE_FAILURE:
+            if not self.error_code:
+                raise ValueError("SAFE_FAILURE requires an internal error_code")
+        elif self.error_code is not None:
+            raise ValueError("error_code is exclusive to SAFE_FAILURE")
 
     def to_dict(self) -> dict[str, Any]:
         return {
