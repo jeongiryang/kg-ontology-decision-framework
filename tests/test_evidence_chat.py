@@ -9,6 +9,7 @@ from __future__ import annotations
 import json
 import unittest
 from pathlib import Path
+from contextlib import contextmanager
 from tempfile import TemporaryDirectory
 from unittest import mock
 
@@ -22,7 +23,7 @@ from kg_builder.query_contracts import (
 
 from evidence_chat import answer as answer_module
 from evidence_chat import pdf_evidence
-from evidence_chat.pipeline import ChatPipeline, StepStatus
+from evidence_chat.pipeline import STEP_SEQUENCE, ChatPipeline, StepStatus
 from evidence_chat.planner import (
     EXAMPLE_QUESTIONS,
     PlannerError,
@@ -34,6 +35,47 @@ from evidence_chat.planner import (
 SAMPLE_RAW_TEXT = (
     "기초교양 | 미래설계 | GEA8001 | 대학생활의설계 | 1학점 | 이론 1 | 실기 0"
 )
+
+
+@contextmanager
+def _pdf_env(path: str):
+    """발췌 PDF 경로를 바꿔 끼운다. 없는 경로를 주면 미탑재 상태가 된다."""
+    with mock.patch.dict("os.environ", {pdf_evidence.PDF_PATH_ENV: path}):
+        yield
+
+
+def _compose(intent: Intent, answerability: Answerability, answer: dict) -> dict:
+    """compose에 넘길 응답 봉투를 채워 준다."""
+    return answer_module.compose(
+        {
+            "intent": intent.value,
+            "answerability": answerability.value,
+            "answer": answer,
+            "scope": {},
+            "evidence": [],
+            "warnings": [],
+        }
+    )
+
+
+def _response(
+    intent: Intent,
+    answerability: Answerability,
+    answer: dict,
+    evidence: tuple = None,
+    warnings: tuple = (),
+) -> QueryResponse:
+    """QueryResponse를 키워드로 만든다. 필드 순서 변경에 흔들리지 않게 한다."""
+    if evidence is None:
+        evidence = (_evidence(),) if answerability is Answerability.ANSWERABLE else ()
+    return QueryResponse(
+        intent=intent,
+        answerability=answerability,
+        answer=answer,
+        scope={"academic_year": 2026},
+        evidence=evidence,
+        warnings=warnings,
+    )
 
 
 def _evidence(evidence_id: str = "evidence:test:1", page: int = 3) -> EvidenceDTO:
@@ -144,38 +186,27 @@ class RuleBasedPlannerTests(unittest.TestCase):
 
 class AnswerCompositionTests(unittest.TestCase):
     def test_credit_unit_is_localized(self):
-        composed = answer_module.compose(
-            {
-                "intent": Intent.GET_GENERAL_EDUCATION_MIN_CREDITS.value,
-                "answerability": Answerability.ANSWERABLE.value,
-                "answer": {"requirement": {"value": 34, "unit": "CREDIT", "rule_id": "r"}},
-                "scope": {},
-                "evidence": [],
-                "warnings": [],
-            }
+        composed = _compose(
+            Intent.GET_GENERAL_EDUCATION_MIN_CREDITS,
+            Answerability.ANSWERABLE,
+            {"requirement": {"value": 34, "unit": "CREDIT", "rule_id": "r"}},
         )
         self.assertIn("34학점", composed["headline"])
         self.assertTrue(composed["is_confirmed"])
 
     def test_unknown_unit_is_preserved(self):
-        composed = answer_module.compose(
-            {
-                "intent": Intent.GET_GENERAL_EDUCATION_MIN_CREDITS.value,
-                "answerability": Answerability.ANSWERABLE.value,
-                "answer": {"requirement": {"value": 3, "unit": "WEEK"}},
-                "scope": {},
-                "evidence": [],
-                "warnings": [],
-            }
+        composed = _compose(
+            Intent.GET_GENERAL_EDUCATION_MIN_CREDITS,
+            Answerability.ANSWERABLE,
+            {"requirement": {"value": 3, "unit": "WEEK"}},
         )
         self.assertIn("3WEEK", composed["headline"])
 
     def test_offering_headline_uses_korean_labels(self):
-        composed = answer_module.compose(
+        composed = _compose(
+            Intent.GET_COURSE_OFFERING,
+            Answerability.ANSWERABLE,
             {
-                "intent": Intent.GET_COURSE_OFFERING.value,
-                "answerability": Answerability.ANSWERABLE.value,
-                "answer": {
                     "course": {"course_code": "CDA0008", "course_name": "자료구조"},
                     "offerings": [
                         {
@@ -188,21 +219,16 @@ class AnswerCompositionTests(unittest.TestCase):
                         }
                     ],
                 },
-                "scope": {},
-                "evidence": [],
-                "warnings": [],
-            }
         )
         self.assertIn("2학년", composed["headline"])
         self.assertIn("1학기", composed["headline"])
         self.assertIn("전공선택", composed["details"][0])
 
     def test_empty_grade_year_is_not_invented(self):
-        composed = answer_module.compose(
+        composed = _compose(
+            Intent.GET_COURSE_OFFERING,
+            Answerability.ANSWERABLE,
             {
-                "intent": Intent.GET_COURSE_OFFERING.value,
-                "answerability": Answerability.ANSWERABLE.value,
-                "answer": {
                     "course": {"course_code": "GEA8001", "course_name": "대학생활의설계"},
                     "offerings": [
                         {
@@ -215,10 +241,6 @@ class AnswerCompositionTests(unittest.TestCase):
                         }
                     ],
                 },
-                "scope": {},
-                "evidence": [],
-                "warnings": [],
-            }
         )
         self.assertIn("개설 학년 미표기", composed["headline"])
 
@@ -321,22 +343,22 @@ class PdfEvidenceTests(unittest.TestCase):
         self.assertEqual(pdf_evidence.find_highlights("GEA8001", 99, self.pdf_path), [])
 
     def test_render_page_png_returns_png_bytes(self):
-        with mock.patch.dict("os.environ", {pdf_evidence.PDF_PATH_ENV: str(self.pdf_path)}):
+        with _pdf_env(str(self.pdf_path)):
             image = pdf_evidence.render_page_png(1)
         self.assertTrue(image.startswith(b"\x89PNG\r\n\x1a\n"))
 
     def test_render_page_png_raises_for_missing_pdf(self):
-        with mock.patch.dict("os.environ", {pdf_evidence.PDF_PATH_ENV: "/nonexistent.pdf"}):
+        with _pdf_env("/nonexistent.pdf"):
             with self.assertRaises(pdf_evidence.PdfEvidenceError):
                 pdf_evidence.render_page_png(1)
 
     def test_render_page_png_raises_for_out_of_range_page(self):
-        with mock.patch.dict("os.environ", {pdf_evidence.PDF_PATH_ENV: str(self.pdf_path)}):
+        with _pdf_env(str(self.pdf_path)):
             with self.assertRaises(pdf_evidence.PdfEvidenceError):
                 pdf_evidence.render_page_png(99)
 
     def test_build_evidence_pages_groups_only_referenced_pages(self):
-        with mock.patch.dict("os.environ", {pdf_evidence.PDF_PATH_ENV: str(self.pdf_path)}):
+        with _pdf_env(str(self.pdf_path)):
             pages = pdf_evidence.build_evidence_pages(
                 [
                     _evidence("e1", page=1).to_dict(),
@@ -349,7 +371,7 @@ class PdfEvidenceTests(unittest.TestCase):
         self.assertTrue(pages[0]["evidence"][0]["highlight_found"])
 
     def test_build_evidence_pages_without_pdf_keeps_text_only(self):
-        with mock.patch.dict("os.environ", {pdf_evidence.PDF_PATH_ENV: "/nonexistent.pdf"}):
+        with _pdf_env("/nonexistent.pdf"):
             pages = pdf_evidence.build_evidence_pages([_evidence(page=5).to_dict()])
         self.assertEqual(len(pages), 1)
         self.assertEqual(pages[0]["evidence"][0]["highlights"], [])
@@ -380,15 +402,9 @@ class PipelineTests(unittest.TestCase):
         return steps, result, errors
 
     def test_answerable_run_reports_every_step(self):
-        response = QueryResponse(
-            Intent.GET_GENERAL_EDUCATION_MIN_CREDITS,
-            Answerability.ANSWERABLE,
-            {"requirement": {"value": 34, "unit": "CREDIT", "rule_id": "r"}},
-            {"academic_year": 2026},
-            (_evidence(),),
-        )
+        response = _response(Intent.GET_GENERAL_EDUCATION_MIN_CREDITS, Answerability.ANSWERABLE, {"requirement": {"value": 34, "unit": "CREDIT", "rule_id": "r"}})
         pipeline = self._pipeline(FakeRunner(response=response))
-        with mock.patch.dict("os.environ", {pdf_evidence.PDF_PATH_ENV: "/nonexistent.pdf"}):
+        with _pdf_env("/nonexistent.pdf"):
             steps, result, errors = self._collect(pipeline.run("교양 최소 학점 알려줘"))
         self.assertEqual(errors, [])
         self.assertIsNotNone(result)
@@ -402,13 +418,7 @@ class PipelineTests(unittest.TestCase):
         self.assertEqual(len(result["evidence_pages"]), 1)
 
     def test_cypher_step_exposes_template_for_debugging(self):
-        response = QueryResponse(
-            Intent.GET_BALANCED_GENERAL_REQUIREMENT,
-            Answerability.ANSWERABLE,
-            {"requirements": [{"value": 12, "unit": "CREDIT"}]},
-            {"academic_year": 2026},
-            (_evidence(),),
-        )
+        response = _response(Intent.GET_BALANCED_GENERAL_REQUIREMENT, Answerability.ANSWERABLE, {"requirements": [{"value": 12, "unit": "CREDIT"}]})
         pipeline = self._pipeline(FakeRunner(response=response))
         cypher_events = [
             event
@@ -425,9 +435,19 @@ class PipelineTests(unittest.TestCase):
         self.assertIsNone(result)
         self.assertEqual(len(errors), 1)
         self.assertEqual(errors[0]["stage"], "plan")
-        self.assertEqual(steps["normalize"], "failed")
-        for step_id in ("plan", "contract", "cypher", "neo4j", "evidence", "pdf", "compose"):
+        # 정규화는 성공한다. 실패는 Intent를 고르는 단계에서 난다.
+        self.assertEqual(steps["normalize"], "done")
+        self.assertEqual(steps["plan"], "failed")
+        for step_id in ("contract", "cypher", "neo4j", "evidence", "pdf", "compose"):
             self.assertEqual(steps[step_id], "skipped")
+
+    def test_blank_question_fails_at_normalize_step(self):
+        pipeline = self._pipeline(FakeRunner())
+        steps, result, errors = self._collect(pipeline.run("   "))
+        self.assertIsNone(result)
+        self.assertEqual(errors[0]["stage"], "normalize")
+        self.assertEqual(steps["normalize"], "failed")
+        self.assertEqual(steps["plan"], "skipped")
 
     def test_neo4j_failure_is_reported_not_swallowed(self):
         pipeline = self._pipeline(FakeRunner(error=RuntimeError("boom")))
@@ -438,13 +458,12 @@ class PipelineTests(unittest.TestCase):
         self.assertEqual(steps["compose"], "skipped")
 
     def test_evidence_step_skipped_when_no_evidence(self):
-        response = QueryResponse(
+        response = _response(
             Intent.GET_COURSE_OFFERING,
             Answerability.NOT_FOUND,
             {},
-            {"academic_year": 2026},
-            (),
-            ("일치하는 VERIFIED 과목 편성이 없습니다.",),
+            evidence=(),
+            warnings=("일치하는 VERIFIED 과목 편성이 없습니다.",),
         )
         pipeline = self._pipeline(FakeRunner(response=response))
         steps, result, _ = self._collect(pipeline.run("자료구조 편성 알려줘"))
@@ -455,12 +474,10 @@ class PipelineTests(unittest.TestCase):
 
     def test_runner_receives_validated_request(self):
         runner = FakeRunner(
-            response=QueryResponse(
+            response=_response(
                 Intent.GET_MAJOR_REQUIRED_COURSES,
                 Answerability.ANSWERABLE,
                 {"courses": [], "course_count": 0, "total_credits": 0},
-                {"academic_year": 2026},
-                (_evidence(),),
             )
         )
         pipeline = self._pipeline(runner)
@@ -482,18 +499,18 @@ class ServerEndpointTests(unittest.TestCase):
         cls._TestClient = TestClient
 
     def _client(self):
+        """앱 인스턴스를 새로 만들어 상태가 테스트 간에 새지 않게 한다."""
         from evidence_chat import server
 
         # 연결 시도를 막아 Neo4j 없는 상태를 재현한다.
         patcher = mock.patch.object(
-            server.AppState,
+            server.ChatState,
             "open",
             lambda self: setattr(self, "error", "Neo4j 연결 실패: 테스트"),
         )
         patcher.start()
         self.addCleanup(patcher.stop)
-        server.state = server.AppState()
-        return self._TestClient(server.app)
+        return self._TestClient(server.create_app())
 
     def test_index_serves_three_screen_markup(self):
         with self._client() as client:
@@ -535,30 +552,30 @@ class ServerEndpointTests(unittest.TestCase):
         self.assertEqual(response.status_code, 413)
 
     def test_pdf_page_returns_404_without_pdf(self):
-        with mock.patch.dict("os.environ", {pdf_evidence.PDF_PATH_ENV: "/nonexistent.pdf"}):
+        with _pdf_env("/nonexistent.pdf"):
             with self._client() as client:
                 response = client.get("/api/pdf/page/1.png")
         self.assertEqual(response.status_code, 404)
         self.assertIn("error", response.json())
 
-    def test_ask_streams_steps_when_pipeline_available(self):
-        from evidence_chat import server
+    def test_app_state_is_per_instance(self):
+        """전역 상태를 쓰지 않으므로 두 앱 인스턴스가 서로 영향을 주지 않는다."""
+        with self._client() as first, self._client() as second:
+            first.app.state.chat.error = "첫 번째 앱만의 오류"
+            self.assertEqual(second.app.state.chat.error, "Neo4j 연결 실패: 테스트")
 
-        response = QueryResponse(
+    def test_ask_streams_steps_when_pipeline_available(self):
+        response = _response(
             Intent.GET_GENERAL_EDUCATION_MIN_CREDITS,
             Answerability.ANSWERABLE,
             {"requirement": {"value": 34, "unit": "CREDIT", "rule_id": "r"}},
-            {"academic_year": 2026},
-            (_evidence(),),
         )
         with self._client() as client:
-            server.state.pipeline = ChatPipeline(
+            client.app.state.chat.pipeline = ChatPipeline(
                 runner=FakeRunner(response=response),
                 planner=RuleBasedPlanner(course_lexicon={}),
             )
-            with mock.patch.dict(
-                "os.environ", {pdf_evidence.PDF_PATH_ENV: "/nonexistent.pdf"}
-            ):
+            with _pdf_env("/nonexistent.pdf"):
                 streamed = client.post("/api/ask", json={"question": "교양 최소 학점 알려줘"})
         self.assertEqual(streamed.status_code, 200)
         self.assertEqual(streamed.headers["content-type"].split(";")[0], "text/event-stream")
@@ -572,6 +589,83 @@ class ServerEndpointTests(unittest.TestCase):
         self.assertEqual(kinds[-1], "end")
         result = next(event for event in events if event["type"] == "result")
         self.assertIn("34학점", result["answer"]["headline"])
+
+
+class ContractDriftTests(unittest.TestCase):
+    """선언과 구현이 조용히 어긋나는 것을 막는 검사."""
+
+    def test_emitted_steps_match_declared_sequence(self):
+        """방출된 단계 순서가 STEP_SEQUENCE와 정확히 같아야 한다.
+
+        선언만 하고 실제로 수행하지 않는 단계, 또는 순서가 뒤바뀐 방출을 잡는다.
+        """
+        pipeline = ChatPipeline(
+            runner=FakeRunner(
+                response=_response(
+                    Intent.GET_GENERAL_EDUCATION_MIN_CREDITS,
+                    Answerability.ANSWERABLE,
+                    {"requirement": {"value": 34, "unit": "CREDIT", "rule_id": "r"}},
+                )
+            ),
+            planner=RuleBasedPlanner(course_lexicon={}),
+        )
+        with _pdf_env("/nonexistent.pdf"):
+            events = [
+                event
+                for event in pipeline.run("교양 최소 학점 알려줘")
+                if event["type"] == "step"
+            ]
+        declared = [step_id for step_id, _ in STEP_SEQUENCE]
+        self.assertEqual([event["step_id"] for event in events[::2]], declared)
+        # 각 단계는 RUNNING 다음에 종료 상태가 정확히 한 번 온다.
+        for start, end in zip(events[::2], events[1::2]):
+            with self.subTest(step=start["step_id"]):
+                self.assertEqual(start["status"], StepStatus.RUNNING.value)
+                self.assertEqual(end["step_id"], start["step_id"])
+                self.assertNotEqual(end["status"], StepStatus.RUNNING.value)
+        for event in events:
+            self.assertEqual(event["total"], len(declared))
+
+    def test_every_intent_has_a_builder_and_label(self):
+        """Intent가 늘어나면 요청 중이 아니라 여기서 먼저 실패해야 한다."""
+        self.assertEqual(set(answer_module._BUILDERS), set(Intent))
+        self.assertEqual(set(answer_module.INTENT_LABELS), set(Intent))
+        self.assertEqual(set(answer_module.ANSWERABILITY_LABELS), set(Answerability))
+
+    def test_display_labels_cover_ontology_vocabulary(self):
+        """화면 라벨 맵이 온톨로지 통제어휘를 빠짐없이 덮는지 확인한다.
+
+        라벨 문구는 명세 설명문과 의도적으로 다르므로 값을 비교하지 않고
+        키 집합만 검사한다. 어휘가 늘어나면 여기서 드러난다.
+        """
+        spec_path = pdf_evidence.bundle.ROOT / "ontology/ontology_spec.json"
+        if not spec_path.is_file():  # pragma: no cover
+            self.skipTest("온톨로지 명세를 찾을 수 없습니다.")
+        spec = json.loads(spec_path.read_text(encoding="utf-8"))
+        vocabularies = spec.get("controlled_vocabularies", {})
+        checks = {
+            "semester": answer_module.SEMESTER_LABELS,
+            "completion_type": answer_module.COMPLETION_TYPE_LABELS,
+        }
+        for name, labels in checks.items():
+            with self.subTest(vocabulary=name):
+                declared = {entry["value"] for entry in vocabularies[name]["values"]}
+                self.assertEqual(declared - set(labels), set())
+
+    def test_planner_default_scope_matches_query_service(self):
+        """플래너 기본 범위가 질의 계층이 강제하는 범위와 같아야 한다."""
+        from kg_builder.query_service import DEPARTMENT_ALIASES, SUPPORTED_YEAR
+
+        from evidence_chat import planner as planner_module
+
+        self.assertEqual(planner_module.DEFAULT_ACADEMIC_YEAR, SUPPORTED_YEAR)
+        self.assertIn(planner_module.DEFAULT_DEPARTMENT, DEPARTMENT_ALIASES)
+
+    def test_expected_pdf_hash_comes_from_verified_bundle(self):
+        """기준 해시를 코드에 복사하지 않고 bundle에서 읽는지 확인한다."""
+        document = pdf_evidence.bundle.source_document()
+        self.assertEqual(pdf_evidence.expected_sha256(), document.get("sha256"))
+        self.assertRegex(pdf_evidence.expected_sha256() or "", r"^[0-9a-f]{64}$")
 
 
 if __name__ == "__main__":

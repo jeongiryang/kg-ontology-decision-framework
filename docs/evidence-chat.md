@@ -41,8 +41,8 @@ uv run python -m evidence_chat.server --host 127.0.0.1 --port 8531
 |---|---|
 | 기본 경로 | `data/raw/2026_curriculum_excerpt.pdf` |
 | 경로 재지정 | `CURRICULUM_PDF_PATH` 환경변수 |
-| 기준 SHA-256 | `8ee5ee9d45fde0b00f8c42dc5aa513a46ec6a28bed4db50af25a049ae2dac004` |
-| 기준 페이지 수 | 19 |
+| 기준 SHA-256 | Verified bundle의 `metadata.source_document.sha256`에서 읽는다 |
+| 기준 페이지 수 | 실제 PDF에서 읽어 상태 응답에 담는다 |
 
 ```bash
 CURRICULUM_PDF_PATH=/path/to/2026_curriculum_excerpt.pdf uv run python -m evidence_chat.server
@@ -103,7 +103,7 @@ PDF는 `.gitignore`의 `*.pdf` 규칙으로 저장소에 커밋되지 않는다.
 | 컴퓨터공학과 전공필수 과목을 알려줘 | `GET_MAJOR_REQUIRED_COURSES` |
 | 자료구조의 이수구분은 뭐야? | `GET_COURSE_COMPLETION_TYPE` |
 
-여섯 유형에 해당하지 않으면 1단계에서 실패로 표시하고 지원 범위를 안내한다. 추측해서 다른 Intent로 보내지 않는다.
+여섯 유형에 해당하지 않으면 2단계(질의 계획 수립)에서 실패로 표시하고 지원 범위를 안내한다. 추측해서 다른 Intent로 보내지 않는다. 질문이 비어 있거나 300자를 넘으면 그보다 앞선 1단계(질문 정규화)에서 실패한다.
 
 ## 7. 질의 계획 수립 방식
 
@@ -152,6 +152,8 @@ Verified KG의 `Evidence.bbox`는 현재 511건 모두 null이다. 따라서 저
 4. 같은 줄의 사각형을 합쳐 박스 수를 줄이고, 페이지 크기로 나눠 0~1 값으로 정규화한다.
 5. 화면은 정규화된 값을 백분율 좌표로 바꿔 이미지 위에 겹친다.
 
+같은 질문의 근거가 여러 개여도 PDF는 한 번만 열고 페이지당 한 번만 가져온다. PDF 검사 결과는 경로와 파일의 mtime·크기로, 렌더 이미지는 경로·mtime·페이지·DPI로 캐시한다. 파일을 교체하면 캐시 키가 달라져 자동으로 다시 읽는다.
+
 찾지 못한 근거는 카드에 `페이지에서 위치를 찾지 못했습니다`로 표시한다. 조용히 빈 박스를 만들지 않는다.
 
 `Evidence.bbox`가 채워지면 이 검색 단계를 저장된 좌표로 대체할 수 있다.
@@ -174,3 +176,4 @@ Verified KG의 `Evidence.bbox`는 현재 511건 모두 null이다. 따라서 저
 | 7단계가 계속 `skipped` | PDF 경로와 `CURRICULUM_PDF_PATH`를 확인한다 |
 | 페이지 이미지는 나오는데 박스가 없음 | 원문 조각이 페이지 텍스트와 다른 경우다. 근거 카드의 안내 문구를 확인한다 |
 | 특정 단계에서 `failed` | 그 단계의 상세 줄에 원인이 그대로 표시된다 |
+| 기준 해시 경고가 계속 뜸 | 발췌 PDF를 다시 뜬 경우다. Verified bundle의 `metadata.source_document.sha256`을 갱신한다 |

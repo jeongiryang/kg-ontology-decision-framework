@@ -9,6 +9,9 @@
 
 임의 Cypher 입력 경로는 없다. 질문은 `evidence_chat.planner`가 지원 Intent로만 바꾼다.
 서버는 로컬 개발용이며 인증을 제공하지 않으므로 127.0.0.1에만 바인딩한다.
+
+앱 상태는 모듈 전역이 아니라 `app.state`에 둔다. 테스트가 전역을 덮어쓰면 이후
+테스트에 상태가 새기 때문이다. 핸들러는 `request.app.state`로 접근한다.
 """
 
 from __future__ import annotations
@@ -20,7 +23,7 @@ import os
 import queue
 import threading
 from pathlib import Path
-from typing import Any, AsyncIterator, Iterator
+from typing import Any, AsyncIterator
 
 import anyio
 
@@ -46,12 +49,11 @@ MAX_BODY_BYTES = 8 * 1024
 _SENTINEL = object()
 
 
-class AppState:
+class ChatState:
     """드라이버와 서비스를 앱 수명 동안 재사용한다."""
 
     def __init__(self) -> None:
         self.driver: Any | None = None
-        self.service: QueryService | None = None
         self.pipeline: ChatPipeline | None = None
         self.settings: Neo4jSettings | None = None
         self.error: str | None = None
@@ -71,8 +73,8 @@ class AppState:
             self.error = f"Neo4j 연결 실패: {type(exc).__name__}: {exc}"
             self.driver = None
             return
-        self.service = QueryService(Neo4jReadExecutor(self.driver, self.settings.database))
-        self.pipeline = ChatPipeline(runner=self.service, planner=RuleBasedPlanner())
+        service = QueryService(Neo4jReadExecutor(self.driver, self.settings.database))
+        self.pipeline = ChatPipeline(runner=service, planner=RuleBasedPlanner())
 
     def close(self) -> None:
         if self.driver is not None:
@@ -80,7 +82,8 @@ class AppState:
             self.driver = None
 
 
-state = AppState()
+def _state(request: Request) -> ChatState:
+    return request.app.state.chat
 
 
 async def index(request: Request) -> Response:
@@ -88,7 +91,9 @@ async def index(request: Request) -> Response:
 
 
 async def health(request: Request) -> Response:
-    source = pdf_evidence.inspect_pdf()
+    state = _state(request)
+    # inspect_pdf는 파일 읽기와 해시를 하므로 이벤트 루프에서 직접 돌리지 않는다.
+    source = await anyio.to_thread.run_sync(pdf_evidence.inspect_pdf)
     return JSONResponse(
         {
             "neo4j_connected": state.pipeline is not None,
@@ -116,18 +121,13 @@ async def ask(request: Request) -> Response:
     question = payload.get("question")
     if not isinstance(question, str) or not question.strip():
         return JSONResponse({"error": "question 필드가 필요합니다."}, status_code=400)
+    state = _state(request)
     if state.pipeline is None:
         return JSONResponse(
             {"error": state.error or "Neo4j에 연결되지 않았습니다."}, status_code=503
         )
 
     pipeline = state.pipeline
-
-    def produce() -> Iterator[dict[str, Any]]:
-        try:
-            yield from pipeline.run(question)
-        except Exception as exc:  # 예기치 못한 오류도 화면에 남긴다.
-            yield {"type": "error", "stage": "server", "message": f"{type(exc).__name__}: {exc}"}
 
     async def stream() -> AsyncIterator[bytes]:
         # 파이프라인은 동기 Neo4j 드라이버를 쓰므로 워커 스레드에서 돌리고
@@ -137,12 +137,20 @@ async def ask(request: Request) -> Response:
 
         def worker() -> None:
             try:
-                for item in produce():
+                for item in pipeline.run(question):
                     bucket.put(item)
+            except Exception as exc:  # 예기치 못한 오류도 화면에 남긴다.
+                bucket.put(
+                    {
+                        "type": "error",
+                        "stage": "server",
+                        "message": f"{type(exc).__name__}: {exc}",
+                    }
+                )
             finally:
                 bucket.put(_SENTINEL)
 
-        threading.Thread(target=worker, name="chatbot-pipeline", daemon=True).start()
+        threading.Thread(target=worker, name="evidence-chat-pipeline", daemon=True).start()
         while True:
             item = await anyio.to_thread.run_sync(bucket.get)
             if item is _SENTINEL:
@@ -158,10 +166,8 @@ async def ask(request: Request) -> Response:
 
 
 async def pdf_page(request: Request) -> Response:
-    try:
-        page_number = int(request.path_params["page"])
-    except (KeyError, TypeError, ValueError):
-        return JSONResponse({"error": "페이지 번호가 올바르지 않습니다."}, status_code=400)
+    # 경로 변환기가 `{page:int}`라 여기 오는 값은 이미 정수다.
+    page_number = request.path_params["page"]
     try:
         image = await anyio.to_thread.run_sync(pdf_evidence.render_page_png, page_number)
     except pdf_evidence.PdfEvidenceError as exc:
@@ -174,14 +180,16 @@ async def pdf_page(request: Request) -> Response:
 
 
 @contextlib.asynccontextmanager
-async def lifespan(_: Starlette) -> AsyncIterator[None]:
+async def lifespan(app: Starlette) -> AsyncIterator[None]:
+    state = ChatState()
+    app.state.chat = state
     await anyio.to_thread.run_sync(state.open)
     if state.error:
         print(f"[evidence-chat] {state.error}")
     else:
         endpoint = state.settings.endpoint if state.settings else "?"
         print(f"[evidence-chat] Neo4j 연결됨: {endpoint}")
-    source = pdf_evidence.inspect_pdf()
+    source = await anyio.to_thread.run_sync(pdf_evidence.inspect_pdf)
     print(
         f"[evidence-chat] PDF: {'탑재됨' if source.available else '없음'} · {source.path}"
         + (f" · {source.reason}" if source.reason else "")
@@ -192,20 +200,25 @@ async def lifespan(_: Starlette) -> AsyncIterator[None]:
         state.close()
 
 
-app = Starlette(
-    routes=[
-        Route("/", index),
-        Route("/api/health", health),
-        Route("/api/ask", ask, methods=["POST"]),
-        Route("/api/pdf/page/{page:int}.png", pdf_page),
-        Mount("/static", app=StaticFiles(directory=STATIC_DIR), name="static"),
-    ],
-    lifespan=lifespan,
-)
+def create_app() -> Starlette:
+    """앱 인스턴스를 만든다. 상태는 `app.state.chat`에 붙는다."""
+    return Starlette(
+        routes=[
+            Route("/", index),
+            Route("/api/health", health),
+            Route("/api/ask", ask, methods=["POST"]),
+            Route("/api/pdf/page/{page:int}.png", pdf_page),
+            Mount("/static", app=StaticFiles(directory=STATIC_DIR), name="static"),
+        ],
+        lifespan=lifespan,
+    )
+
+
+app = create_app()
 
 
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description="Verified KG 챗봇 화면 실행")
+    parser = argparse.ArgumentParser(description="Verified KG 근거 챗봇 화면 실행")
     parser.add_argument("--host", default=os.getenv("CHATBOT_HOST", DEFAULT_HOST))
     parser.add_argument(
         "--port", type=int, default=int(os.getenv("CHATBOT_PORT", str(DEFAULT_PORT)))

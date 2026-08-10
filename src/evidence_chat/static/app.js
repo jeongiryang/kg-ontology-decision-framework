@@ -5,6 +5,28 @@
 
 const $ = (id) => document.getElementById(id);
 const STEP_ICON = { running: "", done: "✓", skipped: "–", failed: "!" };
+const SCREEN_ORDER = ["ask", "progress", "answer"];
+
+/* 반복되는 DOM 생성을 한곳에 모은다. */
+const span = (className, text) => {
+  const node = document.createElement("span");
+  if (className) node.className = className;
+  node.textContent = text;
+  return node;
+};
+const fillList = (node, lines) => {
+  node.replaceChildren();
+  (lines || []).forEach((line) => {
+    const li = document.createElement("li");
+    li.textContent = line;
+    node.append(li);
+  });
+};
+const appendPre = (parent, text) => {
+  const pre = document.createElement("pre");
+  pre.textContent = text;
+  parent.append(pre);
+};
 
 const el = {
   status: $("status"),
@@ -48,10 +70,9 @@ function showScreen(name) {
   Object.entries(el.screens).forEach(([key, node]) =>
     node.classList.toggle("is-active", key === name)
   );
-  const order = ["ask", "progress", "answer"];
-  const current = order.indexOf(name);
+  const current = SCREEN_ORDER.indexOf(name);
   el.stages.forEach((li) => {
-    const index = order.indexOf(li.dataset.stage);
+    const index = SCREEN_ORDER.indexOf(li.dataset.stage);
     li.classList.toggle("is-current", index === current);
     li.classList.toggle("is-done", index < current);
   });
@@ -140,17 +161,11 @@ el.answerAgain.addEventListener("click", () => {
 /* ---------- 단계 렌더링 ---------- */
 function stepNode(event) {
   const li = document.createElement("li");
-  li.className = "step";
   li.dataset.stepId = event.step_id;
-  li.append(document.createElement("div"));
-  li.firstChild.className = "step-row";
-  const icon = document.createElement("span");
-  icon.className = "step-icon";
-  const label = document.createElement("span");
-  label.className = "step-label";
-  const time = document.createElement("span");
-  time.className = "step-time";
-  li.firstChild.append(icon, label, time);
+  const row = document.createElement("div");
+  row.className = "step-row";
+  row.append(span("step-icon", ""), span("step-label", ""), span("step-time", ""));
+  li.append(row);
   return li;
 }
 
@@ -170,22 +185,14 @@ function renderStep(list, event) {
   if (event.detail && event.detail.length) {
     const ul = document.createElement("ul");
     ul.className = "step-detail";
-    event.detail.forEach((line) => {
-      const item = document.createElement("li");
-      item.textContent = line;
-      ul.append(item);
-    });
+    fillList(ul, event.detail);
     li.append(ul);
   }
   if (event.data && typeof event.data.cypher === "string") {
-    const pre = document.createElement("pre");
-    pre.textContent = event.data.cypher;
-    li.append(pre);
+    appendPre(li, event.data.cypher);
   }
   if (event.data && event.data.parameters) {
-    const pre = document.createElement("pre");
-    pre.textContent = JSON.stringify(event.data.parameters, null, 2);
-    li.append(pre);
+    appendPre(li, JSON.stringify(event.data.parameters, null, 2));
   }
 }
 
@@ -271,19 +278,8 @@ function renderAnswer(result, events) {
   el.answerIntent.textContent = `${answer.intent_label} · ${answer.intent}`;
   el.answerTitle.textContent = answer.headline;
 
-  el.answerDetails.replaceChildren();
-  (answer.details || []).forEach((line) => {
-    const li = document.createElement("li");
-    li.textContent = line;
-    el.answerDetails.append(li);
-  });
-
-  el.answerWarnings.replaceChildren();
-  (answer.warnings || []).forEach((line) => {
-    const li = document.createElement("li");
-    li.textContent = line;
-    el.answerWarnings.append(li);
-  });
+  fillList(el.answerDetails, answer.details);
+  fillList(el.answerWarnings, answer.warnings);
 
   el.answerSteps.replaceChildren();
   events.forEach((event) => renderStep(el.answerSteps, event));
@@ -317,16 +313,14 @@ function pageCard(page, pdf) {
 
   const head = document.createElement("div");
   head.className = "page-head";
-  const no = document.createElement("span");
-  no.className = "page-no";
-  no.textContent = `발췌 p.${page.excerpt_page}`;
-  const sub = document.createElement("span");
-  sub.className = "page-sub";
-  sub.textContent = `인쇄 p.${page.printed_page} · 원본 규정집 p.${page.source_pdf_page}`;
-  const count = document.createElement("span");
-  count.className = "page-count";
-  count.textContent = `근거 ${page.evidence.length}건`;
-  head.append(no, sub, count);
+  head.append(
+    span("page-no", `발췌 p.${page.excerpt_page}`),
+    span(
+      "page-sub",
+      `인쇄 p.${page.printed_page} · 원본 규정집 p.${page.source_pdf_page}`
+    ),
+    span("page-count", `근거 ${page.evidence.length}건`)
+  );
 
   const body = document.createElement("div");
   body.className = "page-body";
@@ -373,18 +367,13 @@ function pageCard(page, pdf) {
     text.textContent = item.source_text;
     const meta = document.createElement("p");
     meta.className = "quote-meta";
-    const idSpan = document.createElement("span");
-    idSpan.textContent = `p.${page.excerpt_page} 근거 ${index + 1}`;
-    meta.append(idSpan);
+    meta.append(span("", `p.${page.excerpt_page} 근거 ${index + 1}`));
     if (pdf && pdf.available) {
-      const hlSpan = document.createElement("span");
-      if (item.highlight_found) {
-        hlSpan.textContent = `강조 ${item.highlights.length}곳`;
-      } else {
-        hlSpan.className = "no-hl";
-        hlSpan.textContent = "페이지에서 위치를 찾지 못했습니다";
-      }
-      meta.append(hlSpan);
+      meta.append(
+        item.highlight_found
+          ? span("", `강조 ${item.highlights.length}곳`)
+          : span("no-hl", "페이지에서 위치를 찾지 못했습니다")
+      );
     }
     quote.append(text, meta);
 

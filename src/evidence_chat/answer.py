@@ -77,18 +77,10 @@ def compose(response: dict[str, Any]) -> dict[str, Any]:
     intent = Intent(response["intent"])
     answerability = Answerability(response["answerability"])
     answer = response.get("answer") or {}
-    builders = {
-        Intent.GET_GENERAL_EDUCATION_MIN_CREDITS: _general_min_credits,
-        Intent.GET_BALANCED_GENERAL_REQUIREMENT: _balanced_general,
-        Intent.GET_TRANSFER_GENERAL_EXEMPTION: _transfer_exemption,
-        Intent.GET_COURSE_OFFERING: _course_offering,
-        Intent.GET_MAJOR_REQUIRED_COURSES: _major_required,
-        Intent.GET_COURSE_COMPLETION_TYPE: _course_completion_type,
-    }
     if answerability is Answerability.ANSWERABLE:
-        headline, details = builders[intent](answer)
+        headline, details = _BUILDERS[intent](answer)
     else:
-        headline, details = _non_answerable(intent, answerability, answer)
+        headline, details = _non_answerable(answerability, answer)
     return {
         "intent": intent.value,
         "intent_label": INTENT_LABELS[intent],
@@ -102,16 +94,29 @@ def compose(response: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _rule_details(rule: dict[str, Any]) -> list[str]:
+    """규칙 설명과 규칙 ID를 상세 줄로 만든다."""
+    details: list[str] = []
+    if rule.get("description_ko"):
+        details.append(rule["description_ko"])
+    if rule.get("rule_id"):
+        details.append(f"규칙 ID: {rule['rule_id']}")
+    return details
+
+
+def _first_grade_year(row: dict[str, Any]) -> int:
+    """정렬용 개설 학년. 미표기는 마지막으로 보낸다."""
+    value = row.get("grade_year")
+    if isinstance(value, list):
+        return value[0] if value else 99
+    return value if isinstance(value, int) else 99
+
+
 def _general_min_credits(answer: dict[str, Any]) -> tuple[str, list[str]]:
     requirement = answer.get("requirement") or {}
     value = requirement.get("value")
     headline = f"교양은 최소 {value}{_unit(requirement.get('unit'))}을 이수해야 합니다."
-    details = []
-    if requirement.get("description_ko"):
-        details.append(requirement["description_ko"])
-    if requirement.get("rule_id"):
-        details.append(f"규칙 ID: {requirement['rule_id']}")
-    return headline, details
+    return headline, _rule_details(requirement)
 
 
 def _balanced_general(answer: dict[str, Any]) -> tuple[str, list[str]]:
@@ -143,12 +148,7 @@ def _transfer_exemption(answer: dict[str, Any]) -> tuple[str, list[str]]:
         if exempt
         else "편입생 교양 면제 규칙을 확인했습니다."
     )
-    details = []
-    if rule.get("description_ko"):
-        details.append(rule["description_ko"])
-    if rule.get("rule_id"):
-        details.append(f"규칙 ID: {rule['rule_id']}")
-    return headline, details
+    return headline, _rule_details(rule)
 
 
 def _course_offering(answer: dict[str, Any]) -> tuple[str, list[str]]:
@@ -187,9 +187,7 @@ def _major_required(answer: dict[str, Any]) -> tuple[str, list[str]]:
         for item in sorted(
             courses,
             key=lambda row: (
-                (row.get("grade_year") or [99])[0]
-                if isinstance(row.get("grade_year"), list)
-                else (row.get("grade_year") or 99),
+                _first_grade_year(row),
                 str(row.get("semester")),
                 str(row.get("course_code")),
             ),
@@ -209,7 +207,7 @@ def _course_completion_type(answer: dict[str, Any]) -> tuple[str, list[str]]:
 
 
 def _non_answerable(
-    intent: Intent, answerability: Answerability, answer: dict[str, Any]
+    answerability: Answerability, answer: dict[str, Any]
 ) -> tuple[str, list[str]]:
     candidates = answer.get("candidates") or []
     if answerability is Answerability.CLARIFICATION_REQUIRED:
@@ -228,3 +226,28 @@ def _non_answerable(
     if answerability is Answerability.OUT_OF_SCOPE:
         return "현재 지원 범위를 벗어난 질문입니다.", []
     return "Verified KG에서 해당 사실을 찾지 못했습니다.", []
+
+
+_BUILDERS: dict[Intent, Any] = {
+    Intent.GET_GENERAL_EDUCATION_MIN_CREDITS: _general_min_credits,
+    Intent.GET_BALANCED_GENERAL_REQUIREMENT: _balanced_general,
+    Intent.GET_TRANSFER_GENERAL_EXEMPTION: _transfer_exemption,
+    Intent.GET_COURSE_OFFERING: _course_offering,
+    Intent.GET_MAJOR_REQUIRED_COURSES: _major_required,
+    Intent.GET_COURSE_COMPLETION_TYPE: _course_completion_type,
+}
+
+# Intent가 늘어나면 요청 처리 중이 아니라 임포트 시점에 실패해야 한다.
+# `kg_builder.cypher_queries`가 템플릿 registry를 자기검사하는 것과 같은 이유다.
+_MISSING_INTENTS = set(Intent) - set(_BUILDERS)
+if _MISSING_INTENTS:  # pragma: no cover - Intent 추가 시에만 발생
+    raise RuntimeError(
+        "답변 구성기가 없는 Intent가 있습니다: "
+        + ", ".join(sorted(intent.value for intent in _MISSING_INTENTS))
+    )
+_MISSING_LABELS = set(Intent) - set(INTENT_LABELS)
+if _MISSING_LABELS:  # pragma: no cover - Intent 추가 시에만 발생
+    raise RuntimeError(
+        "Intent 라벨이 없습니다: "
+        + ", ".join(sorted(intent.value for intent in _MISSING_LABELS))
+    )

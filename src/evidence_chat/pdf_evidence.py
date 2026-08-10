@@ -6,6 +6,9 @@ Verified KG의 `Evidence.bbox`는 현재 전건 null이므로 좌표를 저장�
 
 PDF 원본이 없으면 예외를 던지지 않고 `available=False` 상태를 돌려준다. 화면은
 Evidence 원문 텍스트와 페이지 번호만으로 동작한다.
+
+기준 해시와 페이지 수는 코드에 적지 않고 Verified bundle의
+`metadata.source_document`에서 읽는다. 발췌 PDF를 다시 뜨면 bundle만 갱신하면 된다.
 """
 
 from __future__ import annotations
@@ -18,14 +21,11 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Any, Iterable, Sequence
 
+from . import bundle
 
-ROOT = Path(__file__).resolve().parents[2]
-DEFAULT_PDF_PATH = ROOT / "data/raw/2026_curriculum_excerpt.pdf"
+
+DEFAULT_PDF_PATH = bundle.ROOT / "data/raw/2026_curriculum_excerpt.pdf"
 PDF_PATH_ENV = "CURRICULUM_PDF_PATH"
-
-# data/verified/2026 README와 Document 노드에 기록된 발췌 PDF 해시.
-EXPECTED_SHA256 = "8ee5ee9d45fde0b00f8c42dc5aa513a46ec6a28bed4db50af25a049ae2dac004"
-EXPECTED_PAGE_COUNT = 19
 
 RENDER_DPI = 144
 MIN_NEEDLE_LENGTH = 2
@@ -36,6 +36,12 @@ _LABEL_PREFIX = re.compile(r"^(?:이론|실기|개설학기|핵심역량|관련�
 
 class PdfEvidenceError(RuntimeError):
     """PDF를 읽을 수 있지만 요청한 페이지를 처리할 수 없을 때 발생한다."""
+
+
+def expected_sha256() -> str | None:
+    """Verified bundle이 기록한 발췌 PDF의 기준 해시."""
+    value = bundle.source_document().get("sha256")
+    return value if isinstance(value, str) else None
 
 
 @dataclass(frozen=True, slots=True)
@@ -69,7 +75,7 @@ class PdfSource:
             "page_count": self.page_count,
             "sha256": self.sha256,
             "sha256_matches": self.sha256_matches,
-            "expected_sha256": EXPECTED_SHA256,
+            "expected_sha256": expected_sha256(),
             "reason": self.reason,
         }
 
@@ -87,18 +93,10 @@ def _sha256(path: Path) -> str:
     return digest.hexdigest()
 
 
-def inspect_pdf(path: Path | None = None) -> PdfSource:
-    """PDF 탑재 여부, 페이지 수와 해시 일치를 확인한다."""
-    target = path or resolve_pdf_path()
-    if not target.is_file():
-        return PdfSource(
-            path=target,
-            available=False,
-            reason=(
-                f"발췌 PDF가 없습니다. {target} 위치에 두거나 "
-                f"{PDF_PATH_ENV} 환경변수로 경로를 지정하세요."
-            ),
-        )
+@lru_cache(maxsize=8)
+def _inspect_existing(path_key: str, mtime_ns: int, size: int) -> PdfSource:
+    """실제로 존재하는 PDF를 검사한다. 파일이 바뀌면 캐시 키가 달라진다."""
+    target = Path(path_key)
     try:
         import pymupdf
     except ImportError:  # pragma: no cover - 의존성 누락 환경
@@ -109,18 +107,42 @@ def inspect_pdf(path: Path | None = None) -> PdfSource:
     except Exception as exc:  # pymupdf는 구체 예외 타입을 보장하지 않는다.
         return PdfSource(path=target, available=False, reason=f"PDF를 열 수 없습니다: {exc}")
     digest = _sha256(target)
+    expected = expected_sha256()
+    matches = expected is not None and digest == expected
     return PdfSource(
         path=target,
         available=True,
         page_count=page_count,
         sha256=digest,
-        sha256_matches=digest == EXPECTED_SHA256,
+        sha256_matches=matches,
         reason=(
             None
-            if digest == EXPECTED_SHA256
+            if matches
             else "PDF 해시가 Verified 기준과 다릅니다. 근거 위치가 어긋날 수 있습니다."
         ),
     )
+
+
+def inspect_pdf(path: Path | None = None) -> PdfSource:
+    """PDF 탑재 여부, 페이지 수와 해시 일치를 확인한다.
+
+    검사 결과는 경로와 파일의 mtime·크기로 캐시한다. 같은 질문 한 건에서 근거마다
+    전체 파일을 다시 해싱하지 않기 위한 것이다. 파일이 없을 때는 캐시하지 않는다.
+    나중에 PDF를 갖다 놓으면 재시작 없이 인식돼야 한다.
+    """
+    target = path or resolve_pdf_path()
+    try:
+        stat = target.stat()
+    except OSError:
+        return PdfSource(
+            path=target,
+            available=False,
+            reason=(
+                f"발췌 PDF가 없습니다. {target} 위치에 두거나 "
+                f"{PDF_PATH_ENV} 환경변수로 경로를 지정하세요."
+            ),
+        )
+    return _inspect_existing(str(target), stat.st_mtime_ns, stat.st_size)
 
 
 def needles_from_raw_text(raw_text: str) -> list[str]:
@@ -149,9 +171,10 @@ def _merge_rects(rects: Sequence[Any], tolerance: float = 2.0) -> list[Any]:
     """같은 줄에 있는 사각형을 하나로 합쳐 박스 개수를 줄인다."""
     import pymupdf
 
-    remaining = [pymupdf.Rect(rect) for rect in rects]
     merged: list[Any] = []
-    for rect in sorted(remaining, key=lambda item: (round(item.y0, 1), item.x0)):
+    for rect in sorted(
+        (pymupdf.Rect(item) for item in rects), key=lambda item: (round(item.y0, 1), item.x0)
+    ):
         for index, existing in enumerate(merged):
             same_line = abs(existing.y0 - rect.y0) <= tolerance and abs(
                 existing.y1 - rect.y1
@@ -164,13 +187,28 @@ def _merge_rects(rects: Sequence[Any], tolerance: float = 2.0) -> list[Any]:
     return merged
 
 
-@lru_cache(maxsize=32)
-def _page_geometry(path_key: str, mtime: float, page_index: int) -> tuple[float, float]:
-    import pymupdf
-
-    with pymupdf.open(path_key) as document:
-        page = document[page_index]
-        return page.rect.width, page.rect.height
+def _highlights_on_page(page: Any, raw_text: str) -> list[Highlight]:
+    """이미 열려 있는 페이지에서 원문 조각을 찾아 정규화한다."""
+    width = page.rect.width or 1.0
+    height = page.rect.height or 1.0
+    found: list[Any] = []
+    for needle in needles_from_raw_text(raw_text):
+        try:
+            hits = page.search_for(needle, quads=False)
+        except Exception:  # 검색 실패는 강조 없음으로 처리한다.
+            continue
+        found.extend(hits)
+        if len(found) >= MAX_RECTS_PER_EVIDENCE:
+            break
+    return [
+        Highlight(
+            x=max(rect.x0, 0.0) / width,
+            y=max(rect.y0, 0.0) / height,
+            width=min(rect.width, width) / width,
+            height=min(rect.height, height) / height,
+        )
+        for rect in _merge_rects(found[:MAX_RECTS_PER_EVIDENCE])
+    ]
 
 
 def find_highlights(
@@ -178,43 +216,29 @@ def find_highlights(
 ) -> list[Highlight]:
     """1-based 페이지에서 Evidence 원문 조각의 위치를 찾아 정규화해 돌려준다."""
     source = inspect_pdf(path)
-    if not source.available:
-        return []
     page_index = page_number - 1
-    if not 0 <= page_index < source.page_count:
+    if not source.available or not 0 <= page_index < source.page_count:
         return []
 
     import pymupdf
 
     with pymupdf.open(source.path) as document:
-        page = document[page_index]
-        width = page.rect.width or 1.0
-        height = page.rect.height or 1.0
-        found: list[Any] = []
-        for needle in needles_from_raw_text(raw_text):
-            try:
-                hits = page.search_for(needle, quads=False)
-            except Exception:  # 검색 실패는 강조 없음으로 처리한다.
-                continue
-            if hits:
-                found.extend(hits)
-            if len(found) >= MAX_RECTS_PER_EVIDENCE:
-                break
-        if not found:
-            return []
-        return [
-            Highlight(
-                x=max(rect.x0, 0.0) / width,
-                y=max(rect.y0, 0.0) / height,
-                width=min(rect.width, width) / width,
-                height=min(rect.height, height) / height,
-            )
-            for rect in _merge_rects(found[:MAX_RECTS_PER_EVIDENCE])
-        ]
+        return _highlights_on_page(document[page_index], raw_text)
+
+
+@lru_cache(maxsize=32)
+def _render_cached(path_key: str, mtime_ns: int, page_index: int, dpi: int) -> bytes:
+    import pymupdf
+
+    with pymupdf.open(path_key) as document:
+        return document[page_index].get_pixmap(dpi=dpi).tobytes("png")
 
 
 def render_page_png(page_number: int, path: Path | None = None, dpi: int = RENDER_DPI) -> bytes:
-    """1-based 페이지를 PNG 바이트로 렌더링한다."""
+    """1-based 페이지를 PNG 바이트로 렌더링한다.
+
+    PDF와 DPI가 같으면 결과가 항상 같으므로 렌더 결과를 캐시한다.
+    """
     source = inspect_pdf(path)
     if not source.available:
         raise PdfEvidenceError(source.reason or "PDF를 사용할 수 없습니다.")
@@ -223,21 +247,19 @@ def render_page_png(page_number: int, path: Path | None = None, dpi: int = RENDE
         raise PdfEvidenceError(
             f"페이지 범위를 벗어났습니다: {page_number} (1~{source.page_count})"
         )
-
-    import pymupdf
-
-    with pymupdf.open(source.path) as document:
-        pixmap = document[page_index].get_pixmap(dpi=dpi)
-        return pixmap.tobytes("png")
+    return _render_cached(
+        str(source.path), source.path.stat().st_mtime_ns, page_index, dpi
+    )
 
 
-def build_evidence_pages(evidence: Iterable[dict[str, Any]]) -> list[dict[str, Any]]:
+def build_evidence_pages(
+    evidence: Iterable[dict[str, Any]], path: Path | None = None
+) -> list[dict[str, Any]]:
     """Evidence 목록을 참조 페이지 단위로 묶고 강조 영역을 계산한다.
 
     참조하지 않는 페이지는 포함하지 않는다. 각 페이지에는 그 페이지를 근거로 쓰는
-    Evidence만 담긴다.
+    Evidence만 담긴다. 강조 계산은 PDF를 한 번만 열고 페이지당 한 번만 가져온다.
     """
-    source = inspect_pdf()
     grouped: dict[int, dict[str, Any]] = {}
     for item in evidence:
         page_number = item.get("excerpt_page")
@@ -252,19 +274,32 @@ def build_evidence_pages(evidence: Iterable[dict[str, Any]]) -> list[dict[str, A
                 "evidence": [],
             },
         )
-        highlights = (
-            find_highlights(item.get("source_text", ""), page_number)
-            if source.available
-            else []
-        )
         bucket["evidence"].append(
             {
                 "evidence_id": item.get("evidence_id"),
                 "source_text": item.get("source_text", ""),
                 "printed_page": item.get("printed_page"),
                 "source_pdf_page": item.get("source_pdf_page"),
-                "highlights": [highlight.to_dict() for highlight in highlights],
-                "highlight_found": bool(highlights),
+                "highlights": [],
+                "highlight_found": False,
             }
         )
-    return [grouped[key] for key in sorted(grouped)]
+
+    pages = [grouped[key] for key in sorted(grouped)]
+    source = inspect_pdf(path)
+    if not source.available:
+        return pages
+
+    import pymupdf
+
+    with pymupdf.open(source.path) as document:
+        for bucket in pages:
+            page_index = bucket["excerpt_page"] - 1
+            if not 0 <= page_index < source.page_count:
+                continue
+            page = document[page_index]
+            for entry in bucket["evidence"]:
+                highlights = _highlights_on_page(page, entry["source_text"])
+                entry["highlights"] = [item.to_dict() for item in highlights]
+                entry["highlight_found"] = bool(highlights)
+    return pages

@@ -68,6 +68,7 @@ name = "kg-ontology-decision-framework"
 version = "0.1.0"
 source = { editable = "." }
 dependencies = [
+    { name = "anyio" },
     { name = "neo4j" },
     { name = "pymupdf" },
     { name = "python-dotenv" },
@@ -82,6 +83,7 @@ dev = [
 
 [package.metadata]
 requires-dist = [
+    { name = "anyio", specifier = ">=4.14.2" },
     { name = "neo4j", specifier = ">=6.2.0" },
     { name = "pymupdf", specifier = ">=1.28.2" },
     { name = "python-dotenv", specifier = ">=1.2.2" },

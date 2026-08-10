@@ -3,30 +3,50 @@
 이 모듈은 임의 Cypher를 만들지 않는다. `kg_builder.query_contracts`가 정의한
 6개 Intent와 허용 파라미터만 산출하고, 실제 검증은 `QueryRequest.from_dict`가 한다.
 
+지원 범위(학년도·학과)는 여기서 다시 정의하지 않고 `kg_builder.query_service`가
+강제하는 값을 그대로 쓴다. 두 곳에 같은 사실을 적으면 한쪽만 바뀌었을 때
+`OUT_OF_SCOPE`가 조용히 늘어나기 때문이다.
+
 LLM 플래너는 `Planner` 프로토콜을 구현해 교체할 수 있다. 현재 기본 구현은
 규칙 기반이며, 진행 화면에는 실제로 사용된 플래너 이름을 그대로 표시한다.
 """
 
 from __future__ import annotations
 
-import json
 import re
 import unicodedata
 from dataclasses import dataclass, field
-from pathlib import Path
 from typing import Any, Protocol
 
-from kg_builder.query_contracts import Intent
+from kg_builder.query_contracts import INTENT_CONTRACTS, Intent
+from kg_builder.query_service import DEPARTMENT_ALIASES, SUPPORTED_YEAR
+
+from .bundle import course_lexicon
 
 
-ROOT = Path(__file__).resolve().parents[2]
-DEFAULT_BUNDLE_PATH = ROOT / "data/verified/2026/2026_curriculum_kg_data.json"
-DEFAULT_ACADEMIC_YEAR = 2026
+DEFAULT_ACADEMIC_YEAR = SUPPORTED_YEAR
 DEFAULT_DEPARTMENT = "컴퓨터공학과"
+
+# 기본 학과는 질의 계층이 인정하는 별칭이어야 한다. 별칭 표가 바뀌면 여기서
+# 즉시 실패해야 하며, 조용히 OUT_OF_SCOPE가 되도록 두지 않는다.
+assert DEFAULT_DEPARTMENT in DEPARTMENT_ALIASES, (
+    "DEFAULT_DEPARTMENT는 kg_builder.query_service.DEPARTMENT_ALIASES의 키여야 한다"
+)
 
 COURSE_CODE_PATTERN = re.compile(r"\b([A-Za-z]{2,4}\s?\d{4})\b")
 YEAR_PATTERN = re.compile(r"\b(20\d{2})\s*(?:학년도|년도|년|학번)?")
 MAX_QUESTION_LENGTH = 300
+
+# 학과 파라미터를 받는 Intent는 계약에서 도출한다. 손으로 적은 목록을 따로
+# 유지하면 Intent가 늘어날 때 두 곳이 어긋난다. `allowed`가 아니라 `required`를 쓴다.
+# 교양 Intent는 `department`를 선택 파라미터로 허용하지만, 채워 넣으면 질의 계층이
+# "선택 조건은 공통 기본 규칙의 범위를 바꾸지 않습니다" 경고를 붙이므로 넣지 않는다.
+_DEPARTMENT_INTENTS = frozenset(
+    intent for intent, contract in INTENT_CONTRACTS.items() if "department" in contract.required
+)
+_COURSE_SELECTOR_INTENTS = frozenset(
+    intent for intent, contract in INTENT_CONTRACTS.items() if contract.exactly_one
+)
 
 
 class PlannerError(ValueError):
@@ -80,33 +100,11 @@ def normalize_question(question: str) -> str:
     return text
 
 
-def load_course_lexicon(path: Path = DEFAULT_BUNDLE_PATH) -> dict[str, str]:
-    """Verified bundle에서 과목명 → 학수번호 사전을 만든다.
-
-    Neo4j에 임의 Cypher를 보내지 않기 위해 로컬 Verified 파일을 읽는다.
-    반환 사전의 키는 공백을 제거한 과목명이다.
-    """
-    try:
-        bundle = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
-        return {}
-    lexicon: dict[str, str] = {}
-    for node in bundle.get("nodes", []):
-        if "Course" not in node.get("labels", []):
-            continue
-        properties = node.get("properties", {})
-        name = properties.get("name_ko")
-        code = properties.get("course_code")
-        if isinstance(name, str) and isinstance(code, str):
-            lexicon.setdefault(name.replace(" ", ""), code)
-    return lexicon
-
-
 @dataclass(slots=True)
 class RuleBasedPlanner:
     """한국어 표층 신호로 Intent를 고르는 기본 플래너."""
 
-    course_lexicon: dict[str, str] = field(default_factory=load_course_lexicon)
+    course_lexicon: dict[str, str] = field(default_factory=course_lexicon)
     name: str = "규칙 기반 플래너"
 
     def plan(self, question: str) -> Plan:
@@ -123,12 +121,17 @@ class RuleBasedPlanner:
         else:
             notes.append(f"질문에 학년도가 없어 기본값 {DEFAULT_ACADEMIC_YEAR}학년도로 조회합니다.")
 
-        course_code, course_name, course_signal = self._extract_course(text, compact)
-        if course_signal:
-            signals.append(course_signal)
+        course_code, course_name = self._extract_course(text, compact)
+        if course_code:
+            signals.append(f"학수번호 '{course_code}'")
+        elif course_name:
+            signals.append(f"과목명 '{course_name}'")
 
         intent = self._match_intent(compact, bool(course_code or course_name), signals)
-        parameters = self._build_parameters(intent, year, course_code, course_name, notes)
+        parameters, parameter_notes = self._build_parameters(
+            intent, year, course_code, course_name
+        )
+        notes.extend(parameter_notes)
         return Plan(
             intent=intent,
             parameters=parameters,
@@ -138,20 +141,17 @@ class RuleBasedPlanner:
             notes=tuple(notes),
         )
 
-    def _extract_course(
-        self, text: str, compact: str
-    ) -> tuple[str | None, str | None, str | None]:
+    def _extract_course(self, text: str, compact: str) -> tuple[str | None, str | None]:
         code_match = COURSE_CODE_PATTERN.search(text)
         if code_match:
-            code = code_match.group(1).replace(" ", "").upper()
-            return code, None, f"학수번호 '{code}'"
+            return code_match.group(1).replace(" ", "").upper(), None
         matches = [name for name in self.course_lexicon if name and name in compact]
         if matches:
-            best = max(matches, key=len)
-            return None, best, f"과목명 '{best}'"
-        return None, None, None
+            return None, max(matches, key=len)
+        return None, None
 
-    def _match_intent(self, compact: str, has_course: bool, signals: list[str]) -> Intent:
+    @staticmethod
+    def _match_intent(compact: str, has_course: bool, signals: list[str]) -> Intent:
         def has(*needles: str) -> bool:
             return any(needle in compact for needle in needles)
 
@@ -167,7 +167,7 @@ class RuleBasedPlanner:
             signals.append("키워드 '전공필수' (과목 지정 없음)")
             return Intent.GET_MAJOR_REQUIRED_COURSES
 
-        if has_course and has("이수구분", "전공필수인지", "전공선택인지", "전공선택", "전공필수", "분류"):
+        if has_course and has("이수구분", "전공선택", "전공필수", "분류"):
             signals.append("과목 지정 + 이수구분 표현")
             return Intent.GET_COURSE_COMPLETION_TYPE
 
@@ -191,31 +191,27 @@ class RuleBasedPlanner:
         year: int,
         course_code: str | None,
         course_name: str | None,
-        notes: list[str],
-    ) -> dict[str, Any]:
+    ) -> tuple[dict[str, Any], list[str]]:
         parameters: dict[str, Any] = {"academic_year": year}
-        if intent in {
-            Intent.GET_COURSE_OFFERING,
-            Intent.GET_COURSE_COMPLETION_TYPE,
-            Intent.GET_MAJOR_REQUIRED_COURSES,
-        }:
+        notes: list[str] = []
+        if intent in _DEPARTMENT_INTENTS:
             parameters["department"] = DEFAULT_DEPARTMENT
             notes.append(f"학과는 현재 지원 범위인 {DEFAULT_DEPARTMENT}로 조회합니다.")
-        if intent in {Intent.GET_COURSE_OFFERING, Intent.GET_COURSE_COMPLETION_TYPE}:
+        if intent in _COURSE_SELECTOR_INTENTS:
             if course_code:
                 parameters["course_code"] = course_code
             elif course_name:
                 parameters["course_name"] = course_name
         if intent is Intent.GET_TRANSFER_GENERAL_EXEMPTION:
             parameters["admission_type"] = "TRANSFER"
-        return parameters
+        return parameters, notes
 
 
 EXAMPLE_QUESTIONS: tuple[str, ...] = (
-    "2026학번 교양은 최소 몇 학점을 들어야 해?",
+    f"{DEFAULT_ACADEMIC_YEAR}학번 교양은 최소 몇 학점을 들어야 해?",
     "균형교양 이수요건이 어떻게 돼?",
     "편입생인데 교양을 면제받을 수 있어?",
     "자료구조는 몇 학년 몇 학기에 열려?",
-    "컴퓨터공학과 전공필수 과목을 알려줘",
+    f"{DEFAULT_DEPARTMENT} 전공필수 과목을 알려줘",
     "자료구조의 이수구분은 뭐야?",
 )
