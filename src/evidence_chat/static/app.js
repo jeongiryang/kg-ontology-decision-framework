@@ -1,32 +1,9 @@
-/* 3단계 화면 제어와 SSE 단계 스트림 수신.
-   서버가 보낸 단계 상태를 그대로 반영한다. 화면이 임의로 단계를 완료 처리하지 않는다. */
+/* Starlette SSE client for approved ChatResponse values. */
 
 "use strict";
 
 const $ = (id) => document.getElementById(id);
-const STEP_ICON = { running: "", done: "✓", skipped: "–", failed: "!" };
 const SCREEN_ORDER = ["ask", "progress", "answer"];
-
-/* 반복되는 DOM 생성을 한곳에 모은다. */
-const span = (className, text) => {
-  const node = document.createElement("span");
-  if (className) node.className = className;
-  node.textContent = text;
-  return node;
-};
-const fillList = (node, lines) => {
-  node.replaceChildren();
-  (lines || []).forEach((line) => {
-    const li = document.createElement("li");
-    li.textContent = line;
-    node.append(li);
-  });
-};
-const appendPre = (parent, text) => {
-  const pre = document.createElement("pre");
-  pre.textContent = text;
-  parent.append(pre);
-};
 
 const el = {
   status: $("status"),
@@ -46,73 +23,85 @@ const el = {
   progressNow: $("progress-now"),
   progressError: $("progress-error"),
   progressBack: $("progress-back"),
+  elapsed: $("elapsed"),
   asked: $("asked"),
   barFill: $("bar-fill"),
-  steps: $("steps"),
   answerQuestion: $("answer-question"),
   answerBadge: $("answer-badge"),
-  answerIntent: $("answer-intent"),
   answerTitle: $("answer-title"),
-  answerDetails: $("answer-details"),
-  answerWarnings: $("answer-warnings"),
+  clarification: $("clarification"),
+  scopeNotice: $("scope-notice"),
+  debugMeta: $("debug-meta"),
+  evidenceSection: $("evidence-section"),
   evidenceSummary: $("evidence-summary"),
   evidencePages: $("evidence-pages"),
   pdfNotice: $("pdf-notice"),
-  answerSteps: $("answer-steps"),
   answerAgain: $("answer-again"),
 };
 
 let pdfAvailable = false;
 let inFlight = false;
+let activeController = null;
+let elapsedTimer = null;
+let clientTimeoutMs = 180000;
 
-/* ---------- 화면 전환 ---------- */
+const span = (className, text) => {
+  const node = document.createElement("span");
+  if (className) node.className = className;
+  node.textContent = text;
+  return node;
+};
+
 function showScreen(name) {
   Object.entries(el.screens).forEach(([key, node]) =>
     node.classList.toggle("is-active", key === name)
   );
   const current = SCREEN_ORDER.indexOf(name);
-  el.stages.forEach((li) => {
-    const index = SCREEN_ORDER.indexOf(li.dataset.stage);
-    li.classList.toggle("is-current", index === current);
-    li.classList.toggle("is-done", index < current);
+  el.stages.forEach((item) => {
+    const index = SCREEN_ORDER.indexOf(item.dataset.stage);
+    item.classList.toggle("is-current", index === current);
+    item.classList.toggle("is-done", index < current);
   });
   window.scrollTo({ top: 0, behavior: "smooth" });
-}
-
-/* ---------- 상태 표시 ---------- */
-async function loadHealth() {
-  try {
-    const res = await fetch("/api/health");
-    const data = await res.json();
-    pdfAvailable = Boolean(data.pdf && data.pdf.available);
-    const dot = el.status.querySelector(".dot");
-    const text = el.status.querySelector(".status-text");
-    if (!data.neo4j_connected) {
-      dot.dataset.state = "error";
-      text.textContent = "Neo4j 연결 안 됨";
-      showNotice(el.askNotice, data.error || "Neo4j에 연결되지 않았습니다.", true);
-    } else if (!pdfAvailable) {
-      dot.dataset.state = "warn";
-      text.textContent = `Neo4j ${data.neo4j_endpoint} · PDF 미탑재`;
-      showNotice(el.askNotice, data.pdf.reason || "발췌 PDF가 없습니다.", false);
-    } else {
-      dot.dataset.state = "ok";
-      text.textContent = `Neo4j ${data.neo4j_endpoint} · PDF ${data.pdf.page_count}p`;
-      if (!data.pdf.sha256_matches && data.pdf.reason) {
-        showNotice(el.askNotice, data.pdf.reason, false);
-      }
-    }
-    renderExamples(data.examples || []);
-  } catch (error) {
-    el.status.querySelector(".dot").dataset.state = "error";
-    el.status.querySelector(".status-text").textContent = "서버 상태 확인 실패";
-  }
 }
 
 function showNotice(node, message, isError) {
   node.textContent = message;
   node.classList.toggle("error", Boolean(isError));
   node.hidden = false;
+}
+
+async function loadHealth() {
+  try {
+    const response = await fetch("/api/health", { cache: "no-store" });
+    const data = await response.json();
+    pdfAvailable = Boolean(data.pdf && data.pdf.available);
+    clientTimeoutMs = Math.max(60000, Number(data.client_timeout_seconds || 180) * 1000);
+    if (Number.isInteger(data.max_question_length)) {
+      el.question.maxLength = data.max_question_length;
+    }
+    const dot = el.status.querySelector(".dot");
+    const text = el.status.querySelector(".status-text");
+    if (!data.service_ready) {
+      dot.dataset.state = "error";
+      text.textContent = "질의 서비스 준비 안 됨";
+      showNotice(el.askNotice, data.error || "질의 서비스를 사용할 수 없습니다.", true);
+    } else if (!pdfAvailable) {
+      dot.dataset.state = "warn";
+      text.textContent = "질의 서비스 준비됨 · PDF 미탑재";
+      showNotice(el.askNotice, data.pdf.reason || "발췌 PDF가 없습니다.", false);
+    } else {
+      dot.dataset.state = "ok";
+      text.textContent = `질의 서비스 준비됨 · PDF ${data.pdf.page_count}p`;
+      if (!data.pdf.sha256_matches && data.pdf.reason) {
+        showNotice(el.askNotice, data.pdf.reason, false);
+      }
+    }
+    renderExamples(data.examples || []);
+  } catch (_) {
+    el.status.querySelector(".dot").dataset.state = "error";
+    el.status.querySelector(".status-text").textContent = "서버 상태 확인 실패";
+  }
 }
 
 function renderExamples(examples) {
@@ -122,6 +111,7 @@ function renderExamples(examples) {
     button.type = "button";
     button.textContent = text;
     button.addEventListener("click", () => {
+      if (inFlight) return;
       el.question.value = text;
       autoGrow();
       el.form.requestSubmit();
@@ -130,27 +120,30 @@ function renderExamples(examples) {
   });
 }
 
-/* ---------- 입력 ---------- */
 function autoGrow() {
   el.question.style.height = "auto";
   el.question.style.height = `${Math.min(el.question.scrollHeight, 180)}px`;
 }
+
 el.question.addEventListener("input", autoGrow);
 el.question.addEventListener("keydown", (event) => {
   if (event.key === "Enter" && !event.shiftKey && !event.isComposing) {
     event.preventDefault();
-    el.form.requestSubmit();
+    if (!inFlight) el.form.requestSubmit();
   }
 });
-
 el.form.addEventListener("submit", (event) => {
   event.preventDefault();
   const question = el.question.value.trim();
-  if (!question || inFlight) return;
-  ask(question);
+  if (question && !inFlight) ask(question);
 });
-
-el.progressBack.addEventListener("click", () => showScreen("ask"));
+el.progressBack.addEventListener("click", () => {
+  if (activeController) {
+    activeController.abort("user_cancelled");
+  } else {
+    showScreen("ask");
+  }
+});
 el.answerAgain.addEventListener("click", () => {
   el.question.value = "";
   autoGrow();
@@ -158,58 +151,35 @@ el.answerAgain.addEventListener("click", () => {
   el.question.focus();
 });
 
-/* ---------- 단계 렌더링 ---------- */
-function stepNode(event) {
-  const li = document.createElement("li");
-  li.dataset.stepId = event.step_id;
-  const row = document.createElement("div");
-  row.className = "step-row";
-  row.append(span("step-icon", ""), span("step-label", ""), span("step-time", ""));
-  li.append(row);
-  return li;
+function startElapsed() {
+  const started = performance.now();
+  el.elapsed.textContent = "0초";
+  elapsedTimer = window.setInterval(() => {
+    el.elapsed.textContent = `${Math.floor((performance.now() - started) / 1000)}초`;
+  }, 250);
 }
 
-function renderStep(list, event) {
-  let li = list.querySelector(`[data-step-id="${event.step_id}"]`);
-  if (!li) {
-    li = stepNode(event);
-    list.append(li);
-  }
-  li.className = `step is-${event.status}`;
-  li.querySelector(".step-icon").textContent = STEP_ICON[event.status] || "";
-  li.querySelector(".step-label").textContent = `${event.index}. ${event.label}`;
-  li.querySelector(".step-time").textContent =
-    event.elapsed_ms === undefined ? "" : `${event.elapsed_ms}ms`;
-
-  li.querySelectorAll(".step-detail, pre").forEach((node) => node.remove());
-  if (event.detail && event.detail.length) {
-    const ul = document.createElement("ul");
-    ul.className = "step-detail";
-    fillList(ul, event.detail);
-    li.append(ul);
-  }
-  if (event.data && typeof event.data.cypher === "string") {
-    appendPre(li, event.data.cypher);
-  }
-  if (event.data && event.data.parameters) {
-    appendPre(li, JSON.stringify(event.data.parameters, null, 2));
-  }
+function stopElapsed() {
+  if (elapsedTimer !== null) window.clearInterval(elapsedTimer);
+  elapsedTimer = null;
 }
 
-/* ---------- 질의 실행 ---------- */
 async function ask(question) {
   inFlight = true;
   el.submit.disabled = true;
   el.asked.textContent = question;
   el.answerQuestion.textContent = question;
-  el.steps.replaceChildren();
   el.progressError.hidden = true;
   el.spinner.classList.remove("is-done");
-  el.progressTitle.textContent = "처리 중입니다";
-  el.barFill.style.width = "0%";
+  el.progressTitle.textContent = "답변을 확인하고 있습니다";
+  el.progressNow.textContent = "질문 전송됨";
+  el.barFill.style.width = "15%";
+  el.progressBack.textContent = "요청 취소";
   showScreen("progress");
+  startElapsed();
 
-  const events = [];
+  activeController = new AbortController();
+  const timeout = window.setTimeout(() => activeController.abort("timeout"), clientTimeoutMs);
   let result = null;
   let failed = false;
 
@@ -218,12 +188,12 @@ async function ask(question) {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ question }),
+      signal: activeController.signal,
     });
     if (!response.ok || !response.body) {
       const detail = await response.json().catch(() => ({}));
       throw new Error(detail.error || `서버 오류 (HTTP ${response.status})`);
     }
-
     const reader = response.body.getReader();
     const decoder = new TextDecoder();
     let buffer = "";
@@ -238,93 +208,104 @@ async function ask(question) {
         const line = frame.split("\n").find((row) => row.startsWith("data: "));
         if (!line) continue;
         const payload = JSON.parse(line.slice(6));
-        if (payload.type === "step") {
-          events.push(payload);
-          renderStep(el.steps, payload);
-          el.progressNow.textContent = `${payload.label} · ${payload.status === "running" ? "진행 중" : "완료"}`;
-          el.barFill.style.width = `${Math.round((payload.index / payload.total) * 100)}%`;
+        if (payload.type === "progress") {
+          el.progressNow.textContent = payload.message;
+          el.barFill.style.width = payload.phase === "COMPLETED" ? "100%" : "55%";
         } else if (payload.type === "result") {
           result = payload;
         } else if (payload.type === "error") {
           failed = true;
-          showNotice(el.progressError, `${payload.stage} 단계 실패: ${payload.message}`, true);
+          showNotice(el.progressError, payload.message, true);
         }
       }
     }
+    if (!result && !failed) throw new Error("응답 결과가 없습니다.");
   } catch (error) {
     failed = true;
-    showNotice(el.progressError, error.message, true);
+    const timedOut = activeController && activeController.signal.reason === "timeout";
+    showNotice(
+      el.progressError,
+      timedOut
+        ? "응답 대기 시간이 초과되었습니다. 서버의 모델 요청은 잠시 더 실행될 수 있습니다."
+        : "요청이 취소되었거나 연결이 종료되었습니다.",
+      true
+    );
   } finally {
+    window.clearTimeout(timeout);
+    stopElapsed();
+    activeController = null;
     inFlight = false;
     el.submit.disabled = false;
     el.spinner.classList.add("is-done");
-    el.progressTitle.textContent = failed ? "처리를 마치지 못했습니다" : "처리 완료";
-    el.progressNow.textContent = failed
-      ? "위 단계에서 원인을 확인하세요."
-      : "답변 화면으로 이동합니다.";
+    el.progressTitle.textContent = failed ? "처리를 마치지 못했습니다" : "답변 완료";
+    el.progressBack.textContent = "질문 다시 입력";
   }
 
   if (result) {
-    renderAnswer(result, events);
+    renderAnswer(result);
     showScreen("answer");
   }
 }
 
-/* ---------- 답변 렌더링 ---------- */
-function renderAnswer(result, events) {
-  const answer = result.answer;
-  el.answerBadge.textContent = answer.answerability_label;
-  el.answerBadge.dataset.state = answer.answerability;
-  el.answerIntent.textContent = `${answer.intent_label} · ${answer.intent}`;
-  el.answerTitle.textContent = answer.headline;
+function renderAnswer(result) {
+  const response = result.response;
+  const presentation = result.presentation;
+  el.answerBadge.textContent = presentation.status_label;
+  el.answerBadge.dataset.state = response.status;
+  el.answerTitle.textContent = response.answer_text;
 
-  fillList(el.answerDetails, answer.details);
-  fillList(el.answerWarnings, answer.warnings);
-
-  el.answerSteps.replaceChildren();
-  events.forEach((event) => renderStep(el.answerSteps, event));
-
-  renderEvidence(result);
+  el.clarification.hidden = !response.clarification;
+  el.clarification.textContent = response.clarification || "";
+  el.scopeNotice.hidden = !presentation.scope_notice;
+  el.scopeNotice.textContent = presentation.scope_notice || "";
+  el.debugMeta.hidden = !presentation.debug;
+  el.debugMeta.textContent = presentation.debug
+    ? `request_id=${presentation.debug.request_id} · error_code=${presentation.debug.error_code || "없음"}`
+    : "";
+  renderEvidence(presentation);
 }
 
-function renderEvidence(result) {
-  const pages = result.evidence_pages || [];
+function renderEvidence(presentation) {
+  const pages = presentation.evidence_pages || [];
   const total = pages.reduce((sum, page) => sum + page.evidence.length, 0);
+  el.evidenceSection.hidden = total === 0;
   el.evidenceSummary.textContent = pages.length
-    ? `발췌 PDF ${pages.length}개 페이지 · 근거 ${total}건 (참조한 페이지만 표시)`
+    ? `발췌 PDF ${pages.length}개 페이지 · 근거 ${total}건`
     : "표시할 VERIFIED 근거가 없습니다.";
-
   el.pdfNotice.hidden = true;
-  if (pages.length && result.pdf && !result.pdf.available) {
+  if (pages.length && presentation.pdf && !presentation.pdf.available) {
     showNotice(
       el.pdfNotice,
-      `${result.pdf.reason} 지금은 페이지 번호와 원문 텍스트만 보여 줍니다.`,
+      `${presentation.pdf.reason} 페이지 번호와 Evidence 원문은 계속 표시합니다.`,
       false
     );
   }
-
   el.evidencePages.replaceChildren();
-  pages.forEach((page) => el.evidencePages.append(pageCard(page, result.pdf)));
+  pages.forEach((page) => el.evidencePages.append(pageCard(page, presentation.pdf, total)));
 }
 
-function pageCard(page, pdf) {
-  const card = document.createElement("section");
-  card.className = "page-card";
+function pageLabel(value, fallback = "미표기") {
+  return Number.isInteger(value) ? String(value) : fallback;
+}
 
-  const head = document.createElement("div");
+function pageCard(page, pdf, totalEvidence) {
+  const card = document.createElement("details");
+  card.className = "page-card";
+  card.open = totalEvidence <= 3;
+
+  const head = document.createElement("summary");
   head.className = "page-head";
   head.append(
-    span("page-no", `발췌 p.${page.excerpt_page}`),
+    span("page-no", `발췌 PDF ${pageLabel(page.excerpt_page)}쪽`),
     span(
       "page-sub",
-      `인쇄 p.${page.printed_page} · 원본 규정집 p.${page.source_pdf_page}`
+      `원본 PDF ${pageLabel(page.source_pdf_page)}쪽 · 인쇄 페이지 ${pageLabel(page.printed_page)}쪽`
     ),
-    span("page-count", `근거 ${page.evidence.length}건`)
+    span("page-count", `근거 ${page.evidence.length}건 보기`)
   );
 
   const body = document.createElement("div");
   body.className = "page-body";
-
   const view = document.createElement("div");
   view.className = "page-view";
   const canvas = document.createElement("div");
@@ -335,9 +316,16 @@ function pageCard(page, pdf) {
     img.src = `/api/pdf/page/${page.excerpt_page}.png`;
     img.alt = `발췌 PDF ${page.excerpt_page}쪽`;
     img.loading = "lazy";
+    img.addEventListener("error", () => {
+      canvas.replaceChildren();
+      const fallback = document.createElement("p");
+      fallback.className = "page-missing";
+      fallback.textContent = "페이지 이미지를 표시하지 못했습니다. Evidence 원문을 확인해 주세요.";
+      canvas.append(fallback);
+    });
     canvas.append(img);
     page.evidence.forEach((item, index) => {
-      item.highlights.forEach((box) => {
+      (item.highlights || []).forEach((box) => {
         const mark = document.createElement("div");
         mark.className = "hl";
         mark.dataset.owner = String(index);
@@ -348,13 +336,13 @@ function pageCard(page, pdf) {
         canvas.append(mark);
       });
     });
-    view.append(canvas);
   } else {
     const missing = document.createElement("p");
     missing.className = "page-missing";
     missing.textContent = "PDF 원본이 없어 페이지 이미지를 표시할 수 없습니다.";
-    view.append(missing);
+    canvas.append(missing);
   }
+  view.append(canvas);
 
   const quotes = document.createElement("div");
   quotes.className = "quotes";
@@ -367,16 +355,15 @@ function pageCard(page, pdf) {
     text.textContent = item.source_text;
     const meta = document.createElement("p");
     meta.className = "quote-meta";
-    meta.append(span("", `p.${page.excerpt_page} 근거 ${index + 1}`));
+    meta.append(span("", `발췌 PDF ${page.excerpt_page}쪽 · 근거 ${index + 1}`));
     if (pdf && pdf.available) {
       meta.append(
         item.highlight_found
           ? span("", `강조 ${item.highlights.length}곳`)
-          : span("no-hl", "페이지에서 위치를 찾지 못했습니다")
+          : span("no-hl", "원문 위치를 찾지 못했습니다")
       );
     }
     quote.append(text, meta);
-
     const focus = (on) => {
       quote.classList.toggle("is-focus", on);
       canvas.classList.toggle("has-focus", on);
@@ -390,7 +377,6 @@ function pageCard(page, pdf) {
     quote.addEventListener("blur", () => focus(false));
     quotes.append(quote);
   });
-
   body.append(view, quotes);
   card.append(head, body);
   return card;

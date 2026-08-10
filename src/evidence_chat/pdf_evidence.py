@@ -79,6 +79,15 @@ class PdfSource:
             "reason": self.reason,
         }
 
+    def to_public_dict(self) -> dict[str, Any]:
+        """Return browser-safe state without local paths or document hashes."""
+        return {
+            "available": self.available,
+            "page_count": self.page_count,
+            "sha256_matches": self.sha256_matches,
+            "reason": self.reason,
+        }
+
 
 def resolve_pdf_path() -> Path:
     override = os.getenv(PDF_PATH_ENV, "").strip()
@@ -104,8 +113,8 @@ def _inspect_existing(path_key: str, mtime_ns: int, size: int) -> PdfSource:
     try:
         with pymupdf.open(target) as document:
             page_count = document.page_count
-    except Exception as exc:  # pymupdf는 구체 예외 타입을 보장하지 않는다.
-        return PdfSource(path=target, available=False, reason=f"PDF를 열 수 없습니다: {exc}")
+    except Exception:  # pymupdf는 구체 예외 타입을 보장하지 않는다.
+        return PdfSource(path=target, available=False, reason="PDF를 열 수 없습니다.")
     digest = _sha256(target)
     expected = expected_sha256()
     matches = expected is not None and digest == expected
@@ -137,10 +146,7 @@ def inspect_pdf(path: Path | None = None) -> PdfSource:
         return PdfSource(
             path=target,
             available=False,
-            reason=(
-                f"발췌 PDF가 없습니다. {target} 위치에 두거나 "
-                f"{PDF_PATH_ENV} 환경변수로 경로를 지정하세요."
-            ),
+            reason="발췌 PDF가 없습니다. 로컬 PDF 경로 설정을 확인해 주세요.",
         )
     return _inspect_existing(str(target), stat.st_mtime_ns, stat.st_size)
 
@@ -261,7 +267,12 @@ def build_evidence_pages(
     Evidence만 담긴다. 강조 계산은 PDF를 한 번만 열고 페이지당 한 번만 가져온다.
     """
     grouped: dict[int, dict[str, Any]] = {}
+    seen_evidence: set[str] = set()
     for item in evidence:
+        evidence_id = item.get("evidence_id")
+        if not isinstance(evidence_id, str) or evidence_id in seen_evidence:
+            continue
+        seen_evidence.add(evidence_id)
         page_number = item.get("excerpt_page")
         if not isinstance(page_number, int):
             continue
@@ -276,7 +287,8 @@ def build_evidence_pages(
         )
         bucket["evidence"].append(
             {
-                "evidence_id": item.get("evidence_id"),
+                "evidence_id": evidence_id,
+                "fact_ids": sorted(item.get("fact_ids") or []),
                 "source_text": item.get("source_text", ""),
                 "printed_page": item.get("printed_page"),
                 "source_pdf_page": item.get("source_pdf_page"),

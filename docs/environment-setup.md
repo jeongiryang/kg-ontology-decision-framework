@@ -231,6 +231,10 @@ NEO4J_PASSWORD=
 NEO4J_DATABASE=neo4j
 ```
 
+동적 Text-to-Cypher와 웹 챗봇은 ingestion 계정으로 자동 fallback하지 않고 별도
+`NEO4J_QUERY_*` 계약을 사용한다. 로컬 LLM 설정과 함께 비밀값 없는 예시는 루트
+`.env.example`과 [학사규정 근거 챗봇 가이드](evidence-chat.md)를 따른다.
+
 로컬 파일을 편집한 뒤 파일 권한을 제한한다.
 
 ```bash

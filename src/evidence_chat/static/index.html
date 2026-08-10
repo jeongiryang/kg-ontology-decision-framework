@@ -24,13 +24,12 @@
   <nav class="stages" aria-label="진행 단계">
     <ol>
       <li data-stage="ask" class="is-current"><span>1</span>질문 입력</li>
-      <li data-stage="progress"><span>2</span>처리 과정</li>
+      <li data-stage="progress"><span>2</span>답변 확인</li>
       <li data-stage="answer"><span>3</span>답변과 근거</li>
     </ol>
   </nav>
 
   <main>
-    <!-- 1단계: 질문 입력 -->
     <section class="screen is-active" id="screen-ask" aria-labelledby="ask-title">
       <div class="ask-wrap">
         <h2 id="ask-title">무엇을 확인해 드릴까요?</h2>
@@ -44,7 +43,7 @@
               id="question"
               name="question"
               rows="1"
-              maxlength="300"
+              maxlength="2000"
               placeholder="예) 자료구조는 몇 학년 몇 학기에 열려?"
               aria-label="질문 입력"
               required
@@ -60,25 +59,23 @@
       </div>
     </section>
 
-    <!-- 2단계: 처리 과정 -->
     <section class="screen" id="screen-progress" aria-labelledby="progress-title">
       <div class="progress-wrap">
         <div class="progress-head">
           <div class="spinner" id="spinner" aria-hidden="true"></div>
           <div>
-            <h2 id="progress-title">처리 중입니다</h2>
-            <p class="progress-now" id="progress-now">질문을 정규화하고 있습니다</p>
+            <h2 id="progress-title">답변을 확인하고 있습니다</h2>
+            <p class="progress-now" id="progress-now" aria-live="polite">질문 전송됨</p>
           </div>
+          <p class="elapsed" id="elapsed">0초</p>
         </div>
         <blockquote class="asked" id="asked"></blockquote>
         <div class="bar"><div class="bar-fill" id="bar-fill"></div></div>
-        <ol class="steps" id="steps"></ol>
         <p class="notice error" id="progress-error" hidden></p>
-        <button class="ghost" id="progress-back" type="button">질문 다시 입력</button>
+        <button class="ghost" id="progress-back" type="button">요청 취소</button>
       </div>
     </section>
 
-    <!-- 3단계: 답변과 근거 -->
     <section class="screen" id="screen-answer" aria-labelledby="answer-title">
       <div class="answer-wrap">
         <blockquote class="asked" id="answer-question"></blockquote>
@@ -86,14 +83,14 @@
         <article class="answer-card" id="answer-card">
           <div class="answer-meta">
             <span class="badge" id="answer-badge"></span>
-            <span class="intent" id="answer-intent"></span>
           </div>
           <h2 id="answer-title">답변</h2>
-          <ul class="answer-details" id="answer-details"></ul>
-          <ul class="answer-warnings" id="answer-warnings"></ul>
+          <p class="clarification" id="clarification" hidden></p>
+          <p class="scope-notice" id="scope-notice" hidden></p>
+          <p class="debug-meta" id="debug-meta" hidden></p>
         </article>
 
-        <section class="evidence" aria-labelledby="evidence-title">
+        <section class="evidence" id="evidence-section" aria-labelledby="evidence-title">
           <div class="evidence-head">
             <h3 id="evidence-title">근거 문서</h3>
             <p id="evidence-summary"></p>
@@ -101,11 +98,6 @@
           <div id="evidence-pages"></div>
           <p class="notice" id="pdf-notice" hidden></p>
         </section>
-
-        <details class="debug">
-          <summary>디버그 로그 · 처리 단계 전체 보기</summary>
-          <ol class="steps" id="answer-steps"></ol>
-        </details>
 
         <div class="answer-actions">
           <button class="primary" id="answer-again" type="button">새 질문하기</button>

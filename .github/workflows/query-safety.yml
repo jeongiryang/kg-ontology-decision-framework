@@ -1,0 +1,48 @@
+name: Query safety checks
+
+on:
+  pull_request:
+    paths:
+      - "ontology/**"
+      - "src/kg_builder/**"
+      - "tests/**"
+      - "pyproject.toml"
+      - "uv.lock"
+      - ".github/workflows/query-safety.yml"
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+jobs:
+  unit-tests:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v6
+        with:
+          version: "0.11.32"
+          enable-cache: true
+
+      - name: Install locked dependencies
+        run: uv sync --locked
+
+      - name: Check lock file
+        run: uv lock --check
+
+      - name: Run unit tests
+        run: uv run python -m unittest discover -s tests -v
+
+      - name: Verify generated LLM query schema
+        run: uv run python -m kg_builder.query.schema_exporter check
+
+      - name: Explain integration-test scope
+        run: >-
+          echo "Neo4j integration tests require an isolated local database and
+          NEO4J_QUERY_* read-only credentials; they are intentionally not run in
+          secret-free CI."

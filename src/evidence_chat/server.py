@@ -1,17 +1,10 @@
-"""챗봇 화면을 제공하는 로컬 전용 Starlette 앱.
+"""Local-only Starlette UI for the approved curriculum chat service.
 
-노출하는 엔드포인트는 다음 네 개다.
+The app has one backend process and one official query path::
 
-- `GET  /`                     : 3단계 화면 정적 페이지
-- `GET  /api/health`           : Neo4j·PDF 탑재 상태
-- `POST /api/ask`              : 질문 1건을 SSE 단계 이벤트로 스트리밍
-- `GET  /api/pdf/page/{n}.png` : 발췌 PDF 페이지 렌더 이미지
+    browser -> /api/ask -> CurriculumChatService -> ChatResponse
 
-임의 Cypher 입력 경로는 없다. 질문은 `evidence_chat.planner`가 지원 Intent로만 바꾼다.
-서버는 로컬 개발용이며 인증을 제공하지 않으므로 127.0.0.1에만 바인딩한다.
-
-앱 상태는 모듈 전역이 아니라 `app.state`에 둔다. 테스트가 전역을 덮어쓰면 이후
-테스트에 상태가 새기 때문이다. 핸들러는 `request.app.state`로 접근한다.
+It never accepts Cypher, exposes a query plan, or constructs a ChatResponse itself.
 """
 
 from __future__ import annotations
@@ -20,13 +13,12 @@ import argparse
 import contextlib
 import json
 import os
-import queue
-import threading
+from collections.abc import AsyncIterator, Callable
 from pathlib import Path
-from typing import Any, AsyncIterator
+from time import perf_counter
+from typing import Any, Protocol
 
 import anyio
-
 from neo4j import GraphDatabase
 from starlette.applications import Starlette
 from starlette.requests import Request
@@ -34,52 +26,142 @@ from starlette.responses import FileResponse, JSONResponse, Response, StreamingR
 from starlette.routing import Mount, Route
 from starlette.staticfiles import StaticFiles
 
-from kg_builder.config import ConfigurationError, Neo4jSettings
-from kg_builder.query_service import Neo4jReadExecutor, QueryService
+from kg_builder.answer.contracts import ChatResponse
+from kg_builder.answer.service import CurriculumChatService
+from kg_builder.config import ConfigurationError, Neo4jQuerySettings
+from kg_builder.llm.client import LLMConfigurationError, LLMSettings, create_llm_client
+from kg_builder.llm.cypher_generator import LocalCypherGenerator
+from kg_builder.llm.planner import LocalQueryPlanner
+from kg_builder.query.natural_language_service import NaturalLanguageQueryService
+from kg_builder.query.query_executor import DynamicQueryExecutor
+from kg_builder.query.query_explainer import QueryExplainer
+from kg_builder.query.query_plan import MAX_QUESTION_LENGTH
+from kg_builder.query.safety_pipeline import SafetyPipeline
+from kg_builder.query.schema_selector import QuerySchemaSelector
 
 from . import pdf_evidence
-from .pipeline import ChatPipeline
-from .planner import EXAMPLE_QUESTIONS, RuleBasedPlanner
+from .chat_adapter import ChatResponseAdapter
 
 
 STATIC_DIR = Path(__file__).resolve().parent / "static"
 DEFAULT_HOST = "127.0.0.1"
 DEFAULT_PORT = 8501
-MAX_BODY_BYTES = 8 * 1024
-_SENTINEL = object()
+DEFAULT_CLIENT_TIMEOUT_SECONDS = 180
+DEFAULT_MAX_CONCURRENT = 1
+MAX_BODY_BYTES = 16 * 1024
+
+EXAMPLE_QUESTIONS = (
+    "2026학년도 교양 최소 이수학점은?",
+    "균형교양 이수요건은?",
+    "편입생도 교양을 이수해야 하나?",
+    "자료구조는 몇 학년 몇 학기에 개설되나?",
+    "컴퓨터공학과 전공필수 과목은?",
+    "자료구조의 이수구분은?",
+)
+
+
+class ChatService(Protocol):
+    def ask(self, question: str) -> ChatResponse: ...
+
+
+def _env_bool(name: str, default: bool = False) -> bool:
+    value = os.getenv(name)
+    if value is None:
+        return default
+    normalized = value.strip().lower()
+    if normalized in {"1", "true", "yes", "on"}:
+        return True
+    if normalized in {"0", "false", "no", "off"}:
+        return False
+    raise ConfigurationError(f"{name} must be true or false")
+
+
+def _env_int(name: str, default: int, minimum: int, maximum: int) -> int:
+    try:
+        value = int(os.getenv(name, str(default)))
+    except ValueError as exc:
+        raise ConfigurationError(f"{name} must be an integer") from exc
+    if not minimum <= value <= maximum:
+        raise ConfigurationError(f"{name} must be between {minimum} and {maximum}")
+    return value
 
 
 class ChatState:
-    """드라이버와 서비스를 앱 수명 동안 재사용한다."""
+    """Own long-lived LLM/Neo4j resources for one Starlette application."""
 
-    def __init__(self) -> None:
+    def __init__(
+        self,
+        service: ChatService | None = None,
+        *,
+        trace_dir: Path | None = None,
+    ) -> None:
         self.driver: Any | None = None
-        self.pipeline: ChatPipeline | None = None
-        self.settings: Neo4jSettings | None = None
+        self.service = service
         self.error: str | None = None
+        self.error_code: str | None = None
+        self.debug = False
+        self.max_concurrent = DEFAULT_MAX_CONCURRENT
+        self.client_timeout_seconds = DEFAULT_CLIENT_TIMEOUT_SECONDS
+        self.limiter: anyio.Semaphore | None = None
+        self.trace_dir = trace_dir
+
+    @property
+    def ready(self) -> bool:
+        return self.service is not None
 
     def open(self) -> None:
         try:
-            self.settings = Neo4jSettings.from_env()
-        except ConfigurationError as exc:
-            self.error = f"Neo4j 설정 오류: {exc}"
-            return
-        try:
+            self.debug = _env_bool("KG_CHAT_DEBUG")
+            self.max_concurrent = _env_int(
+                "KG_CHAT_MAX_CONCURRENT", DEFAULT_MAX_CONCURRENT, 1, 4
+            )
+            self.client_timeout_seconds = _env_int(
+                "KG_CHAT_CLIENT_TIMEOUT_SECONDS",
+                DEFAULT_CLIENT_TIMEOUT_SECONDS,
+                60,
+                900,
+            )
+            if self.service is not None:
+                return
+            llm_settings = LLMSettings.from_env()
+            neo4j_settings = Neo4jQuerySettings.from_env()
+            client = create_llm_client(llm_settings)
             self.driver = GraphDatabase.driver(
-                self.settings.uri, auth=(self.settings.user, self.settings.password)
+                neo4j_settings.uri,
+                auth=(neo4j_settings.user, neo4j_settings.password),
             )
             self.driver.verify_connectivity()
-        except Exception as exc:
-            self.error = f"Neo4j 연결 실패: {type(exc).__name__}: {exc}"
-            self.driver = None
-            return
-        service = QueryService(Neo4jReadExecutor(self.driver, self.settings.database))
-        self.pipeline = ChatPipeline(runner=service, planner=RuleBasedPlanner())
+            safety_options = {"trace_dir": self.trace_dir} if self.trace_dir else {}
+            safety = SafetyPipeline(
+                QueryExplainer(self.driver, neo4j_settings.database),
+                DynamicQueryExecutor(self.driver, neo4j_settings.database),
+                **safety_options,
+            )
+            query_service = NaturalLanguageQueryService(
+                LocalQueryPlanner(client),
+                LocalCypherGenerator(client),
+                safety,
+                QuerySchemaSelector(),
+                model=llm_settings.model,
+                generator_retries=llm_settings.max_retries,
+            )
+            self.service = CurriculumChatService(query_service)
+        except (ConfigurationError, LLMConfigurationError):
+            self.error = "서비스 환경 설정을 확인해 주세요."
+            self.error_code = "CHAT_CONFIGURATION_ERROR"
+            self._close_driver()
+        except Exception:
+            self.error = "로컬 질의 서비스에 연결할 수 없습니다."
+            self.error_code = "CHAT_STARTUP_ERROR"
+            self._close_driver()
 
-    def close(self) -> None:
+    def _close_driver(self) -> None:
         if self.driver is not None:
             self.driver.close()
             self.driver = None
+
+    def close(self) -> None:
+        self._close_driver()
 
 
 def _state(request: Request) -> ChatState:
@@ -87,23 +169,25 @@ def _state(request: Request) -> ChatState:
 
 
 async def index(request: Request) -> Response:
+    del request
     return FileResponse(STATIC_DIR / "index.html")
 
 
 async def health(request: Request) -> Response:
     state = _state(request)
-    # inspect_pdf는 파일 읽기와 해시를 하므로 이벤트 루프에서 직접 돌리지 않는다.
     source = await anyio.to_thread.run_sync(pdf_evidence.inspect_pdf)
-    return JSONResponse(
-        {
-            "neo4j_connected": state.pipeline is not None,
-            "neo4j_endpoint": state.settings.endpoint if state.settings else None,
-            "neo4j_database": state.settings.database if state.settings else None,
-            "error": state.error,
-            "pdf": source.to_dict(),
-            "examples": list(EXAMPLE_QUESTIONS),
-        }
-    )
+    payload: dict[str, Any] = {
+        "service_ready": state.ready,
+        "error": state.error,
+        "pdf": source.to_public_dict(),
+        "examples": list(EXAMPLE_QUESTIONS),
+        "max_question_length": MAX_QUESTION_LENGTH,
+        "client_timeout_seconds": state.client_timeout_seconds,
+        "debug": state.debug,
+    }
+    if state.debug:
+        payload["error_code"] = state.error_code
+    return JSONResponse(payload)
 
 
 def _sse(payload: dict[str, Any]) -> bytes:
@@ -118,44 +202,73 @@ async def ask(request: Request) -> Response:
         payload = json.loads(raw or b"{}")
     except json.JSONDecodeError:
         return JSONResponse({"error": "JSON 본문을 해석할 수 없습니다."}, status_code=400)
+    if not isinstance(payload, dict) or set(payload) != {"question"}:
+        return JSONResponse({"error": "question 필드만 전송할 수 있습니다."}, status_code=400)
     question = payload.get("question")
     if not isinstance(question, str) or not question.strip():
         return JSONResponse({"error": "question 필드가 필요합니다."}, status_code=400)
-    state = _state(request)
-    if state.pipeline is None:
+    question = question.strip()
+    if len(question) > MAX_QUESTION_LENGTH:
         return JSONResponse(
-            {"error": state.error or "Neo4j에 연결되지 않았습니다."}, status_code=503
+            {"error": f"질문은 {MAX_QUESTION_LENGTH}자를 넘을 수 없습니다."},
+            status_code=422,
+        )
+    state = _state(request)
+    if not state.ready or state.service is None or state.limiter is None:
+        return JSONResponse(
+            {"error": state.error or "질의 서비스를 사용할 수 없습니다."},
+            status_code=503,
         )
 
-    pipeline = state.pipeline
+    service = state.service
+    limiter = state.limiter
+    adapter = ChatResponseAdapter(debug=state.debug)
 
     async def stream() -> AsyncIterator[bytes]:
-        # 파이프라인은 동기 Neo4j 드라이버를 쓰므로 워커 스레드에서 돌리고
-        # 무제한 큐로 건네받는다. 큐가 막히지 않으므로 클라이언트가 먼저
-        # 끊어져도 워커는 스스로 끝난다.
-        bucket: queue.Queue[Any] = queue.Queue()
-
-        def worker() -> None:
-            try:
-                for item in pipeline.run(question):
-                    bucket.put(item)
-            except Exception as exc:  # 예기치 못한 오류도 화면에 남긴다.
-                bucket.put(
-                    {
-                        "type": "error",
-                        "stage": "server",
-                        "message": f"{type(exc).__name__}: {exc}",
-                    }
+        started = perf_counter()
+        yield _sse(
+            {
+                "type": "progress",
+                "phase": "SUBMITTED",
+                "message": "질문 전송됨",
+                "elapsed_ms": 0,
+            }
+        )
+        yield _sse(
+            {
+                "type": "progress",
+                "phase": "CHECKING",
+                "message": "답변을 확인하고 있습니다",
+                "elapsed_ms": 0,
+            }
+        )
+        try:
+            async with limiter:
+                response = await anyio.to_thread.run_sync(
+                    service.ask, question
                 )
-            finally:
-                bucket.put(_SENTINEL)
-
-        threading.Thread(target=worker, name="evidence-chat-pipeline", daemon=True).start()
-        while True:
-            item = await anyio.to_thread.run_sync(bucket.get)
-            if item is _SENTINEL:
-                break
-            yield _sse(item)
+                result = await anyio.to_thread.run_sync(
+                    adapter.adapt, response
+                )
+            yield _sse(result)
+            yield _sse(
+                {
+                    "type": "progress",
+                    "phase": "COMPLETED",
+                    "message": "답변 완료",
+                    "elapsed_ms": round((perf_counter() - started) * 1000),
+                }
+            )
+        except anyio.get_cancelled_exc_class():
+            return
+        except Exception:
+            error: dict[str, Any] = {
+                "type": "error",
+                "message": "요청을 안전하게 처리하지 못했습니다.",
+            }
+            if state.debug:
+                error["error_code"] = "CHAT_REQUEST_FAILED"
+            yield _sse(error)
         yield _sse({"type": "end"})
 
     return StreamingResponse(
@@ -166,12 +279,13 @@ async def ask(request: Request) -> Response:
 
 
 async def pdf_page(request: Request) -> Response:
-    # 경로 변환기가 `{page:int}`라 여기 오는 값은 이미 정수다.
     page_number = request.path_params["page"]
     try:
         image = await anyio.to_thread.run_sync(pdf_evidence.render_page_png, page_number)
-    except pdf_evidence.PdfEvidenceError as exc:
-        return JSONResponse({"error": str(exc)}, status_code=404)
+    except pdf_evidence.PdfEvidenceError:
+        return JSONResponse(
+            {"error": "요청한 PDF 페이지를 표시할 수 없습니다."}, status_code=404
+        )
     return Response(
         image,
         media_type="image/png",
@@ -179,29 +293,27 @@ async def pdf_page(request: Request) -> Response:
     )
 
 
-@contextlib.asynccontextmanager
-async def lifespan(app: Starlette) -> AsyncIterator[None]:
-    state = ChatState()
-    app.state.chat = state
-    await anyio.to_thread.run_sync(state.open)
-    if state.error:
-        print(f"[evidence-chat] {state.error}")
-    else:
-        endpoint = state.settings.endpoint if state.settings else "?"
-        print(f"[evidence-chat] Neo4j 연결됨: {endpoint}")
-    source = await anyio.to_thread.run_sync(pdf_evidence.inspect_pdf)
-    print(
-        f"[evidence-chat] PDF: {'탑재됨' if source.available else '없음'} · {source.path}"
-        + (f" · {source.reason}" if source.reason else "")
-    )
-    try:
-        yield
-    finally:
-        state.close()
+def create_app(state_factory: Callable[[], ChatState] = ChatState) -> Starlette:
+    """Create an app whose state factory can be replaced by isolated tests."""
 
+    @contextlib.asynccontextmanager
+    async def lifespan(app: Starlette) -> AsyncIterator[None]:
+        state = state_factory()
+        app.state.chat = state
+        await anyio.to_thread.run_sync(state.open)
+        state.limiter = anyio.Semaphore(state.max_concurrent)
+        print(
+            "[evidence-chat] 서비스 준비됨"
+            if state.ready
+            else "[evidence-chat] 서비스 준비 실패"
+        )
+        source = await anyio.to_thread.run_sync(pdf_evidence.inspect_pdf)
+        print(f"[evidence-chat] PDF: {'탑재됨' if source.available else '없음'}")
+        try:
+            yield
+        finally:
+            state.close()
 
-def create_app() -> Starlette:
-    """앱 인스턴스를 만든다. 상태는 `app.state.chat`에 붙는다."""
     return Starlette(
         routes=[
             Route("/", index),

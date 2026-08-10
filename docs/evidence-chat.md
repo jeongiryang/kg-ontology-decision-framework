@@ -1,179 +1,161 @@
-# 학사규정 근거 챗봇 실행 및 단계별 디버깅 가이드
+# CurriculumChatService 기반 학사규정 근거 챗봇
 
-## 1. 목적과 위치
+## 목적과 호출 흐름
 
-이 문서는 Verified 지식그래프 위에 올라가는 최종 사용자 화면 `evidence_chat`을 설명한다. 화면은 파이프라인의 마지막 단계다.
+`evidence_chat`은 PR #14의 Starlette·vanilla HTML/CSS/JavaScript 화면과 PDF 강조 기능을 유지하면서 최신 승인 응답 계층을 직접 연결한 로컬 PoC다.
 
 ```text
-Verified KG → Neo4j 멱등 적재 → 읽기 전용 질의·Evidence 계층 → 학사규정 근거 챗봇(이 문서)
+브라우저
+→ Starlette POST /api/ask
+→ CurriculumChatService
+→ 자연어 QueryPlan·동적 Cypher·SafetyPipeline
+→ ResultValidator
+→ 구조화 Claim·결정론적 한국어 답변
+→ 승인 ChatResponse
+→ 표시 전용 adapter·SSE
+→ 상태·Citation·PDF 근거 UI
 ```
 
-이름의 `evidence`는 온톨로지의 `Evidence` 노드와 질의 계층의 Evidence 응답 정책을 그대로 이어받은 것이다. 확정 답변은 `VERIFIED` Evidence가 있을 때만 만들고, 그 Evidence가 규정 PDF의 어느 페이지 어느 위치에서 왔는지까지 화면에 표시한다.
+별도 FastAPI/API 프로세스, 고정 6 Intent 플래너, 프론트 전용 답변 조립은 없다. `ChatResponse`는 백엔드가 발급한 값을 읽고 직렬화할 뿐이며 adapter는 `answer_text`, Citation, Fact/Evidence ID를 변경하지 않는다.
 
-화면은 질의 로직을 새로 만들지 않는다. `kg_builder.query_service`가 제공하는 6개 Intent와 VERIFIED Evidence 응답을 그대로 사용하고, 사람이 읽을 수 있는 형태와 근거 표시를 담당한다.
+## 실행 조건
 
-## 2. 사전 조건
+```dotenv
+NEO4J_QUERY_URI=neo4j://localhost:7687
+NEO4J_QUERY_USER=your-read-only-neo4j-user
+NEO4J_QUERY_PASSWORD=
+NEO4J_QUERY_DATABASE=neo4j
 
-- 로컬 Neo4j에 2026 Verified KG가 적재돼 있어야 한다. 절차는 [Neo4j 적재 가이드](neo4j-ingestion.md)를 따른다.
-- `.env`에 `NEO4J_URI`, `NEO4J_USER`, `NEO4J_PASSWORD`, `NEO4J_DATABASE`가 있어야 한다.
-- 발췌 PDF는 선택 사항이다. 없으면 근거 원문과 페이지 번호만 표시한다.
+KG_LLM_PROVIDER=ollama
+KG_LLM_BASE_URL=http://127.0.0.1:11434
+KG_LLM_MODEL=qwen2.5-coder:14b
+KG_LLM_TIMEOUT_SECONDS=180
+KG_LLM_MAX_RETRIES=1
+KG_LLM_CONTEXT_LENGTH=8192
+KG_LLM_MAX_OUTPUT_TOKENS=2048
+```
 
-## 3. 실행
+질의 자격증명은 ingestion 자격증명으로 fallback하지 않는다. 동적 Cypher 운영에는 별도 읽기 전용 계정이 최종 방어선이다. Community Edition 등으로 권한 분리가 보장되지 않는 환경은 PoC의 잔여 운영 위험이다.
 
 ```bash
 uv sync --locked
 uv run python -m evidence_chat.server
 ```
 
-기본 주소는 `http://127.0.0.1:8501`이다. 포트와 호스트는 다음으로 바꿀 수 있다.
+기본 주소는 `http://127.0.0.1:8501`이다. 인증이 없는 로컬 개발 서버이므로 외부 인터페이스에 바인딩하지 않는다.
 
-```bash
-uv run python -m evidence_chat.server --host 127.0.0.1 --port 8531
+## 애플리케이션 수명주기
+
+Starlette lifespan에서 다음 객체를 한 번 구성하고 `app.state`에 보관한다.
+
+- query 전용 Neo4j driver
+- provider-neutral `StructuredLLMClient`
+- `NaturalLanguageQueryService`
+- `CurriculumChatService`
+- 동시 실행 제한기
+
+요청마다 driver나 모델 client를 다시 만들지 않는다. 종료 시 Neo4j driver만 닫으며 Ollama 프로세스는 종료하지 않는다. 기본 동시 LLM 요청은 1개다.
+
+| 변수 | 기본값 | 역할 |
+|---|---:|---|
+| `KG_CHAT_MAX_CONCURRENT` | `1` | 동시에 실행할 전체 chat 요청 수(1~4) |
+| `KG_CHAT_CLIENT_TIMEOUT_SECONDS` | `180` | 브라우저 대기 제한(60~900초) |
+| `KG_CHAT_DEBUG` | `false` | 정제된 request ID/error code 표시 |
+| `CHATBOT_HOST` | `127.0.0.1` | 로컬 bind 주소 |
+| `CHATBOT_PORT` | `8501` | UI 포트 |
+
+브라우저 취소·연결 종료는 UI 대기를 중단하지만 이미 워커에서 시작된 Ollama 호출은 즉시 끝나지 않을 수 있다. 서버는 단일 GPU를 위해 새 요청을 동시성 제한기에 대기시킨다.
+
+## ChatResponse와 상태별 화면
+
+프론트 adapter는 `ChatResponse.to_dict()`의 8개 필드 계약을 검사한다.
+
+```text
+request_id, status, answer_text, citations,
+used_fact_ids, used_evidence_ids, clarification, error_code
 ```
 
-서버는 인증을 제공하지 않는 로컬 개발용이므로 기본 바인딩을 `127.0.0.1`로 고정했다. 외부에 노출하지 않는다.
+일반 화면에는 `answer_text`, 상태, clarification과 Citation만 표시한다. 내부 Fact/Evidence ID, request ID, error code, QueryPlan, Cypher, 파라미터는 숨긴다. `KG_CHAT_DEBUG=true`일 때만 정제된 request ID와 allowlist 오류 코드를 개발 정보로 표시한다.
 
-## 4. 발췌 PDF 연결
-
-근거 페이지 이미지와 빨간 박스 표시는 발췌 PDF가 있어야 동작한다.
-
-| 항목 | 값 |
+| 상태 | 화면 처리 |
 |---|---|
-| 기본 경로 | `data/raw/2026_curriculum_excerpt.pdf` |
-| 경로 재지정 | `CURRICULUM_PDF_PATH` 환경변수 |
-| 기준 SHA-256 | Verified bundle의 `metadata.source_document.sha256`에서 읽는다 |
-| 기준 페이지 수 | 실제 PDF에서 읽어 상태 응답에 담는다 |
+| `ANSWERABLE` | 결정론적 한국어 답변과 VERIFIED Citation |
+| `CLARIFICATION_REQUIRED` | 오류가 아닌 추가 정보 요청, Citation 없음 |
+| `OUT_OF_SCOPE` | 2026·공통 교양·컴퓨터공학과 범위 안내 |
+| `UNSUPPORTED` | 현재 지원하지 않는 질문 유형 안내 |
+| `UNRESOLVED` | 원문·정책 미확정 안내, 추정 금지 |
+| `NOT_FOUND` | 검증된 결과 0건 안내, 확정 부정으로 표현하지 않음 |
+| `SAFE_FAILURE` | 중앙에서 정한 일반 안전 문구, Citation 없음 |
 
-```bash
-CURRICULUM_PDF_PATH=/path/to/2026_curriculum_excerpt.pdf uv run python -m evidence_chat.server
+`ANSWER_VALIDATION_FAILED`는 status가 아니라 `SAFE_FAILURE`의 내부 오류 코드다.
+
+## SSE와 진행 표시
+
+백엔드는 planner·Cypher·EXPLAIN 내부 callback을 제공하지 않는다. UI는 확인할 수 없는 가짜 세부 단계를 만들지 않고 세 상태만 표시한다.
+
+```text
+질문 전송됨 → 답변을 확인하고 있습니다 → 답변 완료
 ```
 
-PDF는 `.gitignore`의 `*.pdf` 규칙으로 저장소에 커밋되지 않는다. 각 팀원이 로컬에 둔다.
+`POST /api/ask`는 `progress`, `result`, `error`, `end` SSE 이벤트를 보낸다. `result.response`는 승인된 8개 wire 필드이고 `result.presentation`은 상태 라벨, PDF page group, 공개 PDF 상태와 선택적 debug metadata다.
 
-해시가 기준과 다르면 화면 상단과 진행 단계에 경고를 표시하고 계속 동작한다. 근거 위치가 어긋날 수 있다는 뜻이므로 확정 근거로 쓰기 전에 원본을 확인한다.
+## Citation과 PDF 표시
 
-## 5. 화면 구성
+Citation은 다음 검증 값을 그대로 사용한다.
 
-### 1단계 · 질문 입력
+- `evidence_id`, 직접 연결된 `fact_ids`
+- `source_text`
+- `excerpt_page`, `source_pdf_page`, `printed_page`
 
-프롬프트 입력창만 보여 준다. 예시 질문 버튼을 누르면 그대로 전송된다.
+화면은 일반 사용자에게 내부 ID를 표시하지 않고 다음처럼 세 페이지를 구분한다.
 
-- `Enter` 전송, `Shift`+`Enter` 줄바꿈
-- 최대 300자
-- 상단 상태 배지에 Neo4j 연결과 PDF 탑재 상태를 표시한다
-
-### 2단계 · 처리 과정
-
-질문을 보내면 화면이 전환되고 8단계 진행 상황이 서버 전송 이벤트(SSE)로 실시간 표시된다. 회전 표시와 진행 바가 대기 시간을 메운다.
-
-| 단계 | 이름 | 표시 내용 |
-|---|---|---|
-| 1 | 질문 정규화 | 전각·공백 정리 결과 |
-| 2 | 질의 계획 수립 | 사용한 플래너, 선택된 Intent, 매칭 신호, 기본값 적용 사실 |
-| 3 | 요청 계약 검증 | Intent별 필수·허용 파라미터 검증 결과와 최종 파라미터 |
-| 4 | 읽기 전용 Cypher 선택 | 실제 실행되는 Cypher 템플릿 전문 |
-| 5 | Neo4j 조회 | 읽기 트랜잭션 소요 시간, 판정, 근거 후보 수 |
-| 6 | VERIFIED 근거 수집 | Evidence 건수와 참조 발췌 페이지 목록 |
-| 7 | PDF 근거 위치 계산 | 렌더링 대상 페이지 수, 강조 탐색 성공 건수 |
-| 8 | 답변 구성 | 최종 판정 라벨 |
-
-각 단계는 `done`, `skipped`, `failed` 중 하나로 끝난다. 수행하지 않은 단계를 완료로 표시하지 않는다. 예를 들어 PDF가 없으면 7단계는 `skipped`이고 이유가 함께 나온다. 어느 단계에서 실패했는지, 그 단계까지 무엇을 했는지가 화면에 남으므로 디버깅 시 서버 로그를 먼저 볼 필요가 없다.
-
-### 3단계 · 답변과 근거
-
-- 판정 배지(`확정 답변`, `추가 정보 필요`, `검토 보류`, `지원 범위 밖`, `해당 사실 없음`)와 Intent 이름
-- 한 줄 요약 답변과 항목별 상세
-- 질의 계층이 준 경고 문구
-- 근거 문서: 참조한 발췌 페이지만 카드로 표시한다. 참조하지 않은 페이지는 렌더링하지 않는다.
-  - 페이지 머리글에 `발췌 p.N · 인쇄 p.M · 원본 규정집 p.K`를 함께 표시한다
-  - 왼쪽은 페이지 이미지와 빨간 박스, 오른쪽은 Evidence 원문 카드
-  - 원문 카드에 마우스를 올리거나 키보드 포커스를 주면 해당 근거의 박스만 강조된다
-- `디버그 로그 · 처리 단계 전체 보기`를 펼치면 2단계에서 본 8단계 기록을 답변 화면에서 다시 확인할 수 있다
-
-## 6. 지원 질문 범위
-
-질문은 `kg_builder`의 6개 Intent 중 하나로만 변환된다.
-
-| 질문 예시 | Intent |
-|---|---|
-| 2026학번 교양은 최소 몇 학점을 들어야 해? | `GET_GENERAL_EDUCATION_MIN_CREDITS` |
-| 균형교양 이수요건이 어떻게 돼? | `GET_BALANCED_GENERAL_REQUIREMENT` |
-| 편입생인데 교양을 면제받을 수 있어? | `GET_TRANSFER_GENERAL_EXEMPTION` |
-| 자료구조는 몇 학년 몇 학기에 열려? | `GET_COURSE_OFFERING` |
-| 컴퓨터공학과 전공필수 과목을 알려줘 | `GET_MAJOR_REQUIRED_COURSES` |
-| 자료구조의 이수구분은 뭐야? | `GET_COURSE_COMPLETION_TYPE` |
-
-여섯 유형에 해당하지 않으면 2단계(질의 계획 수립)에서 실패로 표시하고 지원 범위를 안내한다. 추측해서 다른 Intent로 보내지 않는다. 질문이 비어 있거나 300자를 넘으면 그보다 앞선 1단계(질문 정규화)에서 실패한다.
-
-## 7. 질의 계획 수립 방식
-
-기본 플래너는 규칙 기반이다. 한국어 표층 신호로 Intent를 고르고 파라미터를 채운다.
-
-- 학수번호는 `[A-Za-z]{2,4}\d{4}` 정규식으로 찾고 대문자로 정규화한다
-- 과목명은 Verified bundle에서 만든 과목 사전(325건)으로 최장 일치를 찾는다
-- 학년도가 없으면 2026학년도를 기본값으로 쓰고 그 사실을 진행 화면에 표시한다
-- 학과가 필요한 Intent는 현재 지원 범위인 컴퓨터공학과로 조회한다
-
-LLM 플래너는 `evidence_chat.planner.Planner` 프로토콜(`name` 속성과 `plan(question) -> Plan`)을 구현해 `ChatPipeline(planner=...)`로 교체할 수 있다. 진행 화면 2단계에는 실제로 사용된 플래너 이름이 그대로 출력되므로, LLM을 붙이지 않은 상태에서 LLM이 동작한 것처럼 보이지 않는다.
-
-## 8. 안전 정책
-
-- 임의 Cypher 입력 경로가 없다. 사용자 질문은 지원 Intent로만 변환된다.
-- 4단계에서 `ensure_read_only()`로 쓰기 키워드 차단을 다시 확인한다.
-- 조회는 `kg_builder.query_service`의 읽기 트랜잭션만 사용한다. 화면 계층은 데이터를 만들거나 바꾸지 않는다.
-- 확정 답변은 `VERIFIED` 노드와 `VERIFIED` Evidence가 있을 때만 나온다. `REVIEW_REQUIRED`와 unresolved 항목은 별도 판정으로 분리해 표시한다.
-- 요청 본문은 8KB로 제한한다.
-- 서버는 비밀값을 응답에 담지 않는다. 상태 응답에는 접속 endpoint(`host:port`)만 포함한다.
-
-## 9. 엔드포인트
-
-| 메서드 | 경로 | 용도 |
-|---|---|---|
-| `GET` | `/` | 3단계 화면 |
-| `GET` | `/api/health` | Neo4j 연결 상태, PDF 탑재 상태, 예시 질문 |
-| `POST` | `/api/ask` | 질문 1건을 SSE 단계 이벤트로 스트리밍 |
-| `GET` | `/api/pdf/page/{n}.png` | 발췌 PDF n쪽 렌더 이미지 (1-based) |
-
-SSE 이벤트 타입은 `step`, `result`, `error`, `end` 네 가지다.
-
-```bash
-curl -N -X POST http://127.0.0.1:8501/api/ask \
-  -H 'Content-Type: application/json' \
-  -d '{"question":"컴퓨터공학과 전공필수 과목을 알려줘"}'
+```text
+발췌 PDF 17쪽 · 원본 PDF 262쪽 · 인쇄 페이지 254쪽
 ```
 
-## 10. 근거 강조 좌표를 구하는 방법
+동일 Evidence는 한 번만 표시하고 발췌 페이지 기준으로 그룹화한다. 근거가 4건 이상이면 기본으로 접어 `근거 N건 보기`로 표시한다. PDF 이미지가 실패해도 Evidence 원문과 페이지는 유지된다.
 
-Verified KG의 `Evidence.bbox`는 현재 511건 모두 null이다. 따라서 저장된 좌표를 쓸 수 없다. 대신 다음 순서로 좌표를 계산한다.
+발췌 PDF는 커밋하지 않는다.
 
-1. `Evidence.raw_text`를 `|`, `·`, `/`, 연속 공백으로 쪼갠다.
-2. `이론`, `실기`, `개설학기` 같은 라벨 접두어를 떼고 두 글자 미만 조각과 한두 자리 숫자를 버린다.
-3. 남은 조각을 긴 것부터 최대 12개까지 `page.search_for()`로 찾는다.
-4. 같은 줄의 사각형을 합쳐 박스 수를 줄이고, 페이지 크기로 나눠 0~1 값으로 정규화한다.
-5. 화면은 정규화된 값을 백분율 좌표로 바꿔 이미지 위에 겹친다.
+```dotenv
+CURRICULUM_PDF_PATH=/local/path/2026_curriculum_excerpt.pdf
+```
 
-같은 질문의 근거가 여러 개여도 PDF는 한 번만 열고 페이지당 한 번만 가져온다. PDF 검사 결과는 경로와 파일의 mtime·크기로, 렌더 이미지는 경로·mtime·페이지·DPI로 캐시한다. 파일을 교체하면 캐시 키가 달라져 자동으로 다시 읽는다.
+지정하지 않으면 Git 제외된 기본 경로 `data/raw/2026_curriculum_excerpt.pdf`를 확인한다. 로컬 절대 경로와 문서 해시는 브라우저 상태 응답에 노출하지 않는다. 현재 bbox가 없으므로 Evidence 원문 조각을 PyMuPDF로 검색하며, 찾지 못하면 텍스트 Citation만 표시한다.
 
-찾지 못한 근거는 카드에 `페이지에서 위치를 찾지 못했습니다`로 표시한다. 조용히 빈 박스를 만들지 않는다.
+## 입력과 브라우저 보안
 
-`Evidence.bbox`가 채워지면 이 검색 단계를 저장된 좌표로 대체할 수 있다.
+- 빈 질문과 2,000자 초과 질문을 서버에서 거부한다.
+- 질문 JSON은 `question` 하나만 허용한다.
+- UI는 질문·답변·Evidence를 `textContent`로만 삽입한다.
+- PDF route는 Starlette 정수 path converter를 사용한다.
+- 서버 오류, traceback, 로컬 경로, 비밀번호, 토큰을 반환하지 않는다.
+- 외부 URL 자동 이동과 임의 Cypher 입력 경로가 없다.
+- 전송 중 `inFlight`와 비활성 버튼으로 중복 제출을 막는다.
+- `AbortController`와 최소 60초 client timeout을 사용한다.
 
-## 11. 알려진 제한사항
+## 테스트
 
-- 지원 학년도는 2026년, 학과는 컴퓨터공학과다. 질의 계층의 범위와 같다.
-- 질문 해석은 규칙 기반이므로 표현이 크게 다르면 지원 범위 안내로 떨어진다.
-- 학생 개인 이수내역을 다루지 않는다. 온톨로지에 학생·수강내역 라벨이 없다.
-- 대화 문맥을 유지하지 않는다. 질문 1건마다 독립 처리한다.
-- 강조 좌표는 텍스트 레이어가 있는 PDF에서만 동작한다. 스캔 이미지 PDF는 박스가 생기지 않는다.
-- 좌표 계산과 페이지 렌더링은 PyMuPDF에 의존한다. PyMuPDF는 AGPL-3.0이므로 배포 형태를 바꿀 때 라이선스를 확인해야 한다.
+실제 Neo4j/Ollama 없이 fake `CurriculumChatService`를 lifespan에 주입한다.
 
-## 12. 문제 해결
+```bash
+uv run pytest -q tests/test_evidence_chat.py
+```
 
-| 증상 | 확인 |
-|---|---|
-| 상단 배지가 `Neo4j 연결 안 됨` | `.env` 값과 컨테이너 상태를 확인한다. `uv run python -m kg_builder.neo4j_ingest check-connection` |
-| 답변이 `해당 사실 없음` | 적재가 끝났는지 확인한다. `uv run python -m kg_builder.neo4j_ingest verify` |
-| 7단계가 계속 `skipped` | PDF 경로와 `CURRICULUM_PDF_PATH`를 확인한다 |
-| 페이지 이미지는 나오는데 박스가 없음 | 원문 조각이 페이지 텍스트와 다른 경우다. 근거 카드의 안내 문구를 확인한다 |
-| 특정 단계에서 `failed` | 그 단계의 상세 줄에 원인이 그대로 표시된다 |
-| 기준 해시 경고가 계속 뜸 | 발췌 PDF를 다시 뜬 경우다. Verified bundle의 `metadata.source_document.sha256`을 갱신한다 |
+Starlette 1.6 `TestClient`는 `httpx2`를 사용하므로 dev dependency에 명시한다. 단위 테스트는 전체 status, 8필드 drift, Citation 1/9건, 페이지 grouping, 안전한 DOM API, 입력 길이, traversal, PDF fallback을 검사한다.
+
+실제 서비스 통합은 로컬 Neo4j와 Ollama가 준비됐을 때만 실행한다.
+
+```bash
+KG_NEO4J_INTEGRATION=1 uv run pytest -q
+KG_LOCAL_LLM_INTEGRATION=1 uv run pytest -q tests/test_answer_integration.py -s
+```
+
+실행하지 않은 실제 브라우저 시연이나 모델 통합은 통과로 기록하지 않는다.
+
+## 제한사항
+
+- 현재 데이터 범위는 2026학년도 공통 교양과 컴퓨터공학과 교육과정이다.
+- 요청 취소가 이미 시작된 로컬 모델 계산을 강제 중단하지는 않는다.
+- 단일 프로세스·단일 GPU PoC이며 다중 사용자 queue, 인증, CSRF 정책은 후속 범위다.
+- PyMuPDF 기반 강조는 텍스트 레이어가 있는 PDF에 한정된다.

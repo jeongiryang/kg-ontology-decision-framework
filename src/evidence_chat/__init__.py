@@ -1,1 +1,1 @@
-"""Stepwise, evidence-anchored chat screen over the verified curriculum knowledge graph."""
+"""Starlette presentation layer for approved ``CurriculumChatService`` responses."""
