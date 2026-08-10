@@ -5,7 +5,7 @@
 - 파일명 규칙: `NNNN-short-task-name.md`
   - `NNNN`은 이 폴더에서 독립적으로 증가하는 4자리 번호다.
   - 작업명은 영문 소문자 kebab-case로 작성한다.
-- 현재 다음 로그 번호: `0006`
+- 현재 다음 로그 번호: `0007`
 - 중앙 템플릿: [AI 시뮬레이션 로그 템플릿](../_template.md)
 - 중앙 운영 규칙: [AI 시뮬레이션 로그 운영 규칙](../README.md)
 
@@ -16,3 +16,4 @@
 - [0003. 온톨로지 V1 스키마 검토](0003-ontology-v1-schema-review.md)
 - [0004. 2026 교육과정 데이터 큐레이션 시도](0004-2026-curriculum-data-curation.md)
 - [0005. 온톨로지 V0.2 확장 및 기준 데이터 마이그레이션](0005-ontology-v02-data-migration.md)
+- [0006. Neo4j V0.2 멱등 적재 구현](0006-neo4j-idempotent-ingestion.md)

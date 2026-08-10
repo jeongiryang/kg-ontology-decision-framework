@@ -119,6 +119,23 @@ kg-ontology-decision-framework/
 상세 설치 및 검증 절차는 [로컬 개발환경 구축 가이드](docs/environment-setup.md)를 참고합니다.
 
 - [2026 학사 교육과정 온톨로지 V1 설계](docs/ontology/ontology-v1.md)
+- [Neo4j V0.2 스키마 적용 및 Verified KG 적재 가이드](docs/neo4j-ingestion.md)
+
+Verified bundle 검증과 로컬 Neo4j 적재는 다음 순서로 실행합니다. 각 팀원은 자신의 빈 로컬 Neo4j 데이터베이스에서 독립적으로 수행합니다.
+
+```bash
+uv run python -m kg_builder.neo4j_ingest validate
+uv run python -m kg_builder.neo4j_ingest check-connection
+uv run python -m kg_builder.neo4j_ingest apply-schema
+uv run python -m kg_builder.neo4j_ingest load
+uv run python -m kg_builder.neo4j_ingest verify
+```
+
+- `validate`: 연결 없이 명세와 Verified bundle을 검사합니다.
+- `check-connection`: 로컬 서버 버전과 현재 DB 개수를 확인합니다.
+- `apply-schema`: 고유 제약조건과 조회 인덱스를 멱등 적용합니다.
+- `load`: 빈 DB에 같은 bundle을 두 번 적재하여 멱등성을 확인합니다.
+- `verify`: 전체 개수와 대표 학사 사실·Evidence를 실제 Cypher로 검증합니다.
 
 ### AI 시뮬레이션 로그
 
