@@ -1,0 +1,119 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>학사규정 근거 챗봇</title>
+  <link rel="stylesheet" href="/static/app.css" />
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand">
+      <span class="brand-mark" aria-hidden="true"></span>
+      <div>
+        <h1>학사규정 근거 챗봇</h1>
+        <p>2026학년도 Verified 지식그래프 · 규정 원문 근거 기반 응답</p>
+      </div>
+    </div>
+    <div class="status" id="status" role="status" aria-live="polite">
+      <span class="dot" data-state="unknown"></span>
+      <span class="status-text">상태 확인 중</span>
+    </div>
+  </header>
+
+  <nav class="stages" aria-label="진행 단계">
+    <ol>
+      <li data-stage="ask" class="is-current"><span>1</span>질문 입력</li>
+      <li data-stage="progress"><span>2</span>처리 과정</li>
+      <li data-stage="answer"><span>3</span>답변과 근거</li>
+    </ol>
+  </nav>
+
+  <main>
+    <!-- 1단계: 질문 입력 -->
+    <section class="screen is-active" id="screen-ask" aria-labelledby="ask-title">
+      <div class="ask-wrap">
+        <h2 id="ask-title">무엇을 확인해 드릴까요?</h2>
+        <p class="ask-sub">
+          교양 이수요건, 과목 편성, 전공필수, 이수구분을 물어보세요.
+          답변은 검증된 규정 원문 근거와 함께 표시됩니다.
+        </p>
+        <form id="ask-form" autocomplete="off">
+          <div class="prompt">
+            <textarea
+              id="question"
+              name="question"
+              rows="1"
+              maxlength="300"
+              placeholder="예) 자료구조는 몇 학년 몇 학기에 열려?"
+              aria-label="질문 입력"
+              required
+            ></textarea>
+            <button type="submit" id="submit" aria-label="질문 보내기">
+              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 12h13M13 6l6 6-6 6" /></svg>
+            </button>
+          </div>
+          <p class="hint"><kbd>Enter</kbd> 전송 · <kbd>Shift</kbd>+<kbd>Enter</kbd> 줄바꿈</p>
+        </form>
+        <div class="examples" id="examples" aria-label="예시 질문"></div>
+        <p class="notice" id="ask-notice" hidden></p>
+      </div>
+    </section>
+
+    <!-- 2단계: 처리 과정 -->
+    <section class="screen" id="screen-progress" aria-labelledby="progress-title">
+      <div class="progress-wrap">
+        <div class="progress-head">
+          <div class="spinner" id="spinner" aria-hidden="true"></div>
+          <div>
+            <h2 id="progress-title">처리 중입니다</h2>
+            <p class="progress-now" id="progress-now">질문을 정규화하고 있습니다</p>
+          </div>
+        </div>
+        <blockquote class="asked" id="asked"></blockquote>
+        <div class="bar"><div class="bar-fill" id="bar-fill"></div></div>
+        <ol class="steps" id="steps"></ol>
+        <p class="notice error" id="progress-error" hidden></p>
+        <button class="ghost" id="progress-back" type="button">질문 다시 입력</button>
+      </div>
+    </section>
+
+    <!-- 3단계: 답변과 근거 -->
+    <section class="screen" id="screen-answer" aria-labelledby="answer-title">
+      <div class="answer-wrap">
+        <blockquote class="asked" id="answer-question"></blockquote>
+
+        <article class="answer-card" id="answer-card">
+          <div class="answer-meta">
+            <span class="badge" id="answer-badge"></span>
+            <span class="intent" id="answer-intent"></span>
+          </div>
+          <h2 id="answer-title">답변</h2>
+          <ul class="answer-details" id="answer-details"></ul>
+          <ul class="answer-warnings" id="answer-warnings"></ul>
+        </article>
+
+        <section class="evidence" aria-labelledby="evidence-title">
+          <div class="evidence-head">
+            <h3 id="evidence-title">근거 문서</h3>
+            <p id="evidence-summary"></p>
+          </div>
+          <div id="evidence-pages"></div>
+          <p class="notice" id="pdf-notice" hidden></p>
+        </section>
+
+        <details class="debug">
+          <summary>디버그 로그 · 처리 단계 전체 보기</summary>
+          <ol class="steps" id="answer-steps"></ol>
+        </details>
+
+        <div class="answer-actions">
+          <button class="primary" id="answer-again" type="button">새 질문하기</button>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <script src="/static/app.js"></script>
+</body>
+</html>
