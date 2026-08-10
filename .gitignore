@@ -8,3 +8,4 @@ __pycache__/
 *.hwp
 .DS_Store
 AGENTS.md
+logs/query-runs/

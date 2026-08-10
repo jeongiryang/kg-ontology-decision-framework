@@ -1,0 +1,148 @@
+"""Structured contract produced by a future natural-language planning model."""
+
+from __future__ import annotations
+
+from dataclasses import dataclass
+from typing import Any, Mapping
+
+from .schema_catalog import SchemaCatalog
+
+
+class QueryPlanError(ValueError):
+    """Raised when a QueryPlan is incomplete or violates the ontology contract."""
+
+
+MAX_QUESTION_LENGTH = 2_000
+
+
+@dataclass(frozen=True, slots=True)
+class FilterBinding:
+    """Query contract binding, validated against the ontology catalog at runtime."""
+
+    label: str
+    property_name: str
+    operator: str = "EQUALS"
+
+
+# This is query-policy metadata, not a duplicate schema definition.  Every referenced
+# label/property is checked against the generated ontology catalog before a plan is
+# accepted.  External filter names intentionally match ontology properties.
+FILTER_BINDINGS = {
+    "academic_year": FilterBinding("CurriculumVersion", "academic_year"),
+    "department_id": FilterBinding("Department", "department_id"),
+    "grade_year": FilterBinding("CourseOffering", "grade_year", "PARAMETER_IN_PROPERTY"),
+    "semester": FilterBinding("CourseOffering", "semester"),
+    "completion_type": FilterBinding("CourseOffering", "completion_type"),
+    "credits": FilterBinding("CourseOffering", "credits"),
+    "course_code": FilterBinding("Course", "course_code"),
+    "name_ko": FilterBinding("Course", "name_ko"),
+    "major_type": FilterBinding("ApplicabilityScope", "major_type"),
+    "admission_type": FilterBinding("ApplicabilityScope", "admission_type"),
+}
+SUPPORTED_FILTERS = frozenset(FILTER_BINDINGS)
+REQUIRED_SCOPE_FILTERS = frozenset({"academic_year", "department_id"})
+VOCABULARY_FILTERS = {
+    "semester": "semester",
+    "completion_type": "completion_type",
+    "major_type": "major_type",
+    "admission_type": "admission_type",
+}
+
+
+def validate_filter_policy(catalog: SchemaCatalog) -> None:
+    for name, binding in FILTER_BINDINGS.items():
+        definition = catalog.nodes.get(binding.label)
+        if definition is None or binding.property_name not in catalog.properties_for_labels(
+            {binding.label}
+        ):
+            raise QueryPlanError(
+                f"filter policy {name} refers to an undeclared ontology label/property"
+            )
+
+
+@dataclass(frozen=True, slots=True)
+class QueryPlan:
+    question: str
+    filters: dict[str, Any]
+    requested_fields: tuple[str, ...]
+    evidence_required: bool
+    intent: str | None = None
+
+    @classmethod
+    def from_dict(cls, payload: Mapping[str, Any], catalog: SchemaCatalog) -> "QueryPlan":
+        if not isinstance(payload, Mapping):
+            raise QueryPlanError("QueryPlan must be a JSON object")
+        validate_filter_policy(catalog)
+        allowed = {"question", "filters", "requested_fields", "evidence_required", "intent"}
+        unknown = set(payload) - allowed
+        if unknown:
+            raise QueryPlanError(f"unknown QueryPlan fields: {sorted(unknown)}")
+
+        question = payload.get("question")
+        if not isinstance(question, str) or not question.strip():
+            raise QueryPlanError("question must be a non-empty string")
+        if len(question) > MAX_QUESTION_LENGTH:
+            raise QueryPlanError(f"question must not exceed {MAX_QUESTION_LENGTH} characters")
+        filters = payload.get("filters")
+        if not isinstance(filters, Mapping):
+            raise QueryPlanError("filters must be a JSON object")
+        filters = dict(filters)
+        unsupported = set(filters) - SUPPORTED_FILTERS
+        if unsupported:
+            raise QueryPlanError(f"unsupported filters: {sorted(unsupported)}")
+        missing_scope = REQUIRED_SCOPE_FILTERS - set(filters)
+        if missing_scope:
+            raise QueryPlanError(f"missing required scope filters: {sorted(missing_scope)}")
+
+        year = filters.get("academic_year")
+        if isinstance(year, bool) or not isinstance(year, int) or not 1900 <= year <= 9999:
+            raise QueryPlanError("academic_year must be a four-digit integer")
+        grade = filters.get("grade_year")
+        if grade is not None and (
+            isinstance(grade, bool) or not isinstance(grade, int) or not 1 <= grade <= 6
+        ):
+            raise QueryPlanError("grade_year must be an integer from 1 to 6")
+        credits = filters.get("credits")
+        if credits is not None and (
+            isinstance(credits, bool) or not isinstance(credits, (int, float)) or credits < 0
+        ):
+            raise QueryPlanError("credits must be a non-negative number")
+        for name in ("department_id", "course_code", "name_ko"):
+            if name in filters:
+                value = filters[name]
+                if not isinstance(value, str) or not value.strip():
+                    raise QueryPlanError(f"{name} must be a non-empty string")
+                filters[name] = value.strip()
+        for name, vocabulary in VOCABULARY_FILTERS.items():
+            if name in filters and filters[name] not in catalog.controlled_vocabularies[vocabulary]:
+                raise QueryPlanError(f"{name} is not in controlled vocabulary {vocabulary}")
+
+        fields = payload.get("requested_fields")
+        if not isinstance(fields, list) or not fields:
+            raise QueryPlanError("requested_fields must be a non-empty array")
+        if any(not isinstance(field, str) or not field.strip() for field in fields):
+            raise QueryPlanError("requested_fields entries must be non-empty strings")
+        normalized_fields = tuple(field.strip() for field in fields)
+        if len(set(normalized_fields)) != len(normalized_fields):
+            raise QueryPlanError("requested_fields must not contain duplicates")
+        undeclared = set(normalized_fields) - catalog.all_node_properties
+        if undeclared:
+            raise QueryPlanError(
+                f"requested fields are absent from ontology_spec.json: {sorted(undeclared)}"
+            )
+
+        evidence_required = payload.get("evidence_required")
+        if not isinstance(evidence_required, bool):
+            raise QueryPlanError("evidence_required must be boolean")
+        if not evidence_required:
+            raise QueryPlanError("dynamic answer plans must require VERIFIED Evidence")
+        intent = payload.get("intent")
+        if intent is not None and (not isinstance(intent, str) or not intent.strip()):
+            raise QueryPlanError("intent, when present, is logging metadata only and must be text")
+        return cls(
+            question=question.strip(),
+            filters=filters,
+            requested_fields=normalized_fields,
+            evidence_required=evidence_required,
+            intent=intent.strip() if isinstance(intent, str) else None,
+        )
