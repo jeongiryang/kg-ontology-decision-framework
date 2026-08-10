@@ -53,6 +53,8 @@ NEO4J_QUERY_DATABASE=neo4j
 
 `KG_LLM_PROVIDER`는 `ollama` 또는 `openai-compatible`만 허용한다. `KG_LLM_BASE_URL`은 `http://localhost` 또는 `http://127.0.0.1`만 허용하며 클라우드 API fallback은 없다. API key는 OpenAI-compatible 로컬 서버가 요구할 때만 환경변수로 전달하고 URL·로그·trace에는 기록하지 않는다. `NEO4J_QUERY_*`도 기존 ingestion 자격증명으로 자동 fallback하지 않는다.
 
+두 provider adapter는 HTTP `301`, `302`, `303`, `307`, `308`을 포함한 redirect를 모두 거부한다. 외부 목적지뿐 아니라 다른 loopback 주소나 같은 서버의 다른 경로로도 따라가지 않으며, redirect 응답에는 일반 네트워크 재시도를 적용하지 않는다. 실패는 본문·`Location`·Authorization·prompt를 노출하지 않는 `LLM_HTTP_REDIRECT_REJECTED`로 반환한다.
+
 연구실 vLLM은 외부 주소를 애플리케이션에 직접 설정하지 않고 SSH 터널의 loopback endpoint로 접근한다.
 
 ```dotenv
@@ -69,6 +71,8 @@ KG_LLM_MAX_OUTPUT_TOKENS=2048
 
 base URL이 `/v1`으로 끝나면 adapter는 `/chat/completions`만 붙이고, root URL이면 `/v1/chat/completions`를 붙인다. `/v1/v1` 중복 경로는 설정 오류다.
 
+`KG_LLM_CONTEXT_LENGTH`는 Ollama 요청의 `options.num_ctx`에 사용된다. OpenAI Chat Completions에는 동일한 표준 요청 필드가 없으므로 OpenAI-compatible adapter가 이 값을 서버에 전달하거나 서버 상한과 자동 동기화한다고 보장하지 않는다. vLLM의 context 상한은 서버 기동 시 `--max-model-len` 등으로 별도 설정해야 하며, 실제 vLLM 연결 검증에서는 클라이언트 기대값과 서버 상한을 각각 확인해야 한다.
+
 현재 로컬 Neo4j Community Edition PoC에서는 `.env`에 query 변수를 명시적으로 분리했지만 동일 로컬 사용자를 가리킨다. 데이터베이스 역할 기반의 최종 읽기 전용 권한은 보장되지 않는다. 따라서 validator, EXPLAIN, executor 방어가 모두 필요하며, 운영 배포에서는 권한 분리가 가능한 Neo4j 환경의 reader 계정을 최종 방어선으로 사용해야 한다.
 
 ## 4. Provider 경계와 모델 교체
@@ -83,7 +87,7 @@ StructuredLLMClient
 
 모델·엔진 교체 시 QueryPlan, SchemaSelector, Cypher 반환 계약, SafetyPipeline, Neo4j, Evidence 검증과 향후 renderer·프론트엔드 계약은 유지한다. provider 설정·adapter·JSON 준수율·Cypher 정확도·프롬프트 호환성·context·응답시간·VRAM·회귀 질문 결과만 다시 검증한다. KG 재적재나 온톨로지 재작성은 필요하지 않다.
 
-OpenAI-compatible adapter는 실제 네트워크 없이 요청 envelope, 선택적 Bearer token, JSON Schema, 응답 파싱, 크기·timeout·HTTP 오류 비노출을 단위 테스트했다. 실제 vLLM 서버 통합은 아직 실행하지 않았다.
+OpenAI-compatible adapter는 실제 네트워크 없이 요청 envelope, 선택적 Bearer token, JSON Schema, 응답 파싱, 크기·timeout·HTTP 오류 비노출과 redirect 무추적을 단위 테스트했다. 실제 vLLM 서버 통합은 아직 실행하지 않았다.
 
 ## 5. Planner와 스키마 선택
 
@@ -161,7 +165,7 @@ KG_LOCAL_LLM_INTEGRATION=1 uv run pytest -q tests/test_local_llm_integration.py 
 
 GitHub Actions에서는 로컬 모델·Neo4j 비밀값이 필요한 smoke를 성공한 것으로 가장하지 않고 skip한다.
 
-Provider adapter 단위 테스트는 네트워크 없이 Ollama와 OpenAI-compatible 양쪽의 요청 경로·구조화 출력·응답 제한·오류 비노출을 검증한다. 실제 vLLM integration은 실행하지 않는다.
+Provider adapter 단위 테스트는 네트워크 없이 Ollama와 OpenAI-compatible 양쪽의 요청 경로·구조화 출력·응답 제한·오류 비노출을 검증한다. `301`, `302`, `303`, `307`, `308` 각각에서 목적지 요청과 재시도가 없고 API key·prompt·응답 본문·`Location`이 오류에 포함되지 않는지도 검사한다. 실제 Neo4j·Ollama 통합 테스트의 runtime trace는 `TemporaryDirectory`에 격리해 저장소의 `logs/query-runs/`에 테스트 질문 파일을 남기지 않는다. 실제 vLLM integration은 실행하지 않는다.
 
 ## 10. 개인정보와 로그
 

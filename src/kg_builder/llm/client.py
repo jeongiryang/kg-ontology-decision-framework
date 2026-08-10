@@ -20,6 +20,7 @@ from .models import LLMGeneration
 
 LOCAL_HOSTS = frozenset({"localhost", "127.0.0.1"})
 MAX_RESPONSE_BYTES = 1_048_576
+HTTP_REDIRECT_STATUS_CODES = frozenset({301, 302, 303, 307, 308})
 
 
 class LLMConfigurationError(ValueError):
@@ -35,6 +36,26 @@ class LLMResponseError(RuntimeError):
 class LLMProvider(StrEnum):
     OLLAMA = "ollama"
     OPENAI_COMPATIBLE = "openai-compatible"
+
+
+class _HTTPRedirectRejected(RuntimeError):
+    """Internal signal that intentionally omits Location and response content."""
+
+
+class _RejectAllRedirects(urllib.request.HTTPRedirectHandler):
+    """Reject every redirect before urllib can construct a follow-up request."""
+
+    def redirect_request(
+        self,
+        req: urllib.request.Request,
+        fp: Any,
+        code: int,
+        msg: str,
+        headers: Any,
+        newurl: str,
+    ) -> urllib.request.Request | None:
+        del req, fp, code, msg, headers, newurl
+        raise _HTTPRedirectRejected
 
 
 @dataclass(frozen=True, slots=True)
@@ -141,6 +162,7 @@ class _HTTPStructuredClient:
         settings.validate()
         self.settings = settings
         self.model = settings.model
+        self._opener = urllib.request.build_opener(_RejectAllRedirects())
 
     def _post(self, payload: Mapping[str, Any], headers: Mapping[str, str]) -> dict[str, Any]:
         encoded = json.dumps(payload, ensure_ascii=False).encode("utf-8")
@@ -153,7 +175,7 @@ class _HTTPStructuredClient:
                 method="POST",
             )
             try:
-                with urllib.request.urlopen(
+                with self._opener.open(
                     request, timeout=self.settings.timeout_seconds
                 ) as response:
                     raw = response.read(MAX_RESPONSE_BYTES + 1)
@@ -175,7 +197,25 @@ class _HTTPStructuredClient:
                 return envelope
             except LLMResponseError:
                 raise
+            except _HTTPRedirectRejected as exc:
+                raise LLMResponseError(
+                    "LLM_HTTP_REDIRECT_REJECTED",
+                    (
+                        f"{self.settings.provider.value} rejected an HTTP 3xx redirect; "
+                        "the request was not retried"
+                    ),
+                ) from exc
             except urllib.error.HTTPError as exc:
+                # Defense in depth if another urllib handler surfaces a redirect as
+                # HTTPError instead of invoking _RejectAllRedirects.
+                if exc.code in HTTP_REDIRECT_STATUS_CODES:
+                    raise LLMResponseError(
+                        "LLM_HTTP_REDIRECT_REJECTED",
+                        (
+                            f"{self.settings.provider.value} rejected an HTTP 3xx redirect; "
+                            "the request was not retried"
+                        ),
+                    ) from exc
                 last_transport_error = exc
                 if attempt >= self.settings.max_retries:
                     raise LLMResponseError(

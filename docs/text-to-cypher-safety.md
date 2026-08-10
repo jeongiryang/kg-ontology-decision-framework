@@ -251,6 +251,8 @@ RTX 4070 Ti 로컬 PoC에서 다음 두 인터페이스를 구현했다.
 
 현재 실측 모델은 Ollama `qwen2.5-coder:14b` Q4_K_M이며 두 출력은 현재 계약과 검증기를 반드시 통과한다. 검증 실패 시 모델에 오류 코드만 제공해 한 번 재시도하고, 미검증 Cypher를 실행하는 fallback은 없다. planner와 generator는 provider-neutral `StructuredLLMClient`에만 의존하고 CLI는 factory로 Ollama 또는 OpenAI-compatible adapter를 선택한다. 실제 연구실 vLLM 연결은 아직 검증하지 않았다. 자세한 환경·benchmark·provider 전환·CLI는 [로컬 LLM PoC 문서](local-llm-query-pipeline.md)를 참고한다.
 
+LLM HTTP adapter는 최초 loopback endpoint 검증에만 의존하지 않는다. urllib의 자동 redirect를 비활성화하고 `301`, `302`, `303`, `307`, `308`을 모두 즉시 거부하므로 Authorization, prompt, 요청 본문과 JSON Schema가 redirect 목적지로 재전송되지 않는다. redirect는 재시도하지 않으며 안전한 오류 코드 `LLM_HTTP_REDIRECT_REJECTED`만 상위 서비스의 `SAFE_FAILURE` 경로로 전달한다.
+
 아직 구현하지 않은 항목:
 
 - 검증된 행을 한국어 근거 답변으로 변환하는 renderer

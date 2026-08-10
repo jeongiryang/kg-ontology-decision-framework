@@ -9,6 +9,7 @@ from kg_builder.llm.client import (
     LLMConfigurationError,
     LLMGeneration,
     LLMProvider,
+    LLMResponseError,
     LLMSettings,
 )
 from kg_builder.llm.cypher_generator import LocalCypherGenerator, build_syntax_scaffold
@@ -40,6 +41,17 @@ class SequenceClient:
     def generate_json(self, *, system_prompt, user_prompt, response_schema):
         self.prompts.append(user_prompt)
         return LLMGeneration(self.payloads.pop(0), 0.01, self.model)
+
+
+class RedirectFailingClient:
+    model = "fake-local-model"
+
+    def generate_json(self, *, system_prompt, user_prompt, response_schema):
+        del system_prompt, user_prompt, response_schema
+        raise LLMResponseError(
+            "LLM_HTTP_REDIRECT_REJECTED",
+            "ollama rejected an HTTP 3xx redirect; the request was not retried",
+        )
 
 
 def ready_planner_payload() -> dict[str, Any]:
@@ -219,6 +231,23 @@ class NaturalLanguageServiceTests(unittest.TestCase):
         self.assertEqual(generator.errors[0], None)
         self.assertIsNotNone(generator.errors[1])
         self.assertNotIn("question", result.query_plan)
+
+    def test_redirect_provider_failure_is_returned_as_safe_failure(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            service = NaturalLanguageQueryService(
+                LocalQueryPlanner(RedirectFailingClient()),
+                SequenceGenerator([]),
+                SafetyPipeline(
+                    FakeExplainer(), FakeExecutor([]), trace_dir=Path(directory)
+                ),
+                QuerySchemaSelector(),
+                model="fake-local-model",
+            )
+            result = service.ask("안전한 로컬 질문")
+        self.assertEqual(result.status, "SAFE_FAILURE")
+        self.assertEqual(result.error_stage, "PLANNING")
+        self.assertEqual(result.error_code, "LLM_HTTP_REDIRECT_REJECTED")
+        self.assertIsNone(result.cypher)
 
     def test_second_unsafe_candidate_stops_without_direct_execution(self) -> None:
         bad = SAFE_QUERY.replace("MATCH", "CREATE", 1)

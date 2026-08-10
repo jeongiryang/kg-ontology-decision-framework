@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import os
+import tempfile
 import unittest
+from pathlib import Path
 
 from neo4j import GraphDatabase
 
@@ -30,6 +32,8 @@ class LocalLLMIntegrationTests(unittest.TestCase):
         )
         cls.driver.verify_connectivity()
         cls.before = cls._counts()
+        cls.trace_temp = tempfile.TemporaryDirectory()
+        cls.trace_dir = Path(cls.trace_temp.name)
         client = create_llm_client(cls.llm)
         cls.service = NaturalLanguageQueryService(
             LocalQueryPlanner(client),
@@ -37,6 +41,7 @@ class LocalLLMIntegrationTests(unittest.TestCase):
             SafetyPipeline(
                 QueryExplainer(cls.driver, cls.neo4j.database),
                 DynamicQueryExecutor(cls.driver, cls.neo4j.database),
+                trace_dir=cls.trace_dir,
             ),
             QuerySchemaSelector(),
             model=cls.llm.model,
@@ -45,12 +50,16 @@ class LocalLLMIntegrationTests(unittest.TestCase):
 
     @classmethod
     def tearDownClass(cls) -> None:
+        trace_dir = cls.trace_dir
         try:
             cls.after = cls._counts()
             if cls.after != cls.before:
                 raise AssertionError(f"read-only smoke changed DB: {cls.before} -> {cls.after}")
         finally:
             cls.driver.close()
+            cls.trace_temp.cleanup()
+        if trace_dir.exists():
+            raise AssertionError("temporary local LLM trace directory was not cleaned")
 
     @classmethod
     def _counts(cls) -> tuple[int, int, int]:
@@ -89,6 +98,11 @@ class LocalLLMIntegrationTests(unittest.TestCase):
             "completion": "2026학년도 컴퓨터공학과 자료구조의 이수구분은?",
         }
         results = {name: self.service.ask(question) for name, question in questions.items()}
+        trace_text = "\n".join(
+            path.read_text(encoding="utf-8") for path in self.trace_dir.glob("*.json")
+        )
+        for question in questions.values():
+            self.assertNotIn(question, trace_text)
         for name, result in results.items():
             print(
                 {
