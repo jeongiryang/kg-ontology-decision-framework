@@ -118,6 +118,8 @@ kg-ontology-decision-framework/
 
 상세 설치 및 검증 절차는 [로컬 개발환경 구축 가이드](docs/environment-setup.md)를 참고합니다.
 
+- [2026 학사 교육과정 온톨로지 V1 설계](docs/ontology/ontology-v1.md)
+
 ### AI 시뮬레이션 로그
 
 AI 에이전트가 수행한 주요 작업, 변경 파일, 의사결정, 검증 결과와 남은 작업을 팀원별로 기록합니다.

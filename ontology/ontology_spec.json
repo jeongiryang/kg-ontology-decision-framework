@@ -1,0 +1,473 @@
+{
+  "schema_name": "cwnu_2026_academic_curriculum_ontology_v1",
+  "schema_version": "0.1.0",
+  "status": "draft",
+  "target_graph_model": "neo4j_labeled_property_graph",
+  "artifact_role": "2026학년도 국립창원대학교 교양 이수요건과 컴퓨터공학과 교육과정을 Neo4j Labeled Property Graph로 표현하기 위한 기계 판독형 온톨로지 스키마 설계 명세",
+  "not_artifacts": [
+    "PDF에서 추출된 실제 데이터 JSON",
+    "표준 JSON Schema 검증 파일",
+    "Neo4j 적재 데이터",
+    "Cypher 실행 파일",
+    "RDF/OWL 온톨로지 파일"
+  ],
+  "scope": {
+    "academic_year": 2026,
+    "institution": "국립창원대학교",
+    "department": "컴퓨터공학과",
+    "domains": [
+      "교양 이수요건",
+      "교양 교과목",
+      "컴퓨터공학과 교육과정"
+    ],
+    "curriculum_partitions": [
+      {
+        "curriculum_id": "curriculum:cwnu:2026:common",
+        "scope_type": "COMMON",
+        "description_ko": "대학 공통 교양 이수요건과 교양 교과목 편성을 포함한다."
+      },
+      {
+        "curriculum_id": "curriculum:cwnu:2026:cse",
+        "scope_type": "DEPARTMENT",
+        "department_id": "department:cwnu:cse",
+        "description_ko": "컴퓨터공학과 전공 학점구조, 전공 교과목 편성, 경과조치를 포함한다."
+      }
+    ],
+    "source_document": {
+      "file_name": "2026 교육과정(교양이수요건+컴공교육과정).pdf",
+      "sha256": "8ee5ee9d45fde0b00f8c42dc5aa513a46ec6a28bed4db50af25a049ae2dac004",
+      "page_count": 19,
+      "page_ranges": [
+        {
+          "excerpt_pages": {"start": 1, "end": 13},
+          "source_pdf_pages": {"start": 33, "end": 45},
+          "printed_pages": {"start": 25, "end": 37},
+          "content": "교양 이수요건 및 교양 교과목"
+        },
+        {
+          "excerpt_pages": {"start": 14, "end": 19},
+          "source_pdf_pages": {"start": 259, "end": 264},
+          "printed_pages": {"start": 251, "end": 256},
+          "content": "컴퓨터공학과 교육과정"
+        }
+      ]
+    },
+    "excluded": [
+      "Neo4j 적재 코드",
+      "Cypher 제약조건과 조회 코드",
+      "자연어 질의응답 코드",
+      "전체 PDF 자동 추출 데이터",
+      "학생 개인 수강내역"
+    ]
+  },
+  "naming_conventions": {
+    "node_label": "PascalCase",
+    "relationship_type": "UPPER_SNAKE_CASE",
+    "property": "snake_case",
+    "identifier": "colon_delimited_ascii_namespace",
+    "identifier_rule": "표시명 대신 기관 코드, 학년도, 학과 코드, 학수번호 등 안정적인 키를 조합한다."
+  },
+  "controlled_vocabularies": {
+    "curriculum_scope_type": {
+      "values": [
+        {"value": "COMMON", "classification": "confirmed_schema_value", "description_ko": "대학 공통 교육과정"},
+        {"value": "DEPARTMENT", "classification": "confirmed_schema_value", "description_ko": "학과 교육과정"}
+      ]
+    },
+    "verification_status": {
+      "values": [
+        {"value": "DRAFT", "classification": "schema_value", "description_ko": "초안"},
+        {"value": "REVIEW_REQUIRED", "classification": "schema_value", "description_ko": "검토 필요"},
+        {"value": "VERIFIED", "classification": "schema_value", "description_ko": "원문 검증 완료"},
+        {"value": "REJECTED", "classification": "schema_value", "description_ko": "사용 거부"}
+      ]
+    },
+    "rule_status": {
+      "values": [
+        {"value": "DRAFT", "classification": "schema_value", "description_ko": "초안"},
+        {"value": "REVIEW_REQUIRED", "classification": "schema_value", "description_ko": "검토 필요"},
+        {"value": "VERIFIED", "classification": "schema_value", "description_ko": "검증 완료"},
+        {"value": "REJECTED", "classification": "schema_value", "description_ko": "사용 거부"}
+      ]
+    },
+    "rule_type": {
+      "values": [
+        {"value": "CREDIT_REQUIREMENT", "classification": "confirmed_in_current_pdf", "description_ko": "학점 요건"},
+        {"value": "COURSE_REQUIREMENT", "classification": "confirmed_in_current_pdf", "description_ko": "과목·영역 이수요건"},
+        {"value": "EXEMPTION", "classification": "confirmed_in_current_pdf", "description_ko": "면제·예외"},
+        {"value": "TRANSITION", "classification": "confirmed_in_current_pdf", "description_ko": "경과조치"},
+        {"value": "PREREQUISITE", "classification": "extension_candidate", "description_ko": "선수과목"},
+        {"value": "COURSE_SUBSTITUTION", "classification": "extension_candidate", "description_ko": "대체과목"}
+      ]
+    },
+    "completion_type": {
+      "values": [
+        {"value": "GENERAL_REQUIRED", "classification": "confirmed_in_current_pdf", "description_ko": "교양 필수"},
+        {"value": "GENERAL_ELECTIVE", "classification": "confirmed_in_current_pdf", "description_ko": "교양 선택"},
+        {"value": "MAJOR_REQUIRED", "classification": "confirmed_in_current_pdf", "description_ko": "전공필수"},
+        {"value": "MAJOR_ELECTIVE", "classification": "confirmed_in_current_pdf", "description_ko": "전공선택"},
+        {"value": "FREE_ELECTIVE", "classification": "extension_candidate", "description_ko": "자유선택"}
+      ]
+    },
+    "area_type": {
+      "values": [
+        {"value": "GENERAL", "classification": "confirmed_in_current_pdf", "description_ko": "교양"},
+        {"value": "FOUNDATIONAL_GENERAL", "classification": "confirmed_in_current_pdf", "description_ko": "기초교양"},
+        {"value": "BALANCED_GENERAL", "classification": "confirmed_in_current_pdf", "description_ko": "균형교양"},
+        {"value": "EXPANDED_GENERAL", "classification": "confirmed_in_current_pdf", "description_ko": "확대교양"},
+        {"value": "MAJOR", "classification": "confirmed_in_current_pdf", "description_ko": "전공"},
+        {"value": "GRADUATION_CERTIFICATION", "classification": "extension_candidate", "description_ko": "졸업인증"}
+      ]
+    },
+    "logic_operator": {
+      "values": [
+        {"value": "AND", "classification": "schema_value", "description_ko": "모든 조건 충족"},
+        {"value": "OR", "classification": "schema_value", "description_ko": "하나 이상의 조건 충족"}
+      ]
+    },
+    "comparison_operator": {
+      "values": [
+        {"value": "EQ", "classification": "confirmed_in_current_pdf", "description_ko": "같음"},
+        {"value": "GTE", "classification": "confirmed_in_current_pdf", "description_ko": "이상"},
+        {"value": "LTE", "classification": "confirmed_in_current_pdf", "description_ko": "이하 또는 최대"},
+        {"value": "IN", "classification": "confirmed_in_current_pdf", "description_ko": "집합에 포함"},
+        {"value": "NOT_IN", "classification": "extension_candidate", "description_ko": "집합에 포함되지 않음"}
+      ]
+    },
+    "major_type": {
+      "values": [
+        {"value": "SINGLE_MAJOR", "classification": "confirmed_in_current_pdf", "description_ko": "단일전공"},
+        {"value": "MINOR", "classification": "confirmed_in_current_pdf", "description_ko": "부전공"},
+        {"value": "DOUBLE_MAJOR", "classification": "confirmed_in_current_pdf", "description_ko": "복수전공"},
+        {"value": "LINKED_MAJOR", "classification": "confirmed_in_current_pdf", "description_ko": "연계전공"},
+        {"value": "CONVERGENCE_MAJOR", "classification": "confirmed_in_current_pdf", "description_ko": "융합전공"}
+      ]
+    },
+    "admission_type": {
+      "values": [
+        {"value": "TRANSFER", "classification": "confirmed_in_current_pdf", "description_ko": "편입생"},
+        {"value": "REGULAR", "classification": "extension_candidate", "description_ko": "일반 입학"},
+        {"value": "READMISSION", "classification": "extension_candidate", "description_ko": "재입학"}
+      ]
+    },
+    "semester": {
+      "values": [
+        {"value": "FIRST", "classification": "confirmed_in_current_pdf", "description_ko": "1학기"},
+        {"value": "SECOND", "classification": "confirmed_in_current_pdf", "description_ko": "2학기"},
+        {"value": "BOTH", "classification": "confirmed_in_current_pdf", "description_ko": "1·2학기"},
+        {"value": "SUMMER", "classification": "confirmed_in_current_pdf", "description_ko": "하계 계절수업"},
+        {"value": "WINTER", "classification": "confirmed_in_current_pdf", "description_ko": "동계 계절수업"}
+      ]
+    }
+  },
+  "node_labels": [
+    {
+      "name": "Institution",
+      "name_ko": "대학",
+      "description": "교육기관 경계를 식별한다.",
+      "parent_labels": [],
+      "id_property": "institution_id",
+      "properties": [
+        {"name": "institution_id", "type": "string", "required": true, "nullable": false, "description_ko": "대학 고유 ID", "controlled_vocabulary": null},
+        {"name": "name_ko", "type": "string", "required": true, "nullable": false, "description_ko": "한글 대학명", "controlled_vocabulary": null},
+        {"name": "name_en", "type": "string", "required": false, "nullable": true, "description_ko": "영문 대학명", "controlled_vocabulary": null}
+      ],
+      "required_properties": ["institution_id", "name_ko"],
+      "example_id": "institution:cwnu"
+    },
+    {
+      "name": "Department",
+      "name_ko": "학과",
+      "description": "교육과정이 적용되는 학과를 식별한다.",
+      "parent_labels": [],
+      "id_property": "department_id",
+      "properties": [
+        {"name": "department_id", "type": "string", "required": true, "nullable": false, "description_ko": "학과 고유 ID", "controlled_vocabulary": null},
+        {"name": "name_ko", "type": "string", "required": true, "nullable": false, "description_ko": "한글 학과명", "controlled_vocabulary": null},
+        {"name": "name_en", "type": "string", "required": false, "nullable": true, "description_ko": "영문 학과명", "controlled_vocabulary": null}
+      ],
+      "required_properties": ["department_id", "name_ko"],
+      "example_id": "department:cwnu:cse"
+    },
+    {
+      "name": "Document",
+      "name_ko": "문서",
+      "description": "원본 또는 발췌 PDF 파일을 식별한다.",
+      "parent_labels": [],
+      "id_property": "document_id",
+      "properties": [
+        {"name": "document_id", "type": "string", "required": true, "nullable": false, "description_ko": "문서 고유 ID", "controlled_vocabulary": null},
+        {"name": "title", "type": "string", "required": true, "nullable": false, "description_ko": "문서 제목", "controlled_vocabulary": null},
+        {"name": "academic_year", "type": "integer", "required": true, "nullable": false, "description_ko": "기준 학년도", "controlled_vocabulary": null},
+        {"name": "file_name", "type": "string", "required": true, "nullable": false, "description_ko": "파일명", "controlled_vocabulary": null},
+        {"name": "sha256", "type": "string", "required": true, "nullable": false, "description_ko": "전체 파일 SHA-256", "controlled_vocabulary": null},
+        {"name": "page_count", "type": "integer", "required": true, "nullable": false, "description_ko": "PDF 페이지 수", "controlled_vocabulary": null},
+        {"name": "document_type", "type": "string", "required": true, "nullable": false, "description_ko": "원본 또는 발췌 문서 유형", "controlled_vocabulary": null}
+      ],
+      "required_properties": ["document_id", "title", "academic_year", "file_name", "sha256", "page_count", "document_type"],
+      "example_id": "document:2026-curriculum-excerpt:8ee5ee9d45fd"
+    },
+    {
+      "name": "Evidence",
+      "name_ko": "원문 근거",
+      "description": "페이지, 표, 행과 짧은 원문을 보존하는 근거 단위다.",
+      "parent_labels": [],
+      "id_property": "evidence_id",
+      "properties": [
+        {"name": "evidence_id", "type": "string", "required": true, "nullable": false, "description_ko": "근거 고유 ID", "controlled_vocabulary": null},
+        {"name": "excerpt_page", "type": "integer", "required": true, "nullable": false, "description_ko": "발췌 PDF 페이지", "controlled_vocabulary": null},
+        {"name": "source_pdf_page", "type": "integer", "required": true, "nullable": false, "description_ko": "원본 PDF 페이지", "controlled_vocabulary": null},
+        {"name": "printed_page", "type": "integer", "required": true, "nullable": false, "description_ko": "문서 인쇄 페이지", "controlled_vocabulary": null},
+        {"name": "section_title", "type": "string", "required": false, "nullable": true, "description_ko": "절 제목", "controlled_vocabulary": null},
+        {"name": "table_name", "type": "string", "required": false, "nullable": true, "description_ko": "표 이름", "controlled_vocabulary": null},
+        {"name": "row_key", "type": "string", "required": false, "nullable": true, "description_ko": "표 행 식별 키", "controlled_vocabulary": null},
+        {"name": "raw_text", "type": "string", "required": true, "nullable": false, "description_ko": "필요한 짧은 원문", "controlled_vocabulary": null},
+        {"name": "bbox", "type": "array[number]", "required": false, "nullable": true, "description_ko": "[x0, y0, x1, y1] 좌표", "controlled_vocabulary": null},
+        {"name": "verification_status", "type": "string", "required": true, "nullable": false, "description_ko": "검증 상태", "controlled_vocabulary": "verification_status"}
+      ],
+      "required_properties": ["evidence_id", "excerpt_page", "source_pdf_page", "printed_page", "raw_text", "verification_status"],
+      "example_id": "evidence:document:2026-curriculum-excerpt:8ee5ee9d45fd:excerpt-p17:CDA0008"
+    },
+    {
+      "name": "CurriculumVersion",
+      "name_ko": "교육과정 버전",
+      "description": "학년도별 대학 공통 또는 학과별 교육과정 버전을 나타낸다.",
+      "parent_labels": [],
+      "id_property": "curriculum_id",
+      "properties": [
+        {"name": "curriculum_id", "type": "string", "required": true, "nullable": false, "description_ko": "교육과정 고유 ID", "controlled_vocabulary": null},
+        {"name": "academic_year", "type": "integer", "required": true, "nullable": false, "description_ko": "학년도", "controlled_vocabulary": null},
+        {"name": "scope_type", "type": "string", "required": true, "nullable": false, "description_ko": "대학 공통 또는 학과별 교육과정 구분", "controlled_vocabulary": "curriculum_scope_type"},
+        {"name": "version_name", "type": "string", "required": true, "nullable": false, "description_ko": "버전 표시명", "controlled_vocabulary": null},
+        {"name": "effective_from", "type": "date", "required": false, "nullable": true, "description_ko": "효력 시작일", "controlled_vocabulary": null},
+        {"name": "effective_to", "type": "date", "required": false, "nullable": true, "description_ko": "효력 종료일", "controlled_vocabulary": null},
+        {"name": "status", "type": "string", "required": true, "nullable": false, "description_ko": "버전 검증 상태", "controlled_vocabulary": "verification_status"}
+      ],
+      "required_properties": ["curriculum_id", "academic_year", "scope_type", "version_name", "status"],
+      "example_id": "curriculum:cwnu:2026:common"
+    },
+    {
+      "name": "Course",
+      "name_ko": "교과목",
+      "description": "학수번호 기반의 안정적인 과목 정체성이다.",
+      "parent_labels": [],
+      "id_property": "course_id",
+      "properties": [
+        {"name": "course_id", "type": "string", "required": true, "nullable": false, "description_ko": "교과목 고유 ID", "controlled_vocabulary": null},
+        {"name": "course_code", "type": "string", "required": true, "nullable": false, "description_ko": "학수번호", "controlled_vocabulary": null},
+        {"name": "name_ko", "type": "string", "required": true, "nullable": false, "description_ko": "한글 과목명", "controlled_vocabulary": null},
+        {"name": "name_en", "type": "string", "required": false, "nullable": true, "description_ko": "영문 과목명", "controlled_vocabulary": null}
+      ],
+      "required_properties": ["course_id", "course_code", "name_ko"],
+      "example_id": "course:cwnu:CDA0008"
+    },
+    {
+      "name": "CourseOffering",
+      "name_ko": "연도·학과별 교과목 편성",
+      "description": "특정 교육과정에서 과목의 학년, 학기, 학점, 시수와 이수구분을 표현한다.",
+      "parent_labels": [],
+      "id_property": "offering_id",
+      "properties": [
+        {"name": "offering_id", "type": "string", "required": true, "nullable": false, "description_ko": "편성 고유 ID", "controlled_vocabulary": null},
+        {"name": "grade_year", "type": "array[integer]", "required": true, "nullable": false, "description_ko": "개설 학년 목록", "controlled_vocabulary": null},
+        {"name": "semester", "type": "string", "required": true, "nullable": false, "description_ko": "개설 학기", "controlled_vocabulary": "semester"},
+        {"name": "credits", "type": "number", "required": true, "nullable": false, "description_ko": "학점. 0과 빈 값은 구분", "controlled_vocabulary": null},
+        {"name": "lecture_hours", "type": "number", "required": true, "nullable": false, "description_ko": "이론 시수", "controlled_vocabulary": null},
+        {"name": "practice_hours", "type": "number", "required": true, "nullable": false, "description_ko": "실기·실습 시수", "controlled_vocabulary": null},
+        {"name": "completion_type", "type": "string", "required": true, "nullable": false, "description_ko": "이수구분", "controlled_vocabulary": "completion_type"},
+        {"name": "competency", "type": "array[string]", "required": false, "nullable": true, "description_ko": "핵심역량·전공능력", "controlled_vocabulary": null},
+        {"name": "status", "type": "string", "required": true, "nullable": false, "description_ko": "편성 검증 상태", "controlled_vocabulary": "verification_status"},
+        {"name": "source_value", "type": "string", "required": false, "nullable": true, "description_ko": "원문 표현값", "controlled_vocabulary": null},
+        {"name": "normalized_value", "type": "string", "required": false, "nullable": true, "description_ko": "정규화 표현값", "controlled_vocabulary": null},
+        {"name": "correction_note", "type": "string", "required": false, "nullable": true, "description_ko": "정정 또는 해석 설명", "controlled_vocabulary": null}
+      ],
+      "required_properties": ["offering_id", "grade_year", "semester", "credits", "lecture_hours", "practice_hours", "completion_type", "status"],
+      "example_id": "offering:cwnu:2026:cse:CDA0008:g2:FIRST:MAJOR_ELECTIVE"
+    },
+    {
+      "name": "EducationArea",
+      "name_ko": "교육 영역",
+      "description": "기초·균형·확대교양과 전공 영역을 계층화한다.",
+      "parent_labels": [],
+      "id_property": "area_id",
+      "properties": [
+        {"name": "area_id", "type": "string", "required": true, "nullable": false, "description_ko": "영역 고유 ID", "controlled_vocabulary": null},
+        {"name": "area_type", "type": "string", "required": true, "nullable": false, "description_ko": "영역 유형", "controlled_vocabulary": "area_type"},
+        {"name": "name_ko", "type": "string", "required": true, "nullable": false, "description_ko": "한글 영역명", "controlled_vocabulary": null},
+        {"name": "name_en", "type": "string", "required": false, "nullable": true, "description_ko": "영문 영역명", "controlled_vocabulary": null}
+      ],
+      "required_properties": ["area_id", "area_type", "name_ko"],
+      "example_id": "area:general:balanced"
+    },
+    {
+      "name": "Rule",
+      "name_ko": "학사규칙",
+      "description": "모든 계산·이수·면제·경과 규칙의 공통 기반이다.",
+      "parent_labels": [],
+      "id_property": "rule_id",
+      "properties": [
+        {"name": "rule_id", "type": "string", "required": true, "nullable": false, "description_ko": "규칙 고유 ID", "controlled_vocabulary": null},
+        {"name": "rule_type", "type": "string", "required": true, "nullable": false, "description_ko": "규칙 유형", "controlled_vocabulary": "rule_type"},
+        {"name": "operator", "type": "string", "required": false, "nullable": true, "description_ko": "비교·판정 연산자. 수치·수량 규칙에서 필수이며 서술형 경과조치에는 없을 수 있음", "controlled_vocabulary": "comparison_operator"},
+        {"name": "value", "type": "any_primitive", "required": false, "nullable": true, "description_ko": "비교값", "controlled_vocabulary": null},
+        {"name": "unit", "type": "string", "required": false, "nullable": true, "description_ko": "학점·과목·영역 등 단위", "controlled_vocabulary": null},
+        {"name": "priority", "type": "integer", "required": false, "nullable": true, "description_ko": "충돌 시 적용 우선순위", "controlled_vocabulary": null},
+        {"name": "status", "type": "string", "required": true, "nullable": false, "description_ko": "규칙 검증 상태", "controlled_vocabulary": "rule_status"},
+        {"name": "description_ko", "type": "string", "required": true, "nullable": false, "description_ko": "한글 규칙 설명", "controlled_vocabulary": null},
+        {"name": "source_value", "type": "string", "required": false, "nullable": true, "description_ko": "원문 표현값", "controlled_vocabulary": null},
+        {"name": "normalized_value", "type": "string", "required": false, "nullable": true, "description_ko": "정규화 표현값", "controlled_vocabulary": null},
+        {"name": "correction_note", "type": "string", "required": false, "nullable": true, "description_ko": "정정 또는 해석 설명", "controlled_vocabulary": null}
+      ],
+      "required_properties": ["rule_id", "rule_type", "status", "description_ko"],
+      "example_id": "rule:cwnu:2026:general:min-total"
+    },
+    {
+      "name": "CreditRequirement",
+      "name_ko": "학점 이수요건",
+      "description": "최소·최대·합계 학점을 표현하는 Rule 하위 라벨이다.",
+      "parent_labels": ["Rule"],
+      "id_property": "rule_id",
+      "properties": [],
+      "required_properties": ["rule_id", "rule_type", "operator", "value", "unit", "status", "description_ko"],
+      "example_id": "rule:cwnu:2026:cse:single-major-required"
+    },
+    {
+      "name": "CourseRequirement",
+      "name_ko": "과목 이수요건",
+      "description": "필수·택일·과목 수 조건을 표현하는 Rule 하위 라벨이다.",
+      "parent_labels": ["Rule"],
+      "id_property": "rule_id",
+      "properties": [],
+      "required_properties": ["rule_id", "rule_type", "operator", "status", "description_ko"],
+      "example_id": "rule:cwnu:2026:general:balanced-four-areas"
+    },
+    {
+      "name": "ExemptionRule",
+      "name_ko": "면제·예외 규칙",
+      "description": "학생군 또는 조건에 따른 면제를 표현하는 Rule 하위 라벨이다.",
+      "parent_labels": ["Rule"],
+      "id_property": "rule_id",
+      "properties": [],
+      "required_properties": ["rule_id", "rule_type", "status", "description_ko"],
+      "example_id": "rule:cwnu:2026:general:transfer-exemption"
+    },
+    {
+      "name": "TransitionRule",
+      "name_ko": "경과조치",
+      "description": "과거 교육과정의 소급·대체·해제를 표현하는 Rule 하위 라벨이다.",
+      "parent_labels": ["Rule"],
+      "id_property": "rule_id",
+      "properties": [],
+      "required_properties": ["rule_id", "rule_type", "status", "description_ko"],
+      "example_id": "rule:cwnu:2026:cse:transition:2021-2024"
+    },
+    {
+      "name": "ApplicabilityScope",
+      "name_ko": "적용 범위",
+      "description": "학년도, 입학유형, 전공유형, 학생유형과 대학 범주를 표현한다.",
+      "parent_labels": [],
+      "id_property": "scope_id",
+      "properties": [
+        {"name": "scope_id", "type": "string", "required": true, "nullable": false, "description_ko": "적용 범위 고유 ID", "controlled_vocabulary": null},
+        {"name": "academic_year", "type": "integer", "required": true, "nullable": false, "description_ko": "적용 학년도", "controlled_vocabulary": null},
+        {"name": "admission_type", "type": "string", "required": false, "nullable": true, "description_ko": "입학 유형", "controlled_vocabulary": "admission_type"},
+        {"name": "major_type", "type": "string", "required": false, "nullable": true, "description_ko": "전공 이수 유형", "controlled_vocabulary": "major_type"},
+        {"name": "student_type", "type": "string", "required": false, "nullable": true, "description_ko": "학생군", "controlled_vocabulary": null},
+        {"name": "college_category", "type": "string", "required": false, "nullable": true, "description_ko": "대학·계열 범주", "controlled_vocabulary": null}
+      ],
+      "required_properties": ["scope_id", "academic_year"],
+      "example_id": "scope:cwnu:2026:regular:single-major:cse"
+    },
+    {
+      "name": "ConditionGroup",
+      "name_ko": "조건 그룹",
+      "description": "AND 또는 OR로 결합되는 조건 묶음이다.",
+      "parent_labels": [],
+      "id_property": "condition_group_id",
+      "properties": [
+        {"name": "condition_group_id", "type": "string", "required": true, "nullable": false, "description_ko": "조건 그룹 고유 ID", "controlled_vocabulary": null},
+        {"name": "logic_operator", "type": "string", "required": true, "nullable": false, "description_ko": "논리 연산자", "controlled_vocabulary": "logic_operator"}
+      ],
+      "required_properties": ["condition_group_id", "logic_operator"],
+      "example_id": "condition-group:cwnu:2026:english-waiver:any-test"
+    },
+    {
+      "name": "Condition",
+      "name_ko": "단일 조건",
+      "description": "시험명, 점수, 학생 유형 등의 원자 조건이다.",
+      "parent_labels": [],
+      "id_property": "condition_id",
+      "properties": [
+        {"name": "condition_id", "type": "string", "required": true, "nullable": false, "description_ko": "조건 고유 ID", "controlled_vocabulary": null},
+        {"name": "subject_field", "type": "string", "required": true, "nullable": false, "description_ko": "비교 대상 필드", "controlled_vocabulary": null},
+        {"name": "operator", "type": "string", "required": true, "nullable": false, "description_ko": "비교 연산자", "controlled_vocabulary": "comparison_operator"},
+        {"name": "value", "type": "any_primitive", "required": true, "nullable": false, "description_ko": "조건값", "controlled_vocabulary": null},
+        {"name": "unit", "type": "string", "required": false, "nullable": true, "description_ko": "점수 등 단위", "controlled_vocabulary": null}
+      ],
+      "required_properties": ["condition_id", "subject_field", "operator", "value"],
+      "example_id": "condition:cwnu:2026:english-waiver:toeic"
+    }
+  ],
+  "relationship_types": [
+    {"name": "PART_OF", "name_ko": "소속", "description": "학과가 대학에 소속된다.", "from_labels": ["Department"], "to_labels": ["Institution"], "cardinality": "N:1", "required_properties": []},
+    {"name": "FROM_DOCUMENT", "name_ko": "문서 유래", "description": "근거가 하나의 출처 문서에서 유래한다. Neo4j에서 역방향 조회가 가능하므로 HAS_EVIDENCE를 중복 저장하지 않는다.", "from_labels": ["Evidence"], "to_labels": ["Document"], "cardinality": "N:1", "required_properties": []},
+    {"name": "FOR_DEPARTMENT", "name_ko": "학과 적용", "description": "교육과정 버전이 학과에 적용된다.", "from_labels": ["CurriculumVersion"], "to_labels": ["Department"], "cardinality": "N:1", "required_properties": []},
+    {"name": "HAS_OFFERING", "name_ko": "편성 포함", "description": "교육과정 버전이 교과목 편성을 포함한다.", "from_labels": ["CurriculumVersion"], "to_labels": ["CourseOffering"], "cardinality": "1:N", "required_properties": []},
+    {"name": "OF_COURSE", "name_ko": "교과목 참조", "description": "교과목 편성이 안정적인 교과목 정체성을 참조한다.", "from_labels": ["CourseOffering"], "to_labels": ["Course"], "cardinality": "N:1", "required_properties": []},
+    {"name": "IN_AREA", "name_ko": "교육 영역 소속", "description": "교과목 편성이 교육 영역에 속한다.", "from_labels": ["CourseOffering"], "to_labels": ["EducationArea"], "cardinality": "N:1_or_more", "required_properties": []},
+    {"name": "PARENT_OF", "name_ko": "상위 영역 포함", "description": "상위 교육 영역이 하위 영역을 포함한다.", "from_labels": ["EducationArea"], "to_labels": ["EducationArea"], "cardinality": "1:N", "required_properties": []},
+    {"name": "HAS_RULE", "name_ko": "규칙 포함", "description": "교육과정 버전이 규칙을 포함한다.", "from_labels": ["CurriculumVersion"], "to_labels": ["Rule"], "cardinality": "1:N", "required_properties": []},
+    {"name": "APPLIES_TO", "name_ko": "적용 범위", "description": "규칙이 적용 범위를 가진다.", "from_labels": ["Rule"], "to_labels": ["ApplicabilityScope"], "cardinality": "N:1_or_more", "required_properties": []},
+    {"name": "TARGETS", "name_ko": "규칙 대상", "description": "규칙이 과목, 편성, 영역 또는 교육과정을 대상으로 한다.", "from_labels": ["Rule"], "to_labels": ["Course", "CourseOffering", "EducationArea", "CurriculumVersion"], "cardinality": "N:M", "required_properties": []},
+    {"name": "HAS_CONDITION_GROUP", "name_ko": "조건 그룹 포함", "description": "규칙이 조건 그룹을 가진다.", "from_labels": ["Rule"], "to_labels": ["ConditionGroup"], "cardinality": "1:N", "required_properties": []},
+    {"name": "HAS_CONDITION", "name_ko": "조건 포함", "description": "조건 그룹이 단일 조건을 포함한다.", "from_labels": ["ConditionGroup"], "to_labels": ["Condition"], "cardinality": "1:N", "required_properties": []},
+    {"name": "OVERRIDES", "name_ko": "규칙 우선 적용", "description": "면제 규칙이 일반 규칙보다 우선한다.", "from_labels": ["ExemptionRule"], "to_labels": ["Rule"], "cardinality": "N:M", "required_properties": []},
+    {"name": "SUPPORTED_BY", "name_ko": "원문 근거 참조", "description": "규칙 또는 편성이 원문 근거를 참조한다. VERIFIED 상태의 시작 노드는 하나 이상의 VERIFIED Evidence를 가져야 한다.", "from_labels": ["Rule", "CourseOffering"], "to_labels": ["Evidence"], "cardinality": "N:M_verified_requires_verified_evidence", "required_properties": []}
+  ],
+  "identity_rules": [
+    {"label": "Institution", "id_property": "institution_id", "pattern": "institution:<institution-code>"},
+    {"label": "Department", "id_property": "department_id", "pattern": "department:<institution-code>:<department-code>"},
+    {"label": "Document", "id_property": "document_id", "pattern": "document:<document-slug>:<sha256-prefix>", "note": "전체 sha256은 속성으로 보존한다."},
+    {"label": "CurriculumVersion", "id_property": "curriculum_id", "pattern": "curriculum:<institution-code>:<academic-year>:<department-or-common-code>"},
+    {"label": "Course", "id_property": "course_id", "pattern": "course:<institution-code>:<course-code>"},
+    {"label": "CourseOffering", "id_property": "offering_id", "pattern": "offering:<institution-code>:<academic-year>:<curriculum-code>:<course-code>:g<grade-token>:<semester>:<completion-type>", "note": "같은 교육과정에서 동일 학수번호가 다른 학년·학기·이수구분으로 반복되는 경우를 분리한다. 모든 구성요소가 같은 중복 행은 같은 논리 편성으로 간주하며, 값이 충돌하면 자동으로 새 ID를 만들지 않고 데이터 품질 오류로 처리한다."},
+    {"label": "EducationArea", "id_property": "area_id", "pattern": "area:<domain>:<area-code>"},
+    {"label": "Rule", "id_property": "rule_id", "pattern": "rule:<institution-code>:<academic-year>:<domain>:<rule-code>"},
+    {"label": "ApplicabilityScope", "id_property": "scope_id", "pattern": "scope:<institution-code>:<academic-year>:<admission-type>:<major-type>:<department-code>"},
+    {"label": "Evidence", "id_property": "evidence_id", "pattern": "evidence:<document-id>:excerpt-p<page>:<row-key>"},
+    {"label": "ConditionGroup", "id_property": "condition_group_id", "pattern": "condition-group:<institution-code>:<academic-year>:<rule-code>:<group-code>"},
+    {"label": "Condition", "id_property": "condition_id", "pattern": "condition:<institution-code>:<academic-year>:<rule-code>:<condition-code>"}
+  ],
+  "invariants": [
+    {"id": "unique_ids", "description_ko": "모든 ID는 해당 라벨 범위에서 고유하다."},
+    {"id": "existing_endpoints", "description_ko": "모든 관계의 시작·끝 노드가 존재한다."},
+    {"id": "verified_rule_evidence", "description_ko": "모든 VERIFIED Rule은 SUPPORTED_BY로 하나 이상의 VERIFIED Evidence와 연결된다."},
+    {"id": "verified_offering_evidence", "description_ko": "모든 VERIFIED CourseOffering은 SUPPORTED_BY로 하나 이상의 VERIFIED Evidence와 연결된다."},
+    {"id": "course_identity_only", "description_ko": "Course에 연도별 학점·시수·학기·이수구분을 저장하지 않는다."},
+    {"id": "rule_context", "description_ko": "Rule은 하나 이상의 CurriculumVersion 또는 ApplicabilityScope와 연결된다."},
+    {"id": "declared_schema_only", "description_ko": "선언되지 않은 라벨·관계 타입을 생성하지 않는다."},
+    {"id": "null_not_zero", "description_ko": "빈 값을 숫자 0으로 변환하지 않는다."},
+    {"id": "immutable_past_versions", "description_ko": "다른 연도 적재 시 기존 연도 노드를 덮어쓰지 않는다."},
+    {"id": "idempotent_reload", "description_ko": "동일 입력 재적재 시 중복 노드를 생성하지 않는다."},
+    {"id": "raw_and_corrected_separation", "description_ko": "원문과 정정·정규화값을 분리한다."},
+    {"id": "verified_evidence_required_for_answers", "description_ko": "사용자 답변은 기본적으로 VERIFIED Evidence와 연결된 사실만 사용한다. 예외 허용 여부와 표시 방식은 별도 정책으로만 정의한다."}
+  ],
+  "extension_rules": [
+    {"id": "separate_common_and_department_curricula", "description_ko": "대학 공통 교양은 curriculum:<institution>:<year>:common에, 학과 전공은 curriculum:<institution>:<year>:<department>에 분리하며 공통 규칙을 학과별로 복제하지 않는다."},
+    {"id": "new_academic_year", "description_ko": "새 학년도에는 새 CurriculumVersion, CourseOffering, Rule, Evidence를 만들고 기존 Course를 재사용할 수 있다."},
+    {"id": "new_department", "description_ko": "새 학과에는 새 Department와 학과별 CurriculumVersion, Rule, CourseOffering을 만든다."},
+    {"id": "immutable_existing_year", "description_ko": "새 연도나 학과를 추가할 때 기존 연도 데이터를 수정하지 않는다."},
+    {"id": "common_rule_core", "description_ko": "다른 학사규정도 Document, Evidence, Rule, ApplicabilityScope 코어를 재사용한다."},
+    {"id": "candidate_values_not_data", "description_ko": "extension_candidate vocabulary는 허용 후보이며 현재 PDF의 실제 데이터로 생성하지 않는다."}
+  ],
+  "open_decisions": [
+    {"id": "OD-001", "priority": "high", "description_ko": "컴퓨터공학과 학점구조에서 교양 34학점 합계 규칙을 공통 CurriculumVersion에만 둘지, CSE CurriculumVersion에 공통 규칙 참조 또는 학과별 집계 규칙으로 추가할지 결정한다."},
+    {"id": "OD-002", "priority": "high", "description_ko": "기본 정책은 VERIFIED Evidence가 있는 사실만 답변에 사용한다. REVIEW_REQUIRED 사실을 진단·검토 모드에서 예외적으로 노출할지와 경고 형식을 결정한다."},
+    {"id": "OD-003", "priority": "high", "description_ko": "경과조치 첫 문장을 원문 시각 검증한다."},
+    {"id": "OD-004", "priority": "medium", "description_ko": "부전공 필수 표식의 CourseRequirement ID와 적용 범위를 정한다."},
+    {"id": "OD-005", "priority": "medium", "description_ko": "동일 학수번호가 기관 내에서 영구적으로 유일한지 확인한다."},
+    {"id": "OD-006", "priority": "medium", "description_ko": "bbox 좌표계 원점, 단위와 회전 처리 규약을 정한다."},
+    {"id": "OD-007", "priority": "medium", "description_ko": "복수·연계·융합전공 학점구조 표의 병합된 행 의미를 검증한다."},
+    {"id": "OD-008", "priority": "low", "description_ko": "원문 오탈자 정정값을 속성으로 둘지 별도 correction 구조로 확장할지 정한다."}
+  ]
+}
