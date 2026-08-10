@@ -148,7 +148,7 @@ uv run python -m kg_builder.query_cli \
 
 현재 실제 구현은 `src/kg_builder/`의 `config.py`, `graph_bundle.py`, `neo4j_schema.py`, `neo4j_ingest.py`와 `query_*.py`에 있습니다. 위쪽 초기 디렉터리 설명의 0바이트 골격 모듈은 향후 구조 예시이며 구현 완료 상태를 뜻하지 않습니다.
 
-동적 Text-to-Cypher의 현재 범위는 명세-derived LLM 스키마 생성, 후보 Cypher 정적 검증, Neo4j `EXPLAIN`, 읽기 전용 실행과 Evidence 결과 검증까지입니다. 실제 LLM 호출과 자연어 답변 생성은 아직 포함하지 않습니다.
+동적 Text-to-Cypher의 현재 범위는 명세-derived LLM 스키마 생성, 제한 문법 후보 Cypher 검증, Neo4j `EXPLAIN`, Evidence provenance 검증까지입니다. 실행 시 ingestion 자격증명과 분리된 `NEO4J_QUERY_*` 읽기 전용 계정이 필수이며, 실제 LLM 호출과 자연어 답변 생성은 아직 포함하지 않습니다. 상세 정책은 [Text-to-Cypher 안전 기반 문서](docs/text-to-cypher-safety.md)를 참고합니다.
 
 ### AI 시뮬레이션 로그
 

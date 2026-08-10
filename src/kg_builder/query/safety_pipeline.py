@@ -10,7 +10,7 @@ from typing import Any, Mapping, Protocol
 from .cypher_validator import CypherValidator, ValidatedCypher
 from .query_explainer import ExplainedCypher
 from .query_plan import QueryPlan
-from .query_trace import DEFAULT_TRACE_DIR, QueryTrace, TraceStage, TraceStatus
+from .query_trace import DEFAULT_TRACE_DIR, QueryTrace, TracePolicy, TraceStage, TraceStatus
 from .result_validator import ResultValidator, ValidatedResult
 from .schema_catalog import (
     DEFAULT_QUERY_SCHEMA_PATH,
@@ -55,6 +55,8 @@ class SafetyPipeline:
         generated_schema_path: Path = DEFAULT_QUERY_SCHEMA_PATH,
         trace_dir: Path = DEFAULT_TRACE_DIR,
         max_rows: int = 100,
+        store_raw_question: bool | None = None,
+        trace_retention_days: int | None = None,
     ):
         self.explainer = explainer
         self.executor = executor
@@ -62,6 +64,17 @@ class SafetyPipeline:
         self.generated_schema_path = generated_schema_path
         self.trace_dir = trace_dir
         self.max_rows = max_rows
+        trace_policy = TracePolicy.from_env()
+        self.store_raw_question = (
+            trace_policy.store_raw_question
+            if store_raw_question is None
+            else store_raw_question
+        )
+        self.trace_retention_days = (
+            trace_policy.retention_days
+            if trace_retention_days is None
+            else trace_retention_days
+        )
 
     def run(self, payload: Mapping[str, Any], cypher: str) -> PipelineOutcome:
         raw_filters = payload.get("filters", {}) if isinstance(payload, Mapping) else {}
@@ -70,6 +83,8 @@ class SafetyPipeline:
             question=raw_question if isinstance(raw_question, str) else "",
             parameters=raw_filters if isinstance(raw_filters, Mapping) else {},
             trace_dir=self.trace_dir,
+            store_raw_question=self.store_raw_question,
+            retention_days=self.trace_retention_days,
         )
 
         started = perf_counter()
@@ -118,7 +133,9 @@ class SafetyPipeline:
 
         started = perf_counter()
         try:
-            result = ResultValidator(max_rows=self.max_rows).validate(plan, rows)
+            result = ResultValidator(max_rows=self.max_rows).validate(
+                plan, rows, validated.provenance
+            )
             self._pass(
                 trace, TraceStage.RESULT_VALIDATION, started, row_count=result.row_count
             )

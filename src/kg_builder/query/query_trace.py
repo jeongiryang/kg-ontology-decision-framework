@@ -3,6 +3,9 @@
 from __future__ import annotations
 
 import json
+import hashlib
+import os
+import re
 import uuid
 from dataclasses import asdict, dataclass
 from datetime import UTC, datetime
@@ -14,6 +17,10 @@ from .schema_catalog import ROOT
 
 
 DEFAULT_TRACE_DIR = ROOT / "logs/query-runs"
+DEFAULT_RETENTION_DAYS = 30
+EMAIL_PATTERN = re.compile(r"\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}\b")
+PHONE_PATTERN = re.compile(r"(?<!\d)01[016789][ -]?\d{3,4}[ -]?\d{4}(?!\d)")
+STUDENT_ID_PATTERN = re.compile(r"(?<!\d)\d{8,10}(?!\d)")
 
 
 class TraceStage(StrEnum):
@@ -32,6 +39,28 @@ class TraceStatus(StrEnum):
 
 
 @dataclass(frozen=True, slots=True)
+class TracePolicy:
+    store_raw_question: bool = False
+    retention_days: int = DEFAULT_RETENTION_DAYS
+
+    @classmethod
+    def from_env(cls) -> "TracePolicy":
+        raw_setting = os.getenv("KG_QUERY_TRACE_RAW_QUESTION", "false").strip().lower()
+        if raw_setting not in {"true", "false"}:
+            raise ValueError("KG_QUERY_TRACE_RAW_QUESTION must be true or false")
+        retention_text = os.getenv(
+            "KG_QUERY_TRACE_RETENTION_DAYS", str(DEFAULT_RETENTION_DAYS)
+        ).strip()
+        try:
+            retention_days = int(retention_text)
+        except ValueError as exc:
+            raise ValueError("KG_QUERY_TRACE_RETENTION_DAYS must be an integer") from exc
+        if not 1 <= retention_days <= 365:
+            raise ValueError("KG_QUERY_TRACE_RETENTION_DAYS must be between 1 and 365")
+        return cls(raw_setting == "true", retention_days)
+
+
+@dataclass(frozen=True, slots=True)
 class TraceEvent:
     stage: str
     status: str
@@ -47,12 +76,17 @@ class QueryTrace:
         question: str,
         parameters: Mapping[str, Any],
         trace_dir: Path = DEFAULT_TRACE_DIR,
+        store_raw_question: bool = False,
+        retention_days: int = DEFAULT_RETENTION_DAYS,
     ):
         self.request_id = str(uuid.uuid4())
         self.created_at = datetime.now(UTC).isoformat()
-        self.question = question
+        self.question_length = len(question)
+        self.question_sha256 = hashlib.sha256(question.encode("utf-8")).hexdigest()
+        self.raw_question = self._mask_question(question) if store_raw_question else None
         self.parameters = self._sanitize(parameters)
         self.trace_dir = trace_dir
+        self.retention_days = retention_days
         self.ontology_version: str | None = None
         self.events: list[TraceEvent] = []
 
@@ -82,10 +116,15 @@ class QueryTrace:
             "request_id": self.request_id,
             "created_at": self.created_at,
             "ontology_version": self.ontology_version,
-            "question": self.question,
+            "question_length": self.question_length,
+            "question_sha256": self.question_sha256,
             "parameters": self.parameters,
+            "retention_days": self.retention_days,
+            "access_policy": "application-operator-only",
             "events": [asdict(event) for event in self.events],
         }
+        if self.raw_question is not None:
+            payload["raw_question"] = self.raw_question
         path.write_text(
             json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True) + "\n",
             encoding="utf-8",
@@ -101,3 +140,9 @@ class QueryTrace:
             else:
                 result[key] = value
         return result
+
+    @staticmethod
+    def _mask_question(question: str) -> str:
+        masked = EMAIL_PATTERN.sub("<redacted-email>", question)
+        masked = PHONE_PATTERN.sub("<redacted-phone>", masked)
+        return STUDENT_ID_PATTERN.sub("<redacted-student-id>", masked)

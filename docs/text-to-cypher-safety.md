@@ -70,7 +70,7 @@ uv run python -m kg_builder.query.schema_exporter check
   "question": "2026년 컴공 3학년 2학기 전공선택 과목은?",
   "filters": {
     "academic_year": 2026,
-    "department_code": "컴퓨터공학과",
+    "department_id": "department:cwnu:cse",
     "grade_year": 3,
     "semester": "SECOND",
     "completion_type": "MAJOR_ELECTIVE"
@@ -85,35 +85,62 @@ uv run python -m kg_builder.query.schema_exporter check
 }
 ```
 
-- `academic_year`와 `department_code`는 현재 필수 범위다.
+- `academic_year`와 `department_id`는 현재 필수 범위다.
+- 동적 필터 이름은 원본 온톨로지 속성과 일치한다. 현재 명세에는 `department_code`나 단수형 `credit` 속성이 없으므로 각각 `department_id`, `credits`를 사용한다.
 - 지원 필터만 허용하고 타입과 통제어휘를 검증한다.
 - `requested_fields`는 온톨로지에 실제 선언된 속성명만 허용한다.
 - `intent`는 Cypher 선택 키가 아니라 선택적 설명·추적 메타데이터다.
 - 필터 값은 후보 Cypher에서 동일한 이름의 파라미터로 사용해야 한다.
+- 현재 동적 V1 계획은 `evidence_required=true`만 허용한다. Evidence 없는 결과를 확정 답변으로 승격하는 모드는 제공하지 않는다.
 
 ## 5. 정적 Cypher 검증
 
-검증기는 주석과 문자열 리터럴을 구분해 토큰을 검사하고 다음을 거부한다.
+검증기는 주석과 문자열 리터럴을 구분해 토큰을 검사하고, 다음 최소 문법만 허용한다.
 
-- 쓰기·삭제·DDL·프로시저·관리 명령
-- 다중 statement와 `UNION`
+```text
+MATCH | OPTIONAL MATCH
+WHERE (AND로 연결된 제한된 속성-파라미터 조건)
+WITH (기존 그래프 변수의 단순 전달만 허용)
+RETURN [DISTINCT] graphVariable.property AS alias
+ORDER BY returnedAlias [ASC|DESC]
+SKIP nonNegativeInteger
+LIMIT 1..100
+```
+
+허용 목록 밖의 절과 표현은 기본적으로 거부한다. 특히 다음을 거부한다.
+
+- `CREATE`, `INSERT`, `MERGE`, `DELETE`, `SET`, `REMOVE` 등 쓰기 절
+- DDL·관리 명령, `CALL`·APOC·프로시저, `LOAD CSV`, `FOREACH`, `UNION`, `UNWIND`
+- 모든 서브쿼리와 함수 호출·집계(`collect()` 포함), map 표현식
+- 다중 statement와 세미콜론
 - backtick 동적 식별자
 - 원본 명세에 없는 라벨·관계·속성
 - 관계 방향 또는 endpoint 불일치
-- QueryPlan 필터의 문자열 직접 삽입 또는 파라미터 누락
+- QueryPlan 필터의 문자열 직접 삽입, 파라미터 누락 또는 항등식
+- 필터가 허용된 라벨·속성에 직접 결합되지 않은 쿼리
+- scope를 그래프 속성이 아닌 파라미터에서 직접 반환하는 쿼리
 - QueryPlan에 없는 추가 파라미터
 - 요청 필드·범위 필드가 `RETURN`되지 않은 쿼리
 - `LIMIT` 누락, 복수 `LIMIT`, 100을 초과한 제한
 - 제한 없는 가변 길이 관계 탐색
 - 라벨 없는 전체 노드 조회
-- Evidence 필수 요청에서 `SUPPORTED_BY → Evidence` 경로 누락
+- 직접 `fact-[:SUPPORTED_BY]->Evidence` 경로가 없거나 무관한 사실의 Evidence를 붙인 쿼리
+- 안정적인 `fact_id`와 직접 연결된 Evidence 필드가 반환되지 않은 쿼리
 - 사실·Evidence의 VERIFIED 필터 및 반환 상태 누락
 
 `VERIFIED`는 데이터 값 하드코딩이 아니라 확정 답변 안전 정책 상수이므로 유일하게 허용되는 문자열 리터럴이다. 질문의 연도·학과·과목·학점 값은 반드시 파라미터로 전달한다.
 
 ### 검증 한계
 
-이 검증기는 전체 Cypher 문법을 구현한 파서가 아니라 현재 허용할 읽기 패턴을 보수적으로 검사하는 정적 검증기다. 복잡한 서브쿼리, 동적 식별자, UNION, 프로시저와 가변 길이 탐색은 안전성을 증명하려 하지 않고 거부한다. 정적 검증 통과는 의미적 정답을 보장하지 않으므로 Neo4j EXPLAIN과 결과 검증을 추가로 수행한다.
+이 검증기는 전체 Cypher parser가 아니라 제한된 문법을 lexer와 구조 검사로 거부 우선 검증한다. 지원하지 않는 서브쿼리·함수·표현식은 안전성을 추정하지 않고 거부한다. Python 객체나 정규식 검사는 독립적인 보안 경계가 아니므로 Neo4j EXPLAIN, 결과 검증과 읽기 전용 계정이 모두 필요하다.
+
+### 필터 결합 정책
+
+각 필터는 생성 스키마의 `query_policy.filter_bindings`에 기록된 라벨·속성과 직접 비교돼야 한다. 파라미터가 단순히 쿼리에 등장하는 것만으로는 통과하지 않는다. 같은 그래프 속성을 scope alias로 반환해야 하며 `$academic_year = $academic_year` 같은 항등식과 `$academic_year AS academic_year` 같은 위조 scope는 거부한다.
+
+### fact–Evidence provenance 정책
+
+Evidence 필수 조회는 원본 명세의 `SUPPORTED_BY` endpoint에서 파생한 직접 경로 하나를 사용한다. 검증기는 Evidence를 가진 시작 노드를 fact로 정하고, 해당 fact의 ID·상태와 직접 연결된 Evidence ID·페이지·원문만 반환하도록 검사한다. 요청 필드는 fact 또는 그 직접 이웃에서만 가져올 수 있다. `DISTINCT`는 잘못된 provenance를 정당화하지 않는다.
 
 ## 6. Neo4j EXPLAIN
 
@@ -124,22 +151,41 @@ uv run python -m kg_builder.query.schema_exporter check
 - Neo4j의 알 수 없는 라벨·관계·속성 알림
 - Cartesian Product와 제한 없는 탐색 알림
 - `AllNodesScan`, 전체 관계 scan 등 위험 계획 연산자
+- `Create`, `Delete`, `SetProperty`, `Merge`, `ProcedureCall`, schema·administration 등 모든 쓰기 계획 연산자
 
 EXPLAIN 자체와 실제 조회에는 각각 5초의 managed transaction timeout을 적용한다. EXPLAIN 실패 시 실행 단계와 결과 검증 단계는 `SKIPPED`로 기록된다.
 
-## 7. 읽기 전용 실행
+## 7. 읽기 전용 계정과 실행
 
-- `ExplainedCypher` 객체만 실행기가 받는다.
+- 동적 질의는 ingestion 계정과 분리된 `NEO4J_QUERY_*` 자격증명만 사용한다.
+- query 계정은 Neo4j에서 대상 graph/database에 대한 읽기 권한만 가져야 한다.
+- 현재 서버 edition 또는 권한 때문에 애플리케이션이 역할을 자동 확인하지 못하면 읽기 전용 상태를 통과로 간주하지 않는다.
+- 실제 권한 검증용 쓰기 공격은 운영 DB가 아니라 별도 안전 DB 또는 격리 환경에서만 수행한다.
+- 패키지의 공식 실행 진입점은 `SafetyPipeline`이며 executor는 내부 구현이다.
+- validator·EXPLAIN 승인 객체는 직접 생성할 수 없고 executor도 실행 직전에 쓰기 절을 재검사한다.
 - `session.execute_read` managed transaction만 사용한다.
-- 최대 결과 행은 정적 검증된 `LIMIT`과 전역 100행 정책으로 이중 제한한다.
+- 최대 100행, 행당 64 KiB, 전체 직렬화 결과 1 MiB를 제한한다.
+- 함수·집계를 금지해 무제한 `collect()`나 대형 map/list 결과를 차단한다.
 - 데이터 적재·삭제·DDL·프로시저 인터페이스는 없다.
-- 현재 `.env`의 localhost 안전 제한과 비밀번호 비노출 정책을 재사용한다.
+- query URI도 `localhost:7687`만 허용하며 비밀번호를 출력하거나 trace에 기록하지 않는다.
+
+환경변수:
+
+```dotenv
+NEO4J_QUERY_URI=neo4j://localhost:7687
+NEO4J_QUERY_USER=your-read-only-neo4j-user
+NEO4J_QUERY_PASSWORD=
+NEO4J_QUERY_DATABASE=neo4j
+```
+
+Python의 private 명명과 승인 객체는 실수 방지 장치일 뿐 같은 프로세스의 악성 코드에 대한 완전한 보안 경계가 아니다. 읽기 전용 Neo4j 권한이 최종 방어선이다.
 
 ## 8. 결과·Evidence 검증
 
 결과의 모든 행에 다음을 요구한다.
 
 - QueryPlan의 요청 필드와 범위 필드
+- 안정적인 `fact_id`와 검증된 fact label
 - 요청 범위와 실제 반환 범위의 일치
 - 중복되지 않은 행
 - `fact_status=VERIFIED`
@@ -172,7 +218,9 @@ EXPLAIN 자체와 실제 조회에는 각각 5초의 managed transaction timeout
 | 실행 | `NEO4J_READ_FAILED`, `RESULT_LIMIT_EXCEEDED` |
 | 결과 | `RESULT_FIELD_MISSING`, `RESULT_SCOPE_MISMATCH`, `RESULT_EVIDENCE_NOT_VERIFIED` |
 
-런타임 파일은 `logs/query-runs/`에 기록되며 Git에서 제외한다. 이 로그는 실행 관찰 기록이고 `docs/ai-simulation-logs/`의 팀 작업 인수인계 로그와 별개다. 비밀번호·토큰·secret 계열 파라미터는 추적 전에 마스킹한다.
+런타임 파일은 `logs/query-runs/`에 기록되며 Git에서 제외한다. 이 로그는 실행 관찰 기록이고 `docs/ai-simulation-logs/`의 팀 작업 인수인계 로그와 별개다.
+
+기본 trace는 질문 원문을 저장하지 않고 질문 길이와 SHA-256만 기록한다. 원문 저장은 애플리케이션이 명시적으로 opt-in한 경우에만 허용하며 이메일·학번·전화번호의 단순 패턴을 마스킹한다. 패턴 탐지는 완전한 개인정보 탐지 수단이 아니므로 원문 저장은 운영상 최소화해야 한다. 기본 보존 정책은 30일이며 trace 접근은 애플리케이션 운영자로 제한한다. 실제 삭제 자동화는 아직 구현하지 않았으므로 배포 환경의 로그 수명주기 정책으로 강제해야 한다.
 
 ## 10. 검증 명령
 
@@ -188,7 +236,7 @@ uv run pytest
 KG_NEO4J_INTEGRATION=1 uv run pytest tests/test_dynamic_query_integration.py
 ```
 
-통합 테스트는 안전 쿼리의 EXPLAIN·실행·Evidence 검증, 잘못된 Cypher의 EXPLAIN 실패를 검사한다. 실행 전후 노드 1,518개, 관계 3,260개, Evidence 511개가 동일해야 한다.
+통합 테스트는 별도의 `NEO4J_QUERY_*` 읽기 전용 자격증명이 있을 때만 안전 쿼리의 EXPLAIN·실행·Evidence 검증을 수행한다. 실행 전후 노드 1,518개, 관계 3,260개, Evidence 511개가 동일해야 한다. GitHub Actions는 비밀값 없는 단위 테스트와 스키마 검사를 수행하며 로컬 Neo4j 통합 테스트를 통과한 것으로 가장하지 않는다.
 
 ## 11. 다음 로컬 LLM 연결 계약
 

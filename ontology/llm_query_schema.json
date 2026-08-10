@@ -2000,7 +2000,80 @@
     "answer_requires_verified_evidence": true,
     "arbitrary_cypher_public_interface": false,
     "evidence_relationship": "SUPPORTED_BY",
+    "filter_bindings": {
+      "academic_year": {
+        "label": "CurriculumVersion",
+        "operator": "EQUALS",
+        "property": "academic_year"
+      },
+      "admission_type": {
+        "label": "ApplicabilityScope",
+        "operator": "EQUALS",
+        "property": "admission_type"
+      },
+      "completion_type": {
+        "label": "CourseOffering",
+        "operator": "EQUALS",
+        "property": "completion_type"
+      },
+      "course_code": {
+        "label": "Course",
+        "operator": "EQUALS",
+        "property": "course_code"
+      },
+      "credits": {
+        "label": "CourseOffering",
+        "operator": "EQUALS",
+        "property": "credits"
+      },
+      "department_id": {
+        "label": "Department",
+        "operator": "EQUALS",
+        "property": "department_id"
+      },
+      "grade_year": {
+        "label": "CourseOffering",
+        "operator": "PARAMETER_IN_PROPERTY",
+        "property": "grade_year"
+      },
+      "major_type": {
+        "label": "ApplicabilityScope",
+        "operator": "EQUALS",
+        "property": "major_type"
+      },
+      "name_ko": {
+        "label": "Course",
+        "operator": "EQUALS",
+        "property": "name_ko"
+      },
+      "semester": {
+        "label": "CourseOffering",
+        "operator": "EQUALS",
+        "property": "semester"
+      }
+    },
     "maximum_result_rows": 100,
+    "provenance": {
+      "direct_path_required": true,
+      "evidence_label": "Evidence",
+      "fact_id_required": true,
+      "fact_labels": [
+        "Alignment",
+        "CareerField",
+        "Competency",
+        "CorrectionRecord",
+        "Course",
+        "CourseOffering",
+        "CourseRecommendation",
+        "CreditAllocation",
+        "CurriculumAggregate",
+        "EducationGoal",
+        "RoadmapEntry",
+        "Rule",
+        "TalentProfile"
+      ],
+      "relationship": "SUPPORTED_BY"
+    },
     "read_only": true,
     "verified_evidence_status": "VERIFIED",
     "verified_fact_status": "VERIFIED"

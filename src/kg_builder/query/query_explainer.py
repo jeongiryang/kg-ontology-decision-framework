@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+import re
+from dataclasses import dataclass, field
 from typing import Any
 
 from neo4j import unit_of_work
@@ -17,11 +18,42 @@ class QueryExplainError(RuntimeError):
         self.code = code
 
 
-@dataclass(frozen=True, slots=True)
+_EXPLAIN_SEAL = object()
+
+
+@dataclass(frozen=True, slots=True, init=False)
 class ExplainedCypher:
     validated: ValidatedCypher
     operators: tuple[str, ...]
     notifications: tuple[str, ...]
+    _seal: object = field(repr=False, compare=False)
+
+    def __init__(
+        self,
+        validated: ValidatedCypher,
+        operators: tuple[str, ...],
+        notifications: tuple[str, ...],
+        *,
+        _seal: object | None = None,
+    ) -> None:
+        if _seal is not _EXPLAIN_SEAL or not validated._is_approved():
+            raise TypeError("ExplainedCypher can only be issued by QueryExplainer")
+        object.__setattr__(self, "validated", validated)
+        object.__setattr__(self, "operators", operators)
+        object.__setattr__(self, "notifications", notifications)
+        object.__setattr__(self, "_seal", _seal)
+
+    @classmethod
+    def _issue(
+        cls,
+        validated: ValidatedCypher,
+        operators: tuple[str, ...],
+        notifications: tuple[str, ...],
+    ) -> "ExplainedCypher":
+        return cls(validated, operators, notifications, _seal=_EXPLAIN_SEAL)
+
+    def _is_approved(self) -> bool:
+        return self._seal is _EXPLAIN_SEAL and self.validated._is_approved()
 
 
 def _plan_operators(plan: Any) -> tuple[str, ...]:
@@ -67,6 +99,46 @@ def _notification_text(summary: Any) -> tuple[str, ...]:
     return tuple(text.strip() for text in found if text.strip())
 
 
+WRITE_OPERATOR_MARKERS = (
+    "create",
+    "delete",
+    "detachdelete",
+    "setproperty",
+    "setproperties",
+    "setlabels",
+    "removelabels",
+    "merge",
+    "foreach",
+    "procedurecall",
+    "administration",
+    "schema",
+    "loadcsv",
+    "drop",
+    "alter",
+    "grant",
+    "deny",
+    "revoke",
+    "terminate",
+)
+
+
+def unsafe_plan_operators(operators: tuple[str, ...]) -> tuple[str, ...]:
+    unsafe = []
+    for operator in operators:
+        normalized = re.sub(r"[^a-z]", "", operator.lower())
+        if (
+            operator in {
+                "AllNodesScan",
+                "DirectedAllRelationshipsScan",
+                "UndirectedAllRelationshipsScan",
+            }
+            or "CartesianProduct" in operator
+            or any(marker in normalized for marker in WRITE_OPERATOR_MARKERS)
+        ):
+            unsafe.append(operator)
+    return tuple(unsafe)
+
+
 class QueryExplainer:
     def __init__(self, driver: Any, database: str, *, timeout_seconds: float = 5.0):
         self.driver = driver
@@ -74,6 +146,11 @@ class QueryExplainer:
         self.timeout_seconds = timeout_seconds
 
     def explain(self, validated: ValidatedCypher) -> ExplainedCypher:
+        if not isinstance(validated, ValidatedCypher) or not validated._is_approved():
+            raise QueryExplainError(
+                "CYPHER_VALIDATION_REQUIRED", "QueryExplainer requires validator-issued Cypher"
+            )
+
         def run(tx: Any) -> tuple[tuple[str, ...], tuple[str, ...]]:
             result = tx.run("EXPLAIN " + validated.text, validated.parameters)
             summary = result.consume()
@@ -107,15 +184,10 @@ class QueryExplainer:
             raise QueryExplainError(
                 "NEO4J_EXPLAIN_NOTIFICATION", "; ".join(unsafe_notifications)
             )
-        dangerous_operators = [
-            operator
-            for operator in operators
-            if operator in {"AllNodesScan", "DirectedAllRelationshipsScan", "UndirectedAllRelationshipsScan"}
-            or "CartesianProduct" in operator
-        ]
+        dangerous_operators = unsafe_plan_operators(operators)
         if dangerous_operators:
             raise QueryExplainError(
                 "NEO4J_EXPLAIN_DANGEROUS_PLAN",
                 f"unsafe plan operators: {sorted(set(dangerous_operators))}",
             )
-        return ExplainedCypher(validated, operators, notifications)
+        return ExplainedCypher._issue(validated, operators, notifications)

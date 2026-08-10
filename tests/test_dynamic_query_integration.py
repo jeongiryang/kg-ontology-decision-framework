@@ -7,10 +7,10 @@ from pathlib import Path
 
 from neo4j import GraphDatabase
 
-from kg_builder.config import Neo4jSettings
+from kg_builder.config import ConfigurationError, Neo4jQuerySettings
 from kg_builder.query.query_executor import DynamicQueryExecutor
 from kg_builder.query.query_explainer import QueryExplainError, QueryExplainer
-from kg_builder.query.cypher_validator import ValidatedCypher
+from kg_builder.query.cypher_validator import ProvenanceContract, ValidatedCypher
 from kg_builder.query.safety_pipeline import SafetyPipeline
 
 from tests.test_dynamic_query_safety import SAFE_QUERY, plan_payload
@@ -23,7 +23,10 @@ from tests.test_dynamic_query_safety import SAFE_QUERY, plan_payload
 class DynamicQueryIntegrationTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls) -> None:
-        cls.settings = Neo4jSettings.from_env()
+        try:
+            cls.settings = Neo4jQuerySettings.from_env()
+        except ConfigurationError as exc:
+            raise unittest.SkipTest(str(exc)) from exc
         cls.driver = GraphDatabase.driver(
             cls.settings.uri, auth=(cls.settings.user, cls.settings.password)
         )
@@ -66,12 +69,13 @@ class DynamicQueryIntegrationTests(unittest.TestCase):
         self.assertEqual(self._counts(), self.before)
 
     def test_explain_syntax_failure_blocks_execution(self) -> None:
-        invalid = ValidatedCypher(
+        invalid = ValidatedCypher._issue(
             text="MATCH (n:Course RETURN n LIMIT 1",
             parameters={},
             limit=1,
             labels=("Course",),
             relationship_types=(),
+            provenance=ProvenanceContract("n", "CourseOffering", "offering_id", "e"),
         )
         with self.assertRaises(QueryExplainError) as raised:
             QueryExplainer(self.driver, self.settings.database).explain(invalid)

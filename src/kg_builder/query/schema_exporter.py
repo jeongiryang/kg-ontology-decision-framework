@@ -7,6 +7,7 @@ import json
 from pathlib import Path
 from typing import Any, Sequence
 
+from .query_plan import FILTER_BINDINGS
 from .schema_catalog import DEFAULT_QUERY_SCHEMA_PATH, DEFAULT_SPEC_PATH, sha256_file
 
 
@@ -82,6 +83,16 @@ def build_query_schema(spec_path: Path = DEFAULT_SPEC_PATH) -> dict[str, Any]:
         )
         for name, body in sorted(spec["controlled_vocabularies"].items())
     }
+    nodes_by_name = {item["name"]: item for item in spec["node_labels"]}
+    for name, binding in FILTER_BINDINGS.items():
+        properties = {prop["name"] for prop in nodes_by_name[binding.label]["properties"]}
+        if binding.property_name not in properties:
+            raise ValueError(
+                f"query filter {name} refers to undeclared {binding.label}.{binding.property_name}"
+            )
+    supported_by = next(
+        item for item in spec["relationship_types"] if item["name"] == "SUPPORTED_BY"
+    )
     return {
         "schema_format_version": SCHEMA_FORMAT_VERSION,
         "artifact_role": "LLM_QUERY_SCHEMA",
@@ -103,6 +114,21 @@ def build_query_schema(spec_path: Path = DEFAULT_SPEC_PATH) -> dict[str, Any]:
             "evidence_relationship": "SUPPORTED_BY",
             "answer_requires_verified_evidence": True,
             "arbitrary_cypher_public_interface": False,
+            "filter_bindings": {
+                name: {
+                    "label": binding.label,
+                    "property": binding.property_name,
+                    "operator": binding.operator,
+                }
+                for name, binding in sorted(FILTER_BINDINGS.items())
+            },
+            "provenance": {
+                "relationship": "SUPPORTED_BY",
+                "fact_labels": sorted(supported_by["from_labels"]),
+                "evidence_label": "Evidence",
+                "direct_path_required": True,
+                "fact_id_required": True,
+            },
         },
     }
 
