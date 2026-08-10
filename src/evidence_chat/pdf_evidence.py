@@ -25,7 +25,8 @@ from . import bundle
 
 
 DEFAULT_PDF_PATH = bundle.ROOT / "data/raw/2026_curriculum_excerpt.pdf"
-PDF_PATH_ENV = "CURRICULUM_PDF_PATH"
+PDF_PATH_ENV = "KG_CHAT_PDF_PATH"
+LEGACY_PDF_PATH_ENV = "CURRICULUM_PDF_PATH"
 
 RENDER_DPI = 144
 MIN_NEEDLE_LENGTH = 2
@@ -84,14 +85,18 @@ class PdfSource:
         return {
             "available": self.available,
             "page_count": self.page_count,
-            "sha256_matches": self.sha256_matches,
             "reason": self.reason,
         }
 
 
 def resolve_pdf_path() -> Path:
-    override = os.getenv(PDF_PATH_ENV, "").strip()
-    return Path(override).expanduser() if override else DEFAULT_PDF_PATH
+    override = os.getenv(PDF_PATH_ENV, "").strip() or os.getenv(
+        LEGACY_PDF_PATH_ENV, ""
+    ).strip()
+    if not override:
+        return DEFAULT_PDF_PATH
+    candidate = Path(override).expanduser()
+    return candidate if candidate.is_absolute() else bundle.ROOT / candidate
 
 
 def _sha256(path: Path) -> str:
@@ -115,6 +120,14 @@ def _inspect_existing(path_key: str, mtime_ns: int, size: int) -> PdfSource:
             page_count = document.page_count
     except Exception:  # pymupdf는 구체 예외 타입을 보장하지 않는다.
         return PdfSource(path=target, available=False, reason="PDF를 열 수 없습니다.")
+    expected_pages = bundle.source_document().get("page_count")
+    if not isinstance(expected_pages, int) or page_count != expected_pages:
+        return PdfSource(
+            path=target,
+            available=False,
+            page_count=page_count,
+            reason="발췌 PDF 페이지 수가 Verified 기준과 일치하지 않습니다.",
+        )
     digest = _sha256(target)
     expected = expected_sha256()
     matches = expected is not None and digest == expected

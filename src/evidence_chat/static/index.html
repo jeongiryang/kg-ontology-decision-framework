@@ -37,6 +37,7 @@
           교양 이수요건, 과목 편성, 전공필수, 이수구분을 물어보세요.
           답변은 검증된 규정 원문 근거와 함께 표시됩니다.
         </p>
+        <p class="scope-fixed">현재 지원 범위: 2026학년도 공통 교양 및 컴퓨터공학과 교육과정</p>
         <form id="ask-form" autocomplete="off">
           <div class="prompt">
             <textarea
@@ -70,7 +71,7 @@
           <p class="elapsed" id="elapsed">0초</p>
         </div>
         <blockquote class="asked" id="asked"></blockquote>
-        <div class="bar"><div class="bar-fill" id="bar-fill"></div></div>
+        <ol class="steps progress-steps" id="progress-steps" aria-label="실제 처리 단계"></ol>
         <p class="notice error" id="progress-error" hidden></p>
         <button class="ghost" id="progress-back" type="button">요청 취소</button>
       </div>
@@ -90,6 +91,11 @@
           <p class="debug-meta" id="debug-meta" hidden></p>
         </article>
 
+        <details class="debug" id="inspection-section" hidden>
+          <summary>탐색 과정 보기</summary>
+          <div class="inspection-grid" id="inspection-content"></div>
+        </details>
+
         <section class="evidence" id="evidence-section" aria-labelledby="evidence-title">
           <div class="evidence-head">
             <h3 id="evidence-title">근거 문서</h3>
@@ -105,6 +111,28 @@
       </div>
     </section>
   </main>
+
+  <dialog class="pdf-modal" id="pdf-modal" aria-labelledby="pdf-modal-title">
+    <div class="pdf-modal-head">
+      <div>
+        <h2 id="pdf-modal-title">근거 원문</h2>
+        <p id="pdf-modal-meta"></p>
+      </div>
+      <button type="button" class="ghost compact" id="pdf-modal-close">닫기</button>
+    </div>
+    <div class="pdf-modal-tools">
+      <button type="button" class="ghost compact" id="pdf-prev">이전 페이지</button>
+      <button type="button" class="ghost compact" id="pdf-zoom-out">축소</button>
+      <span id="pdf-zoom-label">100%</span>
+      <button type="button" class="ghost compact" id="pdf-zoom-in">확대</button>
+      <button type="button" class="ghost compact" id="pdf-next">다음 페이지</button>
+    </div>
+    <p class="notice" id="pdf-modal-notice" hidden></p>
+    <div class="pdf-modal-scroll">
+      <div class="page-canvas modal-canvas" id="pdf-modal-canvas"></div>
+    </div>
+    <blockquote class="modal-source" id="pdf-modal-source"></blockquote>
+  </dialog>
 
   <script src="/static/app.js"></script>
 </body>

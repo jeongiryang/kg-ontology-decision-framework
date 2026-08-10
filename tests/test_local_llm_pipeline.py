@@ -21,6 +21,7 @@ from kg_builder.query.query_plan import QueryPlan, SelectionMode
 from kg_builder.query.safety_pipeline import SafetyPipeline
 from kg_builder.query.schema_catalog import SchemaCatalog
 from kg_builder.query.schema_selector import QuerySchemaSelector
+from kg_builder.query.progress import ProgressPhase, ProgressState
 
 from tests.test_dynamic_query_safety import (
     SAFE_QUERY,
@@ -134,11 +135,11 @@ class LocalLLMContractTests(unittest.TestCase):
             "message": "학수번호를 지정하세요",
             "selection_mode": "SINGLE_COURSE",
         }
-        client = SequenceClient([ambiguous_course, ambiguous_course])
+        client = SequenceClient([ambiguous_course])
         outcome = LocalQueryPlanner(client).plan("동명과목은?")
-        self.assertEqual(outcome.status, PlanningStatus.CLARIFICATION_REQUIRED)
-        self.assertIsNone(outcome.plan)
-        self.assertEqual(len(client.prompts), 2)
+        self.assertEqual(outcome.status, PlanningStatus.READY)
+        self.assertIsNotNone(outcome.plan)
+        self.assertEqual(len(client.prompts), 1)
 
         ready_course = dict(ambiguous_course)
         ready_course["status"] = "READY"
@@ -148,6 +149,104 @@ class LocalLLMContractTests(unittest.TestCase):
         self.assertEqual(outcome.status, PlanningStatus.READY)
         self.assertIsNotNone(outcome.plan)
         self.assertEqual(outcome.plan.selection_mode, SelectionMode.SINGLE_COURSE)
+
+    def test_poc_defaults_fill_only_omitted_course_scope_and_keep_requested_fields(self):
+        payload = {
+            "status": "READY",
+            "intent": "course offering",
+            "filters": {"name_ko": "자료구조"},
+            "requested_fields": ["grade_year", "semester"],
+            "evidence_required": True,
+            "message": None,
+            "selection_mode": "SINGLE_COURSE",
+        }
+        outcome = LocalQueryPlanner(SequenceClient([payload])).plan("개설 학년과 학기")
+        self.assertEqual(outcome.plan.filters["academic_year"], 2026)
+        self.assertEqual(
+            outcome.plan.filters["department_id"], "department:cwnu:cse"
+        )
+        self.assertNotIn("grade_year", outcome.plan.filters)
+        self.assertNotIn("semester", outcome.plan.filters)
+        self.assertEqual(outcome.plan.requested_fields, ("grade_year", "semester"))
+
+    def test_interrogative_course_fields_are_outputs_not_search_filters(self):
+        payload = {
+            "status": "READY",
+            "intent": "course offering",
+            "filters": {
+                "name_ko": "자료구조",
+                "grade_year": 2,
+                "semester": "FIRST",
+            },
+            "requested_fields": ["grade_year", "semester"],
+            "evidence_required": True,
+            "message": None,
+            "selection_mode": "SINGLE_COURSE",
+        }
+        outcome = LocalQueryPlanner(SequenceClient([payload])).plan(
+            "자료구조는 몇 학년 몇 학기에 개설되나?"
+        )
+        self.assertNotIn("grade_year", outcome.plan.filters)
+        self.assertNotIn("semester", outcome.plan.filters)
+        self.assertEqual(outcome.plan.requested_fields, ("grade_year", "semester"))
+
+    def test_course_code_question_uses_requested_field_not_filter(self):
+        payload = {
+            "status": "READY",
+            "intent": "course identity",
+            "filters": {"name_ko": "이산수학", "course_code": "UNKNOWN"},
+            "requested_fields": ["name_ko"],
+            "evidence_required": True,
+            "message": None,
+            "selection_mode": "SINGLE_COURSE",
+        }
+        outcome = LocalQueryPlanner(SequenceClient([payload])).plan(
+            "이산수학의 과목코드가 뭐야"
+        )
+        self.assertEqual(outcome.plan.filters["name_ko"], "이산수학")
+        self.assertNotIn("course_code", outcome.plan.filters)
+        self.assertIn("course_code", outcome.plan.requested_fields)
+
+    def test_model_english_clarification_is_replaced_with_safe_korean_template(self):
+        payload = {
+            "status": "CLARIFICATION_REQUIRED",
+            "intent": "course",
+            "filters": {},
+            "requested_fields": ["semester"],
+            "evidence_required": True,
+            "message": "Please provide more information.",
+            "selection_mode": "SINGLE_COURSE",
+        }
+        outcome = LocalQueryPlanner(SequenceClient([payload])).plan("어느 과목인가요?")
+        self.assertEqual(outcome.status, PlanningStatus.CLARIFICATION_REQUIRED)
+        self.assertEqual(outcome.message, "과목명 또는 학수번호를 입력해 주세요.")
+        self.assertNotIn("Please", outcome.message)
+
+    def test_explicit_unsupported_scope_is_not_overwritten_by_defaults(self):
+        payload = {
+            "status": "READY",
+            "intent": "course offering",
+            "filters": {
+                "academic_year": 2025,
+                "department_id": "department:other",
+                "name_ko": "자료구조",
+            },
+            "requested_fields": ["semester"],
+            "evidence_required": True,
+            "message": None,
+            "selection_mode": "SINGLE_COURSE",
+        }
+        outcome = LocalQueryPlanner(SequenceClient([payload])).plan("다른 범위 질문")
+        self.assertEqual(outcome.status, PlanningStatus.OUT_OF_SCOPE)
+        self.assertIsNone(outcome.plan)
+
+    def test_personal_history_graduation_judgment_is_deterministically_unsupported(self):
+        client = SequenceClient([])
+        outcome = LocalQueryPlanner(client).plan(
+            "데이터베이스개론을 들었는데 뭘 해야 졸업하려면?"
+        )
+        self.assertEqual(outcome.status, PlanningStatus.UNSUPPORTED)
+        self.assertFalse(client.prompts)
 
     def test_generator_returns_only_candidate_cypher(self) -> None:
         plan = QueryPlan.from_dict(plan_payload(), SchemaCatalog.from_generated())
@@ -251,6 +350,39 @@ class NaturalLanguageServiceTests(unittest.TestCase):
         self.assertEqual(generator.errors[0], None)
         self.assertIsNotNone(generator.errors[1])
         self.assertNotIn("question", result.query_plan)
+
+    def test_progress_reports_only_actual_pipeline_milestones(self) -> None:
+        generator = SequenceGenerator([SAFE_QUERY])
+        events = []
+        with tempfile.TemporaryDirectory() as directory:
+            result = self.service(generator, directory).ask(
+                self.plan.question, events.append
+            )
+        self.assertEqual(result.status, "ANSWERABLE")
+        completed = [
+            event.phase
+            for event in events
+            if event.state is ProgressState.COMPLETED
+        ]
+        self.assertEqual(
+            completed,
+            [
+                ProgressPhase.QUESTION_ANALYSIS,
+                ProgressPhase.SCHEMA_SELECTION,
+                ProgressPhase.CYPHER_GENERATION,
+                ProgressPhase.STATIC_VALIDATION,
+                ProgressPhase.NEO4J_EXPLAIN,
+                ProgressPhase.GRAPH_EXECUTION,
+                ProgressPhase.RESULT_VALIDATION,
+            ],
+        )
+        static = next(
+            event
+            for event in events
+            if event.phase is ProgressPhase.STATIC_VALIDATION
+            and event.state is ProgressState.COMPLETED
+        )
+        self.assertEqual(static.details["validated_cypher"].strip(), SAFE_QUERY.strip())
 
     def test_redirect_provider_failure_is_returned_as_safe_failure(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

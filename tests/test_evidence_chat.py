@@ -10,7 +10,7 @@ from tempfile import TemporaryDirectory
 from typing import Any
 from unittest import mock
 
-from starlette.testclient import TestClient
+import httpx2
 
 from evidence_chat import pdf_evidence
 from evidence_chat.chat_adapter import CHAT_RESPONSE_FIELDS, ChatResponseAdapter
@@ -19,6 +19,7 @@ from kg_builder.answer.contracts import ChatErrorCode, ChatResponse, ChatStatus
 from kg_builder.answer.service import CurriculumChatService
 from kg_builder.query.natural_language_service import NaturalLanguageResult
 from kg_builder.query.query_plan import MAX_QUESTION_LENGTH
+from kg_builder.query.progress import ProgressEvent, ProgressPhase, ProgressState
 
 
 SAMPLE_RAW_TEXT = (
@@ -114,8 +115,39 @@ class _ChatStub:
         self.response = response
         self.questions: list[str] = []
 
-    def ask(self, question: str) -> ChatResponse:
+    def ask(self, question: str, progress_callback=None) -> ChatResponse:
         self.questions.append(question)
+        details = {
+            ProgressPhase.QUESTION_ANALYSIS: {
+                "query_plan": {
+                    "filters": {"academic_year": 2026},
+                    "requested_fields": ["completion_type"],
+                }
+            },
+            ProgressPhase.SCHEMA_SELECTION: {
+                "labels": ["CourseOffering", "Evidence"],
+                "relationship_types": ["SUPPORTED_BY"],
+            },
+            ProgressPhase.STATIC_VALIDATION: {
+                "validated_cypher": "MATCH (o:CourseOffering)-[:SUPPORTED_BY]->(e:Evidence) WHERE o.status = 'VERIFIED' RETURN o LIMIT 1",
+                "parameters": {"academic_year": 2026},
+            },
+            ProgressPhase.NEO4J_EXPLAIN: {"operators": ["NodeIndexSeek"]},
+            ProgressPhase.GRAPH_EXECUTION: {"row_count": 1},
+            ProgressPhase.RESULT_VALIDATION: {"row_count": 1, "evidence_count": 1},
+        }
+        if progress_callback:
+            for phase in ProgressPhase:
+                if phase is not ProgressPhase.COMPLETED:
+                    progress_callback(ProgressEvent(phase, ProgressState.STARTED, 0))
+                progress_callback(
+                    ProgressEvent(
+                        phase,
+                        ProgressState.COMPLETED,
+                        1,
+                        details.get(phase, {}),
+                    )
+                )
         return self.response
 
 
@@ -191,7 +223,7 @@ class PdfEvidenceTests(unittest.TestCase):
         cls._tmp = TemporaryDirectory()
         cls.pdf_path = Path(cls._tmp.name) / "synthetic.pdf"
         document = pymupdf.open()
-        for index in range(2):
+        for index in range(19):
             page = document.new_page(width=595, height=842)
             page.insert_text((72, 120), f"page {index + 1}", fontsize=14)
             page.insert_text((72, 160), "GEA8001", fontsize=12)
@@ -244,54 +276,93 @@ class PdfEvidenceTests(unittest.TestCase):
             pdf_evidence.render_page_png(99)
 
 
-class StarletteRouteTests(unittest.TestCase):
-    def setUp(self):
+class StarletteRouteTests(unittest.IsolatedAsyncioTestCase):
+    async def asyncSetUp(self):
         self.chat = _ChatStub(_answerable_response())
-        self.client = TestClient(create_app(lambda: ChatState(self.chat)))
-        self.client.__enter__()
+        self.app = create_app(lambda: ChatState(self.chat))
+        self.lifespan = self.app.router.lifespan_context(self.app)
+        await self.lifespan.__aenter__()
+        self.client = httpx2.AsyncClient(
+            transport=httpx2.ASGITransport(app=self.app),
+            base_url="http://testserver",
+        )
 
-    def tearDown(self):
-        self.client.__exit__(None, None, None)
+    async def asyncTearDown(self):
+        await self.client.aclose()
+        await self.lifespan.__aexit__(None, None, None)
 
-    def test_health_is_path_and_connection_secret_free(self):
-        payload = self.client.get("/api/health").json()
+    async def test_health_is_path_and_connection_secret_free(self):
+        payload = (await self.client.get("/api/health")).json()
         self.assertTrue(payload["service_ready"])
         self.assertNotIn("neo4j_endpoint", payload)
         self.assertNotIn("neo4j_database", payload)
-        self.assertNotIn("path", payload["pdf"])
+        self.assertIn("pdf_mounted", payload)
+        self.assertNotIn("pdf", payload)
         self.assertGreaterEqual(payload["client_timeout_seconds"], 60)
 
-    def test_ask_streams_generic_progress_and_approved_response(self):
-        response = self.client.post("/api/ask", json={"question": "자료구조 이수구분"})
+    async def test_ask_streams_generic_progress_and_approved_response(self):
+        response = await self.client.post("/api/ask", json={"question": "자료구조 이수구분"})
         self.assertEqual(response.status_code, 200)
         events = _events(response.text)
-        self.assertEqual(
-            [item["phase"] for item in events if item["type"] == "progress"],
-            ["SUBMITTED", "CHECKING", "COMPLETED"],
-        )
+        completed = [
+            item["phase"]
+            for item in events
+            if item["type"] == "progress" and item["state"] == "COMPLETED"
+        ]
+        self.assertEqual(completed, [item.value for item in ProgressPhase])
         result = next(item for item in events if item["type"] == "result")
         self.assertEqual(result["response"]["status"], "ANSWERABLE")
         serialized = json.dumps(events, ensure_ascii=False)
         self.assertNotIn("MATCH ", serialized)
         self.assertNotIn("QueryPlan", serialized)
+        self.assertFalse(any(item["type"] == "inspection" for item in events))
         self.assertEqual(self.chat.questions, ["자료구조 이수구분"])
 
-    def test_input_validation_rejects_empty_unknown_and_overlong(self):
-        self.assertEqual(self.client.post("/api/ask", json={"question": ""}).status_code, 400)
+    async def test_inspection_is_separate_and_only_contains_post_validation_details(self):
+        with mock.patch.dict("os.environ", {"KG_CHAT_SHOW_QUERY_DETAILS": "true"}):
+            app = create_app(lambda: ChatState(self.chat))
+            async with app.router.lifespan_context(app):
+                async with httpx2.AsyncClient(
+                    transport=httpx2.ASGITransport(app=app),
+                    base_url="http://testserver",
+                ) as client:
+                    events = _events(
+                        (await client.post(
+                            "/api/ask", json={"question": "자료구조 이수구분"}
+                        )).text
+                    )
+        inspection = next(item for item in events if item["type"] == "inspection")
+        self.assertIn("MATCH (o:CourseOffering)", inspection["validated_cypher"])
+        self.assertEqual(inspection["explain_operators"], ["NodeIndexSeek"])
+        serialized = json.dumps(inspection, ensure_ascii=False)
+        for secret in ("system_prompt", "password", "bolt://", "traceback"):
+            self.assertNotIn(secret, serialized)
+
+    async def test_input_validation_rejects_empty_unknown_and_overlong(self):
         self.assertEqual(
-            self.client.post("/api/ask", json={"question": "x", "extra": 1}).status_code,
+            (await self.client.post("/api/ask", json={"question": ""})).status_code,
             400,
         )
         self.assertEqual(
-            self.client.post(
+            (await self.client.post(
+                "/api/ask", json={"question": "x", "extra": 1}
+            )).status_code,
+            400,
+        )
+        self.assertEqual(
+            (await self.client.post(
                 "/api/ask", json={"question": "가" * (MAX_QUESTION_LENGTH + 1)}
-            ).status_code,
+            )).status_code,
             422,
         )
 
-    def test_non_integer_and_traversal_pdf_paths_are_not_routed(self):
-        self.assertEqual(self.client.get("/api/pdf/page/not-int.png").status_code, 404)
-        self.assertEqual(self.client.get("/api/pdf/page/%2e%2e/1.png").status_code, 404)
+    async def test_non_integer_and_traversal_pdf_paths_are_not_routed(self):
+        self.assertEqual(
+            (await self.client.get("/api/pdf/page/not-int.png")).status_code, 404
+        )
+        self.assertEqual(
+            (await self.client.get("/api/pdf/page/%2e%2e/1.png")).status_code, 404
+        )
 
     def test_xss_and_timeout_contract_use_safe_browser_apis(self):
         script = (Path(__file__).parents[1] / "src/evidence_chat/static/app.js").read_text()
@@ -301,6 +372,8 @@ class StarletteRouteTests(unittest.TestCase):
         self.assertIn("inFlight", script)
         self.assertIn("Math.max(60000", script)
         self.assertIn("페이지 이미지를 표시하지 못했습니다", script)
+        self.assertIn("openPdfModal", script)
+        self.assertIn("renderInspection", script)
 
     def test_frontend_does_not_construct_backend_contracts(self):
         root = Path(__file__).parents[1] / "src/evidence_chat"

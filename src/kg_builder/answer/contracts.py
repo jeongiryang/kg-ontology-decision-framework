@@ -122,7 +122,10 @@ SAFE_FAILURE_MESSAGES: dict[ChatErrorCode, str] = {
 NON_ANSWERABLE_MESSAGES: dict[ChatStatus, str] = {
     ChatStatus.CLARIFICATION_REQUIRED: "질문을 정확히 확인하려면 추가 정보가 필요합니다.",
     ChatStatus.OUT_OF_SCOPE: "현재 데이터 범위에서는 답변할 수 없습니다.",
-    ChatStatus.UNSUPPORTED: "현재 지원하지 않는 질문 유형입니다.",
+    ChatStatus.UNSUPPORTED: (
+        "현재는 개인 수강 이력을 이용한 졸업판정을 지원하지 않습니다. "
+        "2026학년도 컴퓨터공학과의 전공필수 과목과 이수학점 기준은 안내할 수 있습니다."
+    ),
     ChatStatus.UNRESOLVED: "원문 확인이나 정책 결정이 필요한 항목이므로 확정해서 답변할 수 없습니다.",
     ChatStatus.NOT_FOUND: "현재 검증된 데이터에서 일치하는 결과를 찾지 못했습니다.",
 }

@@ -39,6 +39,22 @@ LLM_REQUESTED_FIELDS = frozenset(
     }
 )
 SELECTION_MODES = frozenset(item.value for item in SelectionMode)
+COURSE_REQUEST_FIELDS = frozenset(
+    {"course_code", "name_ko", "grade_year", "semester", "credits", "completion_type"}
+)
+_PERSONAL_HISTORY = re.compile(
+    r"(?:내가|제가|나는|저는|개인|수강(?:했|한|내역)|이수(?:했|한)|들었|성적|취득(?:했|한))"
+)
+_PERSONAL_JUDGMENT = re.compile(
+    r"(?:졸업|남은\s*(?:과목|학점)|앞으로|뭘\s*해야|무엇을\s*해야|가능(?:한가|할까|해))"
+)
+_REQUESTED_FIELD_PATTERNS: Mapping[str, re.Pattern[str]] = {
+    "grade_year": re.compile(r"(?:몇|어느)\s*학년"),
+    "semester": re.compile(r"(?:몇|어느)\s*학기"),
+    "course_code": re.compile(
+        r"(?:과목\s*코드|학수번호).*(?:뭐|무엇|알려|인가|어떤)"
+    ),
+}
 
 def planner_response_schema(catalog: SchemaCatalog) -> dict[str, Any]:
     requested_fields = sorted(LLM_REQUESTED_FIELDS.intersection(catalog.all_node_properties))
@@ -123,6 +139,11 @@ def build_planner_context(
                     ),
                 }
             )
+    default_scope: dict[str, Any] = {}
+    if len(academic_years) == 1:
+        default_scope["academic_year"] = next(iter(academic_years))
+    if len(departments) == 1:
+        default_scope["department_id"] = departments[0]["department_id"]
     return {
         "academic_years": sorted(academic_years),
         "departments": sorted(departments, key=lambda item: item["department_id"]),
@@ -134,6 +155,7 @@ def build_planner_context(
         "supported_requested_fields": sorted(
             LLM_REQUESTED_FIELDS.intersection(catalog.all_node_properties)
         ),
+        "default_scope": default_scope,
     }
 
 
@@ -152,12 +174,15 @@ class LocalQueryPlanner:
     def plan(self, question: str) -> PlanningOutcome:
         if not isinstance(question, str) or not question.strip():
             raise QueryPlanError("question must be a non-empty string")
+        question = question.strip()
+        if _PERSONAL_HISTORY.search(question) and _PERSONAL_JUDGMENT.search(question):
+            return PlanningOutcome(status=PlanningStatus.UNSUPPORTED)
         previous_error: str | None = None
         for attempt in range(2):
             generation = self.client.generate_json(
                 system_prompt=PLANNER_SYSTEM_PROMPT,
                 user_prompt=planner_prompt(
-                    question.strip(), self.context, previous_error=previous_error
+                    question, self.context, previous_error=previous_error
                 ),
                 response_schema=planner_response_schema(self.catalog),
             )
@@ -172,6 +197,38 @@ class LocalQueryPlanner:
                 selection_mode = payload.get("selection_mode")
                 filters = payload.get("filters")
                 requested_fields = payload.get("requested_fields")
+                if isinstance(requested_fields, list):
+                    requested_fields = list(requested_fields)
+                    for field, pattern in _REQUESTED_FIELD_PATTERNS.items():
+                        if pattern.search(question):
+                            if field not in requested_fields:
+                                requested_fields.append(field)
+                            if isinstance(filters, dict):
+                                filters.pop(field, None)
+                if isinstance(filters, dict):
+                    filters = dict(filters)
+                    default_scope = self.context.get("default_scope")
+                    if isinstance(default_scope, Mapping):
+                        filters.setdefault("academic_year", default_scope.get("academic_year"))
+                        is_course_query = (
+                            selection_mode
+                            in {
+                                SelectionMode.SINGLE_COURSE.value,
+                                SelectionMode.COURSE_LIST.value,
+                            }
+                            or bool(set(filters).intersection({"name_ko", "course_code"}))
+                            or (
+                                isinstance(requested_fields, list)
+                                and bool(set(requested_fields).intersection(COURSE_REQUEST_FIELDS))
+                            )
+                        )
+                        if is_course_query:
+                            filters.setdefault(
+                                "department_id", default_scope.get("department_id")
+                            )
+                    filters = {key: value for key, value in filters.items() if value is not None}
+                if self._outside_supported_scope(filters):
+                    return PlanningOutcome(status=PlanningStatus.OUT_OF_SCOPE)
                 if status is not PlanningStatus.READY:
                     # Do not silently turn the model's ambiguity decision into READY.
                     # For a fully scoped SINGLE_COURSE request, ask the model once to
@@ -185,14 +242,13 @@ class LocalQueryPlanner:
                         and {"academic_year", "department_id"}.issubset(filters)
                         and bool({"name_ko", "course_code"}.intersection(filters))
                     )
-                    if fully_scoped_course and attempt == 0:
-                        previous_error = (
-                            "SINGLE_COURSE is fully scoped. Return READY so the database "
-                            "result validator can count stable course identities; do not "
-                            "guess whether duplicate course names exist."
+                    if fully_scoped_course and isinstance(requested_fields, list):
+                        status = PlanningStatus.READY
+                    else:
+                        return PlanningOutcome(
+                            status=status,
+                            message=self._safe_status_message(status, selection_mode, filters),
                         )
-                        continue
-                    return PlanningOutcome(status=status, message=message)
                 rule_ids = filters.get("rule_ids") if isinstance(filters, dict) else None
                 if selection_mode == "SINGLE_RULE" and (
                     not isinstance(filters, dict)
@@ -232,7 +288,7 @@ class LocalQueryPlanner:
                         )
                     )
                 plan_payload = {
-                    "question": question.strip(),
+                    "question": question,
                     "intent": payload.get("intent"),
                     "filters": filters,
                     "requested_fields": requested_fields,
@@ -251,3 +307,30 @@ class LocalQueryPlanner:
                         "LLM_PLAN_CONTRACT_INVALID", "planner failed the QueryPlan contract"
                     ) from exc
         raise AssertionError("unreachable planner retry state")
+
+    def _outside_supported_scope(self, filters: object) -> bool:
+        if not isinstance(filters, Mapping):
+            return False
+        years = set(self.context.get("academic_years") or ())
+        if years and "academic_year" in filters and filters["academic_year"] not in years:
+            return True
+        departments = {
+            item.get("department_id")
+            for item in self.context.get("departments", ())
+            if isinstance(item, Mapping)
+        }
+        return bool(departments) and (
+            "department_id" in filters
+            and filters["department_id"] not in departments
+        )
+
+    @staticmethod
+    def _safe_status_message(
+        status: PlanningStatus, selection_mode: object, filters: object
+    ) -> str | None:
+        if status is not PlanningStatus.CLARIFICATION_REQUIRED:
+            return None
+        if selection_mode == SelectionMode.SINGLE_COURSE.value and isinstance(filters, Mapping):
+            if not {"name_ko", "course_code"}.intersection(filters):
+                return "과목명 또는 학수번호를 입력해 주세요."
+        return "질문에서 확인하려는 과목이나 기준을 조금 더 구체적으로 입력해 주세요."

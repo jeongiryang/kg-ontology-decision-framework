@@ -10,12 +10,13 @@ It never accepts Cypher, exposes a query plan, or constructs a ChatResponse itse
 from __future__ import annotations
 
 import argparse
+import asyncio
 import contextlib
 import json
 import os
 from collections.abc import AsyncIterator, Callable
 from pathlib import Path
-from time import perf_counter
+from threading import Thread
 from typing import Any, Protocol
 
 import anyio
@@ -33,6 +34,7 @@ from kg_builder.llm.client import LLMConfigurationError, LLMSettings, create_llm
 from kg_builder.llm.cypher_generator import LocalCypherGenerator
 from kg_builder.llm.planner import LocalQueryPlanner
 from kg_builder.query.natural_language_service import NaturalLanguageQueryService
+from kg_builder.query.progress import ProgressCallback, ProgressEvent, ProgressState
 from kg_builder.query.query_executor import DynamicQueryExecutor
 from kg_builder.query.query_explainer import QueryExplainer
 from kg_builder.query.query_plan import MAX_QUESTION_LENGTH
@@ -61,7 +63,53 @@ EXAMPLE_QUESTIONS = (
 
 
 class ChatService(Protocol):
-    def ask(self, question: str) -> ChatResponse: ...
+    def ask(
+        self, question: str, progress_callback: ProgressCallback | None = None
+    ) -> ChatResponse: ...
+
+
+class InspectionCollector:
+    """Collect only post-validation metadata explicitly approved for local debugging."""
+
+    _DETAIL_KEYS = frozenset(
+        {
+            "query_plan",
+            "labels",
+            "relationship_types",
+            "validated_cypher",
+            "parameters",
+            "operators",
+            "row_count",
+            "evidence_count",
+            "claim_count",
+        }
+    )
+
+    def __init__(self) -> None:
+        self.details: dict[str, Any] = {}
+        self.stage_timings_ms: dict[str, int] = {}
+
+    def record(self, event: ProgressEvent) -> None:
+        if event.state is not ProgressState.COMPLETED:
+            return
+        self.stage_timings_ms[event.phase.value] = event.elapsed_ms
+        for key in self._DETAIL_KEYS:
+            if key in event.details:
+                self.details[key] = event.details[key]
+
+    def payload(self) -> dict[str, Any]:
+        return {
+            "type": "inspection",
+            "query_plan": self.details.get("query_plan"),
+            "labels": self.details.get("labels", []),
+            "relationship_types": self.details.get("relationship_types", []),
+            "validated_cypher": self.details.get("validated_cypher"),
+            "parameters": self.details.get("parameters", {}),
+            "explain_operators": self.details.get("operators", []),
+            "row_count": self.details.get("row_count", 0),
+            "evidence_count": self.details.get("evidence_count", 0),
+            "stage_timings_ms": dict(sorted(self.stage_timings_ms.items())),
+        }
 
 
 def _env_bool(name: str, default: bool = False) -> bool:
@@ -100,6 +148,7 @@ class ChatState:
         self.error: str | None = None
         self.error_code: str | None = None
         self.debug = False
+        self.show_query_details = False
         self.max_concurrent = DEFAULT_MAX_CONCURRENT
         self.client_timeout_seconds = DEFAULT_CLIENT_TIMEOUT_SECONDS
         self.limiter: anyio.Semaphore | None = None
@@ -112,6 +161,7 @@ class ChatState:
     def open(self) -> None:
         try:
             self.debug = _env_bool("KG_CHAT_DEBUG")
+            self.show_query_details = _env_bool("KG_CHAT_SHOW_QUERY_DETAILS")
             self.max_concurrent = _env_int(
                 "KG_CHAT_MAX_CONCURRENT", DEFAULT_MAX_CONCURRENT, 1, 4
             )
@@ -175,15 +225,16 @@ async def index(request: Request) -> Response:
 
 async def health(request: Request) -> Response:
     state = _state(request)
-    source = await anyio.to_thread.run_sync(pdf_evidence.inspect_pdf)
+    source = pdf_evidence.inspect_pdf()
     payload: dict[str, Any] = {
         "service_ready": state.ready,
         "error": state.error,
-        "pdf": source.to_public_dict(),
+        "pdf_mounted": source.available,
         "examples": list(EXAMPLE_QUESTIONS),
         "max_question_length": MAX_QUESTION_LENGTH,
         "client_timeout_seconds": state.client_timeout_seconds,
         "debug": state.debug,
+        "show_query_details": state.show_query_details,
     }
     if state.debug:
         payload["error_code"] = state.error_code
@@ -225,51 +276,53 @@ async def ask(request: Request) -> Response:
     adapter = ChatResponseAdapter(debug=state.debug)
 
     async def stream() -> AsyncIterator[bytes]:
-        started = perf_counter()
-        yield _sse(
-            {
-                "type": "progress",
-                "phase": "SUBMITTED",
-                "message": "질문 전송됨",
-                "elapsed_ms": 0,
-            }
-        )
-        yield _sse(
-            {
-                "type": "progress",
-                "phase": "CHECKING",
-                "message": "답변을 확인하고 있습니다",
-                "elapsed_ms": 0,
-            }
-        )
-        try:
+        queue: asyncio.Queue[dict[str, Any]] = asyncio.Queue()
+        loop = asyncio.get_running_loop()
+        collector = InspectionCollector()
+
+        async def run_request() -> None:
+            finished = asyncio.Event()
+
+            def on_progress(event: ProgressEvent) -> None:
+                collector.record(event)
+                loop.call_soon_threadsafe(queue.put_nowait, event.public_payload())
+
+            def worker() -> None:
+                try:
+                    response = service.ask(question, on_progress)
+                    result = adapter.adapt(response)
+                    if state.show_query_details:
+                        loop.call_soon_threadsafe(queue.put_nowait, collector.payload())
+                    loop.call_soon_threadsafe(queue.put_nowait, result)
+                except Exception:
+                    error: dict[str, Any] = {
+                        "type": "error",
+                        "message": "요청을 안전하게 처리하지 못했습니다.",
+                    }
+                    if state.debug:
+                        error["error_code"] = "CHAT_REQUEST_FAILED"
+                    loop.call_soon_threadsafe(queue.put_nowait, error)
+                finally:
+                    loop.call_soon_threadsafe(queue.put_nowait, {"type": "end"})
+                    loop.call_soon_threadsafe(finished.set)
+
             async with limiter:
-                response = await anyio.to_thread.run_sync(
-                    service.ask, question
-                )
-                result = await anyio.to_thread.run_sync(
-                    adapter.adapt, response
-                )
-            yield _sse(result)
-            yield _sse(
-                {
-                    "type": "progress",
-                    "phase": "COMPLETED",
-                    "message": "답변 완료",
-                    "elapsed_ms": round((perf_counter() - started) * 1000),
-                }
-            )
-        except anyio.get_cancelled_exc_class():
-            return
-        except Exception:
-            error: dict[str, Any] = {
-                "type": "error",
-                "message": "요청을 안전하게 처리하지 못했습니다.",
-            }
-            if state.debug:
-                error["error_code"] = "CHAT_REQUEST_FAILED"
-            yield _sse(error)
-        yield _sse({"type": "end"})
+                Thread(target=worker, name="evidence-chat-request", daemon=True).start()
+                await finished.wait()
+
+        task = asyncio.create_task(run_request())
+        try:
+            while True:
+                item = await queue.get()
+                yield _sse(item)
+                if item.get("type") == "end":
+                    break
+            await task
+        finally:
+            # A disconnected browser cannot cancel an already-running local model
+            # call.  Keep the task alive so it holds the single-GPU semaphore until
+            # the worker finishes; its queue is intentionally unbounded and local.
+            pass
 
     return StreamingResponse(
         stream(),
@@ -281,7 +334,7 @@ async def ask(request: Request) -> Response:
 async def pdf_page(request: Request) -> Response:
     page_number = request.path_params["page"]
     try:
-        image = await anyio.to_thread.run_sync(pdf_evidence.render_page_png, page_number)
+        image = pdf_evidence.render_page_png(page_number)
     except pdf_evidence.PdfEvidenceError:
         return JSONResponse(
             {"error": "요청한 PDF 페이지를 표시할 수 없습니다."}, status_code=404
@@ -300,14 +353,14 @@ def create_app(state_factory: Callable[[], ChatState] = ChatState) -> Starlette:
     async def lifespan(app: Starlette) -> AsyncIterator[None]:
         state = state_factory()
         app.state.chat = state
-        await anyio.to_thread.run_sync(state.open)
+        state.open()
         state.limiter = anyio.Semaphore(state.max_concurrent)
         print(
             "[evidence-chat] 서비스 준비됨"
             if state.ready
             else "[evidence-chat] 서비스 준비 실패"
         )
-        source = await anyio.to_thread.run_sync(pdf_evidence.inspect_pdf)
+        source = pdf_evidence.inspect_pdf()
         print(f"[evidence-chat] PDF: {'탑재됨' if source.available else '없음'}")
         try:
             yield

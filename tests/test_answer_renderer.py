@@ -132,6 +132,16 @@ def build_validated(rows, plan):
 
 
 class StructuredClaimGroundingTests(unittest.TestCase):
+    def test_course_code_is_row_derived_and_rendered_with_offering_evidence(self):
+        rows = [offering_row(course_code="CDA0157", name_ko="이산수학")]
+        plan = course_plan("course_code", name_ko="이산수학")
+        claims, answer = build_validate_render(rows, plan)
+        self.assertEqual(claims[0].field, "course_code")
+        self.assertEqual(claims[0].value, "CDA0157")
+        self.assertEqual(answer.answer_text, "이산수학의 학수번호는 CDA0157입니다.")
+        self.assertEqual(claims[0].fact_ids, (rows[0]["fact_id"],))
+        self.assertEqual(claims[0].evidence_ids, (rows[0]["evidence_id"],))
+
     def test_completion_type_is_rendered_from_enum_without_semantic_flip(self):
         rows = [offering_row()]
         claims, answer = build_validate_render(

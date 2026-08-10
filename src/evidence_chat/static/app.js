@@ -25,18 +25,32 @@ const el = {
   progressBack: $("progress-back"),
   elapsed: $("elapsed"),
   asked: $("asked"),
-  barFill: $("bar-fill"),
+  progressSteps: $("progress-steps"),
   answerQuestion: $("answer-question"),
   answerBadge: $("answer-badge"),
   answerTitle: $("answer-title"),
   clarification: $("clarification"),
   scopeNotice: $("scope-notice"),
   debugMeta: $("debug-meta"),
+  inspectionSection: $("inspection-section"),
+  inspectionContent: $("inspection-content"),
   evidenceSection: $("evidence-section"),
   evidenceSummary: $("evidence-summary"),
   evidencePages: $("evidence-pages"),
   pdfNotice: $("pdf-notice"),
   answerAgain: $("answer-again"),
+  pdfModal: $("pdf-modal"),
+  pdfModalTitle: $("pdf-modal-title"),
+  pdfModalMeta: $("pdf-modal-meta"),
+  pdfModalClose: $("pdf-modal-close"),
+  pdfModalNotice: $("pdf-modal-notice"),
+  pdfModalCanvas: $("pdf-modal-canvas"),
+  pdfModalSource: $("pdf-modal-source"),
+  pdfPrev: $("pdf-prev"),
+  pdfNext: $("pdf-next"),
+  pdfZoomIn: $("pdf-zoom-in"),
+  pdfZoomOut: $("pdf-zoom-out"),
+  pdfZoomLabel: $("pdf-zoom-label"),
 };
 
 let pdfAvailable = false;
@@ -44,6 +58,9 @@ let inFlight = false;
 let activeController = null;
 let elapsedTimer = null;
 let clientTimeoutMs = 180000;
+let pdfPageCount = 0;
+let modalState = null;
+let modalZoom = 1;
 
 const span = (className, text) => {
   const node = document.createElement("span");
@@ -75,7 +92,7 @@ async function loadHealth() {
   try {
     const response = await fetch("/api/health", { cache: "no-store" });
     const data = await response.json();
-    pdfAvailable = Boolean(data.pdf && data.pdf.available);
+    pdfAvailable = Boolean(data.pdf_mounted);
     clientTimeoutMs = Math.max(60000, Number(data.client_timeout_seconds || 180) * 1000);
     if (Number.isInteger(data.max_question_length)) {
       el.question.maxLength = data.max_question_length;
@@ -89,13 +106,10 @@ async function loadHealth() {
     } else if (!pdfAvailable) {
       dot.dataset.state = "warn";
       text.textContent = "질의 서비스 준비됨 · PDF 미탑재";
-      showNotice(el.askNotice, data.pdf.reason || "발췌 PDF가 없습니다.", false);
+      showNotice(el.askNotice, "발췌 PDF가 없어 근거 원문과 페이지 번호만 표시합니다.", false);
     } else {
       dot.dataset.state = "ok";
-      text.textContent = `질의 서비스 준비됨 · PDF ${data.pdf.page_count}p`;
-      if (!data.pdf.sha256_matches && data.pdf.reason) {
-        showNotice(el.askNotice, data.pdf.reason, false);
-      }
+      text.textContent = "질의 서비스 준비됨 · PDF 탑재됨";
     }
     renderExamples(data.examples || []);
   } catch (_) {
@@ -173,7 +187,9 @@ async function ask(question) {
   el.spinner.classList.remove("is-done");
   el.progressTitle.textContent = "답변을 확인하고 있습니다";
   el.progressNow.textContent = "질문 전송됨";
-  el.barFill.style.width = "15%";
+  el.progressSteps.replaceChildren();
+  el.inspectionSection.hidden = true;
+  el.inspectionContent.replaceChildren();
   el.progressBack.textContent = "요청 취소";
   showScreen("progress");
   startElapsed();
@@ -181,6 +197,7 @@ async function ask(question) {
   activeController = new AbortController();
   const timeout = window.setTimeout(() => activeController.abort("timeout"), clientTimeoutMs);
   let result = null;
+  let inspection = null;
   let failed = false;
 
   try {
@@ -210,7 +227,9 @@ async function ask(question) {
         const payload = JSON.parse(line.slice(6));
         if (payload.type === "progress") {
           el.progressNow.textContent = payload.message;
-          el.barFill.style.width = payload.phase === "COMPLETED" ? "100%" : "55%";
+          renderProgress(payload);
+        } else if (payload.type === "inspection") {
+          inspection = payload;
         } else if (payload.type === "result") {
           result = payload;
         } else if (payload.type === "error") {
@@ -243,8 +262,64 @@ async function ask(question) {
 
   if (result) {
     renderAnswer(result);
+    renderInspection(inspection);
     showScreen("answer");
   }
+}
+
+function renderProgress(payload) {
+  let item = el.progressSteps.querySelector(`[data-phase="${payload.phase}"]`);
+  if (!item) {
+    item = document.createElement("li");
+    item.className = "step";
+    item.dataset.phase = payload.phase;
+    const row = document.createElement("div");
+    row.className = "step-row";
+    row.append(span("step-icon", "·"), span("step-label", payload.message));
+    const time = span("step-time", "");
+    row.append(time);
+    item.append(row);
+    el.progressSteps.append(item);
+  }
+  item.querySelector(".step-label").textContent = payload.message;
+  item.classList.remove("is-running", "is-done", "is-failed");
+  item.classList.add(
+    payload.state === "STARTED"
+      ? "is-running"
+      : payload.state === "FAILED"
+        ? "is-failed"
+        : "is-done"
+  );
+  item.querySelector(".step-icon").textContent = payload.state === "COMPLETED" ? "✓" : payload.state === "FAILED" ? "!" : "";
+  item.querySelector(".step-time").textContent = payload.elapsed_ms ? `${payload.elapsed_ms}ms` : "";
+}
+
+function renderInspection(inspection) {
+  el.inspectionSection.hidden = !inspection;
+  el.inspectionSection.open = false;
+  el.inspectionContent.replaceChildren();
+  if (!inspection) return;
+  const fields = [
+    ["QueryPlan", inspection.query_plan],
+    ["사용 라벨", inspection.labels],
+    ["사용 관계", inspection.relationship_types],
+    ["검증된 읽기 전용 Cypher", inspection.validated_cypher],
+    ["정제된 파라미터", inspection.parameters],
+    ["EXPLAIN 연산자", inspection.explain_operators],
+    ["결과 요약", { row_count: inspection.row_count, evidence_count: inspection.evidence_count }],
+    ["단계별 시간(ms)", inspection.stage_timings_ms],
+  ];
+  fields.forEach(([label, value]) => {
+    if (value === null || value === undefined) return;
+    const item = document.createElement("div");
+    item.className = "inspection-item";
+    const title = document.createElement("strong");
+    title.textContent = label;
+    const body = document.createElement("pre");
+    body.textContent = typeof value === "string" ? value : JSON.stringify(value, null, 2);
+    item.append(title, body);
+    el.inspectionContent.append(item);
+  });
 }
 
 function renderAnswer(result) {
@@ -267,6 +342,7 @@ function renderAnswer(result) {
 
 function renderEvidence(presentation) {
   const pages = presentation.evidence_pages || [];
+  pdfPageCount = Number(presentation.pdf && presentation.pdf.page_count) || 0;
   const total = pages.reduce((sum, page) => sum + page.evidence.length, 0);
   el.evidenceSection.hidden = total === 0;
   el.evidenceSummary.textContent = pages.length
@@ -363,7 +439,13 @@ function pageCard(page, pdf, totalEvidence) {
           : span("no-hl", "원문 위치를 찾지 못했습니다")
       );
     }
-    quote.append(text, meta);
+    const viewButton = document.createElement("button");
+    viewButton.type = "button";
+    viewButton.className = "view-source";
+    viewButton.textContent = "원문에서 보기";
+    viewButton.disabled = !(pdf && pdf.available);
+    viewButton.addEventListener("click", () => openPdfModal(page, item));
+    quote.append(text, meta, viewButton);
     const focus = (on) => {
       quote.classList.toggle("is-focus", on);
       canvas.classList.toggle("has-focus", on);
@@ -381,6 +463,78 @@ function pageCard(page, pdf, totalEvidence) {
   card.append(head, body);
   return card;
 }
+
+function openPdfModal(page, evidence) {
+  if (!pdfAvailable) return;
+  modalState = { originPage: page, evidence, page: page.excerpt_page };
+  modalZoom = 1;
+  renderPdfModal();
+  el.pdfModal.showModal();
+}
+
+function renderPdfModal() {
+  if (!modalState) return;
+  const { originPage, evidence, page } = modalState;
+  const isOrigin = page === originPage.excerpt_page;
+  el.pdfModalTitle.textContent = `발췌 PDF ${page}쪽`;
+  el.pdfModalMeta.textContent = isOrigin
+    ? `원본 PDF ${pageLabel(originPage.source_pdf_page)}쪽 · 인쇄 페이지 ${pageLabel(originPage.printed_page)}쪽`
+    : "인접 발췌 페이지";
+  el.pdfModalSource.textContent = evidence.source_text;
+  el.pdfModalNotice.hidden = isOrigin && evidence.highlight_found;
+  el.pdfModalNotice.textContent = isOrigin
+    ? "Evidence 원문 위치를 찾지 못했습니다. 페이지와 원문은 계속 확인할 수 있습니다."
+    : "선택한 Evidence의 강조 표시는 원래 발췌 페이지에서만 제공됩니다.";
+  el.pdfModalCanvas.replaceChildren();
+  el.pdfModalCanvas.style.width = `${modalZoom * 100}%`;
+  el.pdfZoomLabel.textContent = `${Math.round(modalZoom * 100)}%`;
+  const img = document.createElement("img");
+  img.src = `/api/pdf/page/${page}.png`;
+  img.alt = `발췌 PDF ${page}쪽`;
+  img.addEventListener("error", () => {
+    el.pdfModalCanvas.replaceChildren();
+    const fallback = document.createElement("p");
+    fallback.className = "page-missing";
+    fallback.textContent = "페이지 이미지를 표시하지 못했습니다. Evidence 원문은 계속 확인할 수 있습니다.";
+    el.pdfModalCanvas.append(fallback);
+  });
+  el.pdfModalCanvas.append(img);
+  if (isOrigin) {
+    (evidence.highlights || []).forEach((box) => {
+      const mark = document.createElement("div");
+      mark.className = "hl is-focus";
+      mark.style.left = `${box.x * 100}%`;
+      mark.style.top = `${box.y * 100}%`;
+      mark.style.width = `${box.width * 100}%`;
+      mark.style.height = `${box.height * 100}%`;
+      el.pdfModalCanvas.append(mark);
+    });
+  }
+  el.pdfPrev.disabled = page <= 1;
+  el.pdfNext.disabled = pdfPageCount > 0 && page >= pdfPageCount;
+}
+
+el.pdfModalClose.addEventListener("click", () => el.pdfModal.close());
+el.pdfPrev.addEventListener("click", () => {
+  if (modalState && modalState.page > 1) {
+    modalState.page -= 1;
+    renderPdfModal();
+  }
+});
+el.pdfNext.addEventListener("click", () => {
+  if (modalState && (!pdfPageCount || modalState.page < pdfPageCount)) {
+    modalState.page += 1;
+    renderPdfModal();
+  }
+});
+el.pdfZoomIn.addEventListener("click", () => {
+  modalZoom = Math.min(2, modalZoom + 0.25);
+  renderPdfModal();
+});
+el.pdfZoomOut.addEventListener("click", () => {
+  modalZoom = Math.max(0.5, modalZoom - 0.25);
+  renderPdfModal();
+});
 
 loadHealth();
 autoGrow();
