@@ -1,0 +1,220 @@
+{
+  "fixture_name": "cwnu_2026_curriculum_competency_questions",
+  "fixture_version": "0.1.0",
+  "purpose": "2026학년도 교양 이수요건과 컴퓨터공학과 교육과정 지식그래프의 회귀 평가 계약",
+  "ontology_spec_ref": "ontology/ontology_spec.json",
+  "runtime_policy": {
+    "question_strings_are_test_inputs": true,
+    "direct_string_answer_lookup_forbidden": true,
+    "required_runtime_flow": "natural_language -> intent_and_parameters -> neo4j_query -> verified_evidence_answer"
+  },
+  "answerability_enum": ["FULL", "PARTIAL", "NOT_SUPPORTED"],
+  "source_document": {
+    "file_name": "2026 교육과정(교양이수요건+컴공교육과정).pdf",
+    "sha256": "8ee5ee9d45fde0b00f8c42dc5aa513a46ec6a28bed4db50af25a049ae2dac004",
+    "page_count": 19
+  },
+  "questions": [
+    {
+      "id": "CQ-001",
+      "question_ko": "2026학년도 교양 최소 이수학점은?",
+      "intent": "get_credit_requirement",
+      "parameters": {"academic_year": 2026, "curriculum_id": "curriculum:cwnu:2026:common", "requirement": "minimum_total_general_credits"},
+      "required_nodes": ["CurriculumVersion", "CreditRequirement", "ApplicabilityScope", "EducationArea", "Evidence"],
+      "expected_graph_patterns": [
+        {"source_label": "CurriculumVersion", "relationship_type": "HAS_RULE", "target_label": "CreditRequirement"},
+        {"source_label": "CreditRequirement", "relationship_type": "APPLIES_TO", "target_label": "ApplicabilityScope"},
+        {"source_label": "CreditRequirement", "relationship_type": "TARGETS", "target_label": "EducationArea"},
+        {"source_label": "CreditRequirement", "relationship_type": "SUPPORTED_BY", "target_label": "Evidence"}
+      ],
+      "expected_result": {"result_type": "credit_requirement", "operator": "GTE", "value": 34, "unit": "CREDIT"},
+      "evidence_pages": [{"excerpt_page": 1, "source_pdf_page": 33, "printed_page": 25, "verification_status": "VERIFIED"}],
+      "answerability": "FULL",
+      "verification_status": "VERIFIED",
+      "open_decision": null
+    },
+    {
+      "id": "CQ-002",
+      "question_ko": "교양 최대 인정학점은?",
+      "intent": "get_credit_requirement",
+      "parameters": {"academic_year": 2026, "curriculum_id": "curriculum:cwnu:2026:common", "requirement": "maximum_recognized_general_credits"},
+      "required_nodes": ["CurriculumVersion", "CreditRequirement", "ApplicabilityScope", "EducationArea", "Evidence"],
+      "expected_graph_patterns": [
+        {"source_label": "CurriculumVersion", "relationship_type": "HAS_RULE", "target_label": "CreditRequirement"},
+        {"source_label": "CreditRequirement", "relationship_type": "APPLIES_TO", "target_label": "ApplicabilityScope"},
+        {"source_label": "CreditRequirement", "relationship_type": "TARGETS", "target_label": "EducationArea"},
+        {"source_label": "CreditRequirement", "relationship_type": "SUPPORTED_BY", "target_label": "Evidence"}
+      ],
+      "expected_result": {
+        "result_type": "scoped_credit_requirements",
+        "requirements": [
+          {"scope": {"college_category": "GENERAL"}, "operator": "LTE", "value": 42, "unit": "CREDIT"},
+          {"scope": {"college_category": "ART"}, "operator": "LTE", "value": 50, "unit": "CREDIT"}
+        ]
+      },
+      "evidence_pages": [{"excerpt_page": 1, "source_pdf_page": 33, "printed_page": 25, "verification_status": "VERIFIED"}],
+      "answerability": "FULL",
+      "verification_status": "VERIFIED",
+      "open_decision": "college_category controlled vocabulary 확정"
+    },
+    {
+      "id": "CQ-003",
+      "question_ko": "기초교양에서 어떤 영역을 이수해야 하는가?",
+      "intent": "list_required_education_areas",
+      "parameters": {"academic_year": 2026, "curriculum_id": "curriculum:cwnu:2026:common", "parent_area": "FOUNDATIONAL_GENERAL"},
+      "required_nodes": ["CurriculumVersion", "CourseRequirement", "EducationArea", "ConditionGroup", "Evidence"],
+      "expected_graph_patterns": [
+        {"source_label": "CurriculumVersion", "relationship_type": "HAS_RULE", "target_label": "CourseRequirement"},
+        {"source_label": "CourseRequirement", "relationship_type": "TARGETS", "target_label": "EducationArea"},
+        {"source_label": "EducationArea", "relationship_type": "PARENT_OF", "target_label": "EducationArea"},
+        {"source_label": "CourseRequirement", "relationship_type": "HAS_CONDITION_GROUP", "target_label": "ConditionGroup"},
+        {"source_label": "CourseRequirement", "relationship_type": "SUPPORTED_BY", "target_label": "Evidence"}
+      ],
+      "expected_result": {
+        "result_type": "education_area_list",
+        "areas_ko": ["미래설계", "AI융합기초", "열린사고와표현", "글로벌의사소통"]
+      },
+      "evidence_pages": [{"excerpt_page": 1, "source_pdf_page": 33, "printed_page": 25, "verification_status": "VERIFIED"}],
+      "answerability": "FULL",
+      "verification_status": "VERIFIED",
+      "open_decision": "택일 조건의 정제 단위"
+    },
+    {
+      "id": "CQ-004",
+      "question_ko": "균형교양은 몇 개 영역에서 이수해야 하는가?",
+      "intent": "get_area_distribution_requirement",
+      "parameters": {"academic_year": 2026, "curriculum_id": "curriculum:cwnu:2026:common", "area_type": "BALANCED_GENERAL"},
+      "required_nodes": ["CurriculumVersion", "CourseRequirement", "CreditRequirement", "EducationArea", "Evidence"],
+      "expected_graph_patterns": [
+        {"source_label": "CurriculumVersion", "relationship_type": "HAS_RULE", "target_label": "CourseRequirement"},
+        {"source_label": "CourseRequirement", "relationship_type": "TARGETS", "target_label": "EducationArea"},
+        {"source_label": "CourseRequirement", "relationship_type": "SUPPORTED_BY", "target_label": "Evidence"},
+        {"source_label": "CurriculumVersion", "relationship_type": "HAS_RULE", "target_label": "CreditRequirement"}
+      ],
+      "expected_result": {
+        "result_type": "area_distribution_requirement",
+        "area_count": 4,
+        "minimum_courses_per_area": 1,
+        "total_credits": 12,
+        "unit": "CREDIT"
+      },
+      "evidence_pages": [{"excerpt_page": 1, "source_pdf_page": 33, "printed_page": 25, "verification_status": "VERIFIED"}],
+      "answerability": "FULL",
+      "verification_status": "VERIFIED",
+      "open_decision": "과목 중복 인정 정책"
+    },
+    {
+      "id": "CQ-005",
+      "question_ko": "편입생도 교양 이수 의무가 있는가?",
+      "intent": "check_exemption",
+      "parameters": {"academic_year": 2026, "curriculum_id": "curriculum:cwnu:2026:common", "admission_type": "TRANSFER"},
+      "required_nodes": ["CurriculumVersion", "ExemptionRule", "Rule", "ApplicabilityScope", "Evidence"],
+      "expected_graph_patterns": [
+        {"source_label": "CurriculumVersion", "relationship_type": "HAS_RULE", "target_label": "ExemptionRule"},
+        {"source_label": "ExemptionRule", "relationship_type": "APPLIES_TO", "target_label": "ApplicabilityScope"},
+        {"source_label": "ExemptionRule", "relationship_type": "OVERRIDES", "target_label": "Rule"},
+        {"source_label": "ExemptionRule", "relationship_type": "SUPPORTED_BY", "target_label": "Evidence"}
+      ],
+      "expected_result": {"result_type": "exemption", "obligation": "GENERAL_EDUCATION_COMPLETION", "exempt": true},
+      "evidence_pages": [{"excerpt_page": 1, "source_pdf_page": 33, "printed_page": 25, "verification_status": "VERIFIED"}],
+      "answerability": "FULL",
+      "verification_status": "VERIFIED",
+      "open_decision": "편입 유형 세분화 여부"
+    },
+    {
+      "id": "CQ-006",
+      "question_ko": "대학영어 면제 시 학점도 인정되는가?",
+      "intent": "check_exemption_credit_effect",
+      "parameters": {"academic_year": 2026, "curriculum_id": "curriculum:cwnu:2026:common", "course_group": "COLLEGE_ENGLISH"},
+      "required_nodes": ["ExemptionRule", "ConditionGroup", "Condition", "CreditRequirement", "Evidence"],
+      "expected_graph_patterns": [
+        {"source_label": "ExemptionRule", "relationship_type": "HAS_CONDITION_GROUP", "target_label": "ConditionGroup"},
+        {"source_label": "ConditionGroup", "relationship_type": "HAS_CONDITION", "target_label": "Condition"},
+        {"source_label": "ExemptionRule", "relationship_type": "OVERRIDES", "target_label": "CourseRequirement"},
+        {"source_label": "ExemptionRule", "relationship_type": "SUPPORTED_BY", "target_label": "Evidence"}
+      ],
+      "expected_result": {
+        "result_type": "exemption_credit_effect",
+        "course_completion_exempt": true,
+        "credits_awarded": false,
+        "replacement_general_credits_required": true,
+        "minimum_total_general_credits": 34
+      },
+      "evidence_pages": [{"excerpt_page": 1, "source_pdf_page": 33, "printed_page": 25, "verification_status": "VERIFIED"}],
+      "answerability": "FULL",
+      "verification_status": "VERIFIED",
+      "open_decision": "공인시험 점수 조건의 실제 데이터 계약"
+    },
+    {
+      "id": "CQ-007",
+      "question_ko": "컴퓨터공학과 단일전공의 전공필수 학점은?",
+      "intent": "get_credit_requirement",
+      "parameters": {"academic_year": 2026, "curriculum_id": "curriculum:cwnu:2026:cse", "major_type": "SINGLE_MAJOR", "completion_type": "MAJOR_REQUIRED"},
+      "required_nodes": ["CurriculumVersion", "CreditRequirement", "ApplicabilityScope", "Evidence"],
+      "expected_graph_patterns": [
+        {"source_label": "CurriculumVersion", "relationship_type": "HAS_RULE", "target_label": "CreditRequirement"},
+        {"source_label": "CreditRequirement", "relationship_type": "APPLIES_TO", "target_label": "ApplicabilityScope"},
+        {"source_label": "CreditRequirement", "relationship_type": "SUPPORTED_BY", "target_label": "Evidence"}
+      ],
+      "expected_result": {"result_type": "credit_requirement", "operator": "GTE", "value": 21, "unit": "CREDIT"},
+      "evidence_pages": [{"excerpt_page": 16, "source_pdf_page": 261, "printed_page": 253, "verification_status": "VERIFIED"}],
+      "answerability": "FULL",
+      "verification_status": "VERIFIED",
+      "open_decision": "최소전공과 심화전공 집계 표현"
+    },
+    {
+      "id": "CQ-008",
+      "question_ko": "컴퓨터공학과 전공필수 과목은?",
+      "intent": "list_course_offerings",
+      "parameters": {"academic_year": 2026, "curriculum_id": "curriculum:cwnu:2026:cse", "completion_type": "MAJOR_REQUIRED"},
+      "required_nodes": ["CurriculumVersion", "CourseOffering", "Course", "Evidence"],
+      "expected_graph_patterns": [
+        {"source_label": "CurriculumVersion", "relationship_type": "HAS_OFFERING", "target_label": "CourseOffering"},
+        {"source_label": "CourseOffering", "relationship_type": "OF_COURSE", "target_label": "Course"},
+        {"source_label": "CourseOffering", "relationship_type": "SUPPORTED_BY", "target_label": "Evidence"}
+      ],
+      "expected_result": {"result_type": "course_offering_list", "filters": {"completion_type": "MAJOR_REQUIRED"}},
+      "evidence_pages": [
+        {"excerpt_page": 17, "source_pdf_page": 262, "printed_page": 254, "verification_status": "VERIFIED"},
+        {"excerpt_page": 18, "source_pdf_page": 263, "printed_page": 255, "verification_status": "VERIFIED"}
+      ],
+      "answerability": "FULL",
+      "verification_status": "VERIFIED",
+      "open_decision": "부전공 필수 표식의 별도 규칙화"
+    },
+    {
+      "id": "CQ-009",
+      "question_ko": "자료구조는 몇 학년 몇 학기에 개설되는가?",
+      "intent": "get_course_offering_schedule",
+      "parameters": {"academic_year": 2026, "curriculum_id": "curriculum:cwnu:2026:cse", "course_code": "CDA0008"},
+      "required_nodes": ["CurriculumVersion", "CourseOffering", "Course", "Evidence"],
+      "expected_graph_patterns": [
+        {"source_label": "CurriculumVersion", "relationship_type": "HAS_OFFERING", "target_label": "CourseOffering"},
+        {"source_label": "CourseOffering", "relationship_type": "OF_COURSE", "target_label": "Course"},
+        {"source_label": "CourseOffering", "relationship_type": "SUPPORTED_BY", "target_label": "Evidence"}
+      ],
+      "expected_result": {"result_type": "course_offering", "course_code": "CDA0008", "grade_year": [2], "semester": "FIRST"},
+      "evidence_pages": [{"excerpt_page": 17, "source_pdf_page": 262, "printed_page": 254, "verification_status": "VERIFIED"}],
+      "answerability": "FULL",
+      "verification_status": "VERIFIED",
+      "open_decision": null
+    },
+    {
+      "id": "CQ-010",
+      "question_ko": "컴퓨터공학과의 과거 교육과정 경과조치는 무엇인가?",
+      "intent": "list_transition_rules",
+      "parameters": {"academic_year": 2026, "curriculum_id": "curriculum:cwnu:2026:cse"},
+      "required_nodes": ["CurriculumVersion", "TransitionRule", "ApplicabilityScope", "Evidence"],
+      "expected_graph_patterns": [
+        {"source_label": "CurriculumVersion", "relationship_type": "HAS_RULE", "target_label": "TransitionRule"},
+        {"source_label": "TransitionRule", "relationship_type": "APPLIES_TO", "target_label": "ApplicabilityScope"},
+        {"source_label": "TransitionRule", "relationship_type": "SUPPORTED_BY", "target_label": "Evidence"}
+      ],
+      "expected_result": {"result_type": "transition_rule_list", "filters": {"curriculum_id": "curriculum:cwnu:2026:cse"}},
+      "evidence_pages": [{"excerpt_page": 19, "source_pdf_page": 264, "printed_page": 256, "verification_status": "VERIFIED"}],
+      "answerability": "PARTIAL",
+      "verification_status": "REVIEW_REQUIRED",
+      "open_decision": "첫 번째 경과조치 문장의 원문 시각 검증"
+    }
+  ]
+}
