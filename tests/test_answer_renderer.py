@@ -1,20 +1,22 @@
 from __future__ import annotations
 
 import unittest
-from dataclasses import replace
+from dataclasses import FrozenInstanceError, replace
 from typing import Any
 
 from kg_builder.answer.claim_builder import ClaimBuilder
-from kg_builder.answer.claim_validator import ClaimValidator
+from kg_builder.answer.claim_validator import ClaimValidator, ValidatedClaims
 from kg_builder.answer.contracts import (
     ChatResponse,
     ChatStatus,
+    Citation,
     ClaimPolarity,
     ClaimType,
     FactEvidenceLink,
     GroundingError,
+    safe_failure_message,
 )
-from kg_builder.answer.korean_renderer import KoreanAnswerRenderer
+from kg_builder.answer.korean_renderer import KoreanAnswerRenderer, RenderedAnswer
 from kg_builder.answer.renderer import CitationRenderer
 from kg_builder.answer.service import CurriculumChatService
 from kg_builder.query.natural_language_service import NaturalLanguageResult
@@ -117,8 +119,13 @@ class StubQueryService:
 
 def build_validate_render(rows, plan):
     claims = ClaimBuilder().build(rows, plan)
-    claims = ClaimValidator().validate(claims, rows)
-    return claims, KoreanAnswerRenderer().render(claims)
+    validated = ClaimValidator().validate(claims, rows, plan)
+    return validated.claims, KoreanAnswerRenderer().render(validated)
+
+
+def build_validated(rows, plan):
+    claims = ClaimBuilder().build(rows, plan)
+    return ClaimValidator().validate(claims, rows, plan)
 
 
 class StructuredClaimGroundingTests(unittest.TestCase):
@@ -133,12 +140,11 @@ class StructuredClaimGroundingTests(unittest.TestCase):
 
     def test_major_required_and_elective_cannot_be_swapped(self):
         rows = [offering_row()]
-        claims = ClaimBuilder().build(
-            rows, course_plan("completion_type", name_ko="자료구조")
-        )
+        plan = course_plan("completion_type", name_ko="자료구조")
+        claims = ClaimBuilder().build(rows, plan)
         tampered = (replace(claims[0], value="MAJOR_REQUIRED"),)
         with self.assertRaises(GroundingError) as caught:
-            ClaimValidator().validate(tampered, rows)
+            ClaimValidator().validate(tampered, rows, plan)
         self.assertEqual(caught.exception.code, "ANSWER_CLAIM_INVALID")
 
     def test_course_count_and_credit_sum_have_non_exchangeable_roles(self):
@@ -168,7 +174,7 @@ class StructuredClaimGroundingTests(unittest.TestCase):
             for claim in claims
         )
         with self.assertRaises(GroundingError):
-            ClaimValidator().validate(swapped, rows)
+            ClaimValidator().validate(swapped, rows, plan)
 
     def test_exemption_polarity_is_derived_from_verified_rule(self):
         rows = [
@@ -183,43 +189,38 @@ class StructuredClaimGroundingTests(unittest.TestCase):
                 source_text="편입생은 교양이수 의무 없음",
             )
         ]
-        claims, answer = build_validate_render(
-            rows,
-            rule_plan("rule_type", "description_ko", admission_type="TRANSFER"),
-        )
+        plan = rule_plan("rule_type", "description_ko", admission_type="TRANSFER")
+        claims, answer = build_validate_render(rows, plan)
         self.assertIs(claims[0].polarity, ClaimPolarity.EXEMPT)
         self.assertTrue(claims[0].value)
         self.assertEqual(answer.answer_text, "편입생은 교양 이수 의무가 없다.")
         self.assertNotIn("의무가 있다", answer.answer_text)
         tampered = (replace(claims[0], polarity=ClaimPolarity.POSITIVE),)
         with self.assertRaises(GroundingError):
-            ClaimValidator().validate(tampered, rows)
+            ClaimValidator().validate(tampered, rows, plan)
 
     def test_minimum_and_maximum_operator_cannot_be_swapped(self):
         rows = [rule_row()]
-        claims = ClaimBuilder().build(
-            rows, rule_plan("rule_type", "operator", "value", "unit", "description_ko")
-        )
+        plan = rule_plan("rule_type", "operator", "value", "unit", "description_ko")
+        claims = ClaimBuilder().build(rows, plan)
         with self.assertRaises(GroundingError):
-            ClaimValidator().validate((replace(claims[0], operator="LTE"),), rows)
+            ClaimValidator().validate((replace(claims[0], operator="LTE"),), rows, plan)
 
     def test_grade_and_semester_cannot_be_swapped(self):
         rows = [offering_row()]
-        claims = ClaimBuilder().build(
-            rows, course_plan("grade_year", "semester", name_ko="자료구조")
-        )
+        plan = course_plan("grade_year", "semester", name_ko="자료구조")
+        claims = ClaimBuilder().build(rows, plan)
         tampered = tuple(
             replace(claim, value="FIRST" if claim.field == "grade_year" else (2,))
             for claim in claims
         )
         with self.assertRaises(GroundingError):
-            ClaimValidator().validate(tampered, rows)
+            ClaimValidator().validate(tampered, rows, plan)
 
     def test_invalid_fact_evidence_and_status_are_rejected(self):
         rows = [offering_row()]
-        claims = ClaimBuilder().build(
-            rows, course_plan("completion_type", name_ko="자료구조")
-        )
+        plan = course_plan("completion_type", name_ko="자료구조")
+        claims = ClaimBuilder().build(rows, plan)
         mismatch = (
             replace(
                 claims[0],
@@ -227,8 +228,8 @@ class StructuredClaimGroundingTests(unittest.TestCase):
             ),
         )
         with self.assertRaises(GroundingError) as caught:
-            ClaimValidator().validate(mismatch, rows)
-        self.assertEqual(caught.exception.code, "ANSWER_FACT_EVIDENCE_MISMATCH")
+            ClaimValidator().validate(mismatch, rows, plan)
+        self.assertEqual(caught.exception.code, "ANSWER_CLAIM_INVALID")
         missing_fact = (
             replace(
                 claims[0],
@@ -236,11 +237,13 @@ class StructuredClaimGroundingTests(unittest.TestCase):
             ),
         )
         with self.assertRaises(GroundingError) as caught:
-            ClaimValidator().validate(missing_fact, rows)
-        self.assertEqual(caught.exception.code, "ANSWER_FACT_EVIDENCE_MISMATCH")
+            ClaimValidator().validate(missing_fact, rows, plan)
+        self.assertEqual(caught.exception.code, "ANSWER_CLAIM_INVALID")
         for field in ("fact_status", "evidence_verification_status"):
             with self.subTest(field=field), self.assertRaises(GroundingError):
-                ClaimValidator().validate(claims, [offering_row(**{field: "REVIEW_REQUIRED"})])
+                ClaimValidator().validate(
+                    claims, [offering_row(**{field: "REVIEW_REQUIRED"})], plan
+                )
 
     def test_partial_or_duplicate_course_claims_are_rejected(self):
         second = offering_row(
@@ -261,10 +264,10 @@ class StructuredClaimGroundingTests(unittest.TestCase):
             for claim in claims
         )
         with self.assertRaises(GroundingError) as caught:
-            ClaimValidator().validate(omitted_item, rows)
+            ClaimValidator().validate(omitted_item, rows, plan)
         self.assertEqual(caught.exception.code, "ANSWER_CLAIM_INVALID")
         with self.assertRaises(GroundingError) as caught:
-            ClaimValidator().validate(claims[:-1] + (claims[0],), rows)
+            ClaimValidator().validate(claims[:-1] + (claims[0],), rows, plan)
         self.assertIn(caught.exception.code, {"ANSWER_CLAIM_DUPLICATE", "ANSWER_CLAIM_INVALID"})
         partial = tuple(claim for claim in claims if claim.claim_type is not ClaimType.COURSE_LIST)
         with self.assertRaises(GroundingError):
@@ -273,7 +276,7 @@ class StructuredClaimGroundingTests(unittest.TestCase):
     def test_unsupported_claim_type_and_empty_claims_fail_safely(self):
         with self.assertRaises(GroundingError) as caught:
             KoreanAnswerRenderer().render(())
-        self.assertEqual(caught.exception.code, "ANSWER_CLAIM_EMPTY")
+        self.assertEqual(caught.exception.code, "ANSWER_CLAIM_APPROVAL_REQUIRED")
         service = CurriculumChatService(
             StubQueryService(
                 result_for(
@@ -295,6 +298,116 @@ class StructuredClaimGroundingTests(unittest.TestCase):
             self.assertEqual(response.status, ChatStatus.SAFE_FAILURE)
             self.assertNotIn(name, response.answer_text)
 
+    def test_field_value_all_semantic_metadata_is_canonical(self):
+        rows = [offering_row()]
+        plan = course_plan("completion_type", name_ko="자료구조")
+        claim = ClaimBuilder().build(rows, plan)[0]
+        mutations = (
+            replace(claim, claim_id="claim:forged"),
+            replace(claim, claim_type=ClaimType.AGGREGATE),
+            replace(claim, value="MAJOR_REQUIRED"),
+            replace(claim, subject=replace(claim.subject, entity_id="course:cwnu:other")),
+            replace(claim, subject=replace(claim.subject, entity_id="")),
+            replace(claim, subject=replace(claim.subject, display_name="운영체제")),
+            replace(claim, subject=replace(claim.subject, display_name="")),
+            replace(claim, unit="CREDIT"),
+            replace(claim, operator="GTE"),
+            replace(claim, polarity=ClaimPolarity.NEGATIVE),
+        )
+        for tampered in mutations:
+            with self.subTest(tampered=tampered), self.assertRaises(GroundingError) as caught:
+                ClaimValidator().validate((tampered,), rows, plan)
+            self.assertEqual(caught.exception.code, "ANSWER_CLAIM_INVALID")
+
+    def test_course_list_completion_type_is_row_derived_and_scope_checked(self):
+        rows = [offering_row()]
+        plan = course_plan(
+            "course_code", "name_ko", "credits",
+            selection="COURSE_LIST", completion_type="MAJOR_ELECTIVE",
+        )
+        validated = build_validated(rows, plan)
+        scope = next(claim for claim in validated.claims if claim.field == "completion_type")
+        self.assertEqual(scope.value, rows[0]["completion_type"])
+        plan["filters"]["completion_type"] = "MAJOR_REQUIRED"
+        self.assertEqual(scope.value, "MAJOR_ELECTIVE")
+        with self.assertRaises(GroundingError):
+            ClaimBuilder().build(rows, plan)
+
+        mixed_rows = [
+            offering_row(),
+            offering_row(
+                fact_id="offering:other",
+                evidence_id="evidence:other",
+                course_code="CDA0010",
+                name_ko="컴퓨터구조",
+                course_identity="course:cwnu:CDA0010",
+                completion_type="MAJOR_REQUIRED",
+            ),
+        ]
+        with self.assertRaises(GroundingError):
+            ClaimBuilder().build(
+                mixed_rows,
+                course_plan(
+                    "course_code", "name_ko", "credits",
+                    selection="COURSE_LIST", completion_type="MAJOR_ELECTIVE",
+                ),
+            )
+
+
+class ValidatedClaimApprovalBoundaryTests(unittest.TestCase):
+    def setUp(self):
+        self.rows = [offering_row()]
+        self.plan = course_plan("completion_type", name_ko="자료구조")
+        self.raw_claims = ClaimBuilder().build(self.rows, self.plan)
+        self.validated = ClaimValidator().validate(
+            self.raw_claims, self.rows, self.plan
+        )
+
+    def test_raw_claim_collections_cannot_reach_renderers(self):
+        for raw in (self.raw_claims, list(self.raw_claims), self.raw_claims[0]):
+            with self.subTest(raw_type=type(raw).__name__), self.assertRaises(GroundingError):
+                KoreanAnswerRenderer().render(raw)
+        with self.assertRaises(GroundingError):
+            CitationRenderer().render("r", self.raw_claims)
+
+    def test_approval_objects_and_rendered_answers_reject_public_construction(self):
+        with self.assertRaises(TypeError):
+            ValidatedClaims(self.raw_claims, self.raw_claims[0].provenance, ())
+        with self.assertRaises(TypeError):
+            RenderedAnswer("위조 답변", self.validated)
+
+    def test_approved_collections_are_immutable_and_copy_tampering_is_detected(self):
+        with self.assertRaises(FrozenInstanceError):
+            self.validated.claims = ()
+        with self.assertRaises(FrozenInstanceError):
+            self.validated.citation_sources[0].source_text = "변조"
+        forged_claim = replace(self.validated.claims[0], value="MAJOR_REQUIRED")
+        with self.assertRaises(TypeError):
+            replace(self.validated, claims=(forged_claim,))
+
+        rendered = KoreanAnswerRenderer().render(self.validated)
+        with self.assertRaises(TypeError):
+            replace(rendered, answer_text="자료구조는 전공필수입니다.")
+
+    def test_citation_sources_cannot_be_mixed_between_validation_runs(self):
+        other_rows = [
+            offering_row(
+                evidence_id="evidence:other",
+                source_text="자료구조의 다른 근거",
+            )
+        ]
+        other = build_validated(other_rows, self.plan)
+        with self.assertRaises(TypeError):
+            replace(self.validated, citation_sources=other.citation_sources)
+
+    def test_validated_claims_are_canonical_not_caller_owned(self):
+        self.assertIsNot(self.validated.claims, self.raw_claims)
+        self.assertEqual(self.validated.claims, self.raw_claims)
+        rendered = KoreanAnswerRenderer().render(self.validated)
+        response = CitationRenderer().render("r", rendered)
+        self.assertEqual(response.answer_text, "자료구조의 이수구분은 전공선택입니다.")
+        self.assertEqual(len(response.citations), 1)
+
 
 class CitationAndResponseContractTests(unittest.TestCase):
     def test_citation_order_is_independent_of_input_order(self):
@@ -307,8 +420,9 @@ class CitationAndResponseContractTests(unittest.TestCase):
         )
         plan = course_plan("completion_type", name_ko="자료구조")
         claims, answer = build_validate_render([first, second], plan)
-        left = CitationRenderer().render("r", answer, [first, second])
-        right = CitationRenderer().render("r", answer, [second, first])
+        left = CitationRenderer().render("r", answer)
+        _, reversed_answer = build_validate_render([second, first], plan)
+        right = CitationRenderer().render("r", reversed_answer)
         self.assertEqual(left.to_dict(), right.to_dict())
         self.assertEqual([c.evidence_id for c in left.citations], ["evidence:a", "evidence:z"])
 
@@ -323,7 +437,7 @@ class CitationAndResponseContractTests(unittest.TestCase):
             selection="COURSE_LIST", completion_type="MAJOR_ELECTIVE"
         )
         claims, answer = build_validate_render(rows, plan)
-        response = CitationRenderer().render("r", answer, rows)
+        response = CitationRenderer().render("r", answer)
         self.assertEqual(response.citations[0].fact_ids, tuple(sorted(response.citations[0].fact_ids)))
 
     def test_chat_response_invariants_reject_contradictory_states(self):
@@ -333,6 +447,46 @@ class CitationAndResponseContractTests(unittest.TestCase):
             ChatResponse("r", ChatStatus.CLARIFICATION_REQUIRED, "확인 필요")
         with self.assertRaises(ValueError):
             ChatResponse("r", ChatStatus.SAFE_FAILURE, "안전 실패")
+        with self.assertRaises(ValueError):
+            ChatResponse(
+                "r",
+                ChatStatus.SAFE_FAILURE,
+                "자료구조는 전공필수입니다.",
+                error_code="ANSWER_CLAIM_VALIDATION_FAILED",
+            )
+
+    def test_safe_failure_uses_only_central_error_messages(self):
+        known = ChatResponse.safe_failure("r", "ANSWER_CLAIM_VALIDATION_FAILED")
+        self.assertEqual(
+            known.answer_text, "답변의 근거를 검증하지 못했습니다."
+        )
+        unknown = ChatResponse.safe_failure("r", "UNKNOWN_INTERNAL_ERROR")
+        self.assertEqual(unknown.answer_text, safe_failure_message("UNKNOWN_INTERNAL_ERROR"))
+        self.assertEqual(unknown.answer_text, "안전한 답변을 생성하지 못했습니다.")
+        self.assertFalse(known.citations)
+        self.assertFalse(known.used_fact_ids)
+        self.assertFalse(known.used_evidence_ids)
+        self.assertFalse(known.grounded_claims)
+        citation = Citation(
+            "evidence:x", ("fact:x",), 1, 1, 1, "합성 근거"
+        )
+        with self.assertRaises(ValueError):
+            ChatResponse(
+                "r",
+                ChatStatus.SAFE_FAILURE,
+                safe_failure_message("ANSWER_CLAIM_VALIDATION_FAILED"),
+                citations=(citation,),
+                error_code="ANSWER_CLAIM_VALIDATION_FAILED",
+            )
+        with self.assertRaises(ValueError):
+            ChatResponse(
+                "r",
+                ChatStatus.SAFE_FAILURE,
+                safe_failure_message("ANSWER_CLAIM_VALIDATION_FAILED"),
+                used_fact_ids=("fact:x",),
+                used_evidence_ids=("evidence:x",),
+                error_code="ANSWER_CLAIM_VALIDATION_FAILED",
+            )
 
     def test_non_answerable_statuses_are_deterministic_and_have_no_grounding(self):
         for status in (
@@ -355,10 +509,8 @@ class CitationAndResponseContractTests(unittest.TestCase):
         claims, answer = build_validate_render(
             rows, course_plan("completion_type", name_ko="자료구조")
         )
-        with self.assertRaises(GroundingError):
-            CitationRenderer().render("r", answer, [])
         with self.assertRaises(GroundingError) as caught:
-            CitationRenderer(max_source_chars=5).render("r", answer, rows)
+            CitationRenderer(max_source_chars=5).render("r", answer)
         self.assertEqual(caught.exception.code, "ANSWER_CITATION_TOO_LARGE")
 
 
@@ -390,6 +542,27 @@ class CurriculumChatServiceTests(unittest.TestCase):
                     response.answer_text, "자료구조의 이수구분은 전공선택입니다."
                 )
                 self.assertNotIn(question, str(response.to_dict()))
+
+    def test_public_service_does_not_allow_answer_pipeline_replacement(self):
+        rows = [offering_row()]
+        plan = course_plan("completion_type", name_ko="자료구조")
+
+        class TamperingBuilder:
+            def build(self, rows, query_plan):
+                claims = ClaimBuilder().build(rows, query_plan)
+                return tuple(
+                    replace(
+                        claim,
+                        subject=replace(claim.subject, display_name="운영체제"),
+                    )
+                    for claim in claims
+                )
+
+        with self.assertRaises(TypeError):
+            CurriculumChatService(
+                StubQueryService(result_for(rows, plan)),
+                claim_builder=TamperingBuilder(),
+            )
 
     def test_balanced_rules_preserve_unit_meaning_and_verified_text(self):
         area = rule_row(

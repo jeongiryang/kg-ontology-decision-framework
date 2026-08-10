@@ -84,20 +84,6 @@ class GroundedClaim:
 
 
 @dataclass(frozen=True, slots=True)
-class RenderedAnswer:
-    answer_text: str
-    claims: tuple[GroundedClaim, ...]
-
-    @property
-    def used_fact_ids(self) -> tuple[str, ...]:
-        return tuple(sorted({item for claim in self.claims for item in claim.fact_ids}))
-
-    @property
-    def used_evidence_ids(self) -> tuple[str, ...]:
-        return tuple(sorted({item for claim in self.claims for item in claim.evidence_ids}))
-
-
-@dataclass(frozen=True, slots=True)
 class Citation:
     evidence_id: str
     fact_ids: tuple[str, ...]
@@ -115,6 +101,18 @@ class Citation:
             "printed_page": self.printed_page,
             "source_text": self.source_text,
         }
+
+
+SAFE_FAILURE_MESSAGES = {
+    "QUERY_SAFE_FAILURE": "요청을 안전하게 처리하지 못했습니다.",
+    "ANSWER_CLAIM_VALIDATION_FAILED": "답변의 근거를 검증하지 못했습니다.",
+    "ANSWER_RENDERING_UNSUPPORTED": "현재 조회 결과는 안전한 답변 형식으로 제공할 수 없습니다.",
+}
+DEFAULT_SAFE_FAILURE_MESSAGE = "안전한 답변을 생성하지 못했습니다."
+
+
+def safe_failure_message(error_code: str) -> str:
+    return SAFE_FAILURE_MESSAGES.get(error_code, DEFAULT_SAFE_FAILURE_MESSAGE)
 
 
 @dataclass(frozen=True, slots=True)
@@ -165,10 +163,21 @@ class ChatResponse:
         elif self.clarification is not None:
             raise ValueError("clarification is exclusive to CLARIFICATION_REQUIRED")
         if self.status is ChatStatus.SAFE_FAILURE:
-            if not self.error_code:
+            if not isinstance(self.error_code, str) or not self.error_code.strip():
                 raise ValueError("SAFE_FAILURE requires an internal error_code")
+            if self.answer_text != safe_failure_message(self.error_code):
+                raise ValueError("SAFE_FAILURE requires the centrally managed safe message")
         elif self.error_code is not None:
             raise ValueError("error_code is exclusive to SAFE_FAILURE")
+
+    @classmethod
+    def safe_failure(cls, request_id: str, error_code: str) -> "ChatResponse":
+        return cls(
+            request_id=request_id,
+            status=ChatStatus.SAFE_FAILURE,
+            answer_text=safe_failure_message(error_code),
+            error_code=error_code,
+        )
 
     def to_dict(self) -> dict[str, Any]:
         return {

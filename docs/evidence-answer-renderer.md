@@ -11,6 +11,7 @@
 → SafetyPipeline(정적 검증 → EXPLAIN → execute_read → ResultValidator)
 → ClaimBuilder
 → ClaimValidator
+→ ValidatedClaims
 → KoreanAnswerRenderer
 → CitationRenderer
 → CurriculumChatService 응답
@@ -20,7 +21,8 @@ LLM은 질문 분석과 Cypher 후보 생성에만 사용한다. 최종 사실 �
 
 ## 구조화 Claim 계약
 
-각 `GroundedClaim`은 다음 의미를 분리한다.
+검증 전 `GroundedClaim`과 검증 후 `ValidatedClaims`는 서로 다른 계약이다. 각
+`GroundedClaim`은 다음 의미를 분리한다.
 
 - Claim 유형과 안정적인 `claim_id`
 - 필드, 값, 단위, 비교 연산자와 극성
@@ -42,7 +44,22 @@ LLM은 질문 분석과 Cypher 후보 생성에만 사용한다. 최종 사실 �
 
 숫자 Rule을 안전하게 렌더링하려면 값만으로는 부족하므로 planner는 모델이 `value`만 요청해도 구조적 의미 필드인 `rule_type`, `operator`, `unit`, `description_ko`를 결과 계약에 추가한다. 이 보완에는 정답값이나 질문별 분기가 없다.
 
+`QueryPlan`은 사용자가 요청한 조회 범위와 반환 형태만 정한다. 최종 Claim의
+사실값은 `ResultValidator`가 승인한 Neo4j 결과에서만 가져온다. 예를 들어 목록의
+`completion_type` 필터는 결과 범위가 요청과 일치하는지 확인하는 데만 쓰며,
+Claim 값은 결과 행들의 단일 `completion_type`에서 생성한다.
+
 ## Python 검증과 결정론적 렌더링
+
+`ClaimValidator`는 호출자가 전달한 Claim을 그대로 승인하지 않는다. 같은 조회
+행과 QueryPlan에서 canonical Claim을 다시 만들고 전달 Claim의 ID, 유형, subject,
+field, value, unit, operator, polarity, description과 provenance 전체가 일치하는지
+확인한다. 그 뒤에만 immutable `ValidatedClaims`를 발급한다.
+
+`ValidatedClaims`에는 canonical Claim tuple, 직접 `(fact_id, evidence_id)` provenance,
+그리고 해당 실행에서 검증한 Citation 소스가 함께 묶인다. 승인 digest는 이 전체
+내용에 결합되므로 일반 생성자, `dataclasses.replace`, mutable list 변경 또는 다른
+실행의 Evidence 혼합으로는 유효한 승인 객체를 만들 수 없다.
 
 `ClaimValidator`는 다음을 원본 조회 행에서 다시 계산한다.
 
@@ -54,12 +71,23 @@ LLM은 질문 분석과 Cypher 후보 생성에만 사용한다. 최종 사실 �
 - 전체 결과 Fact의 과목 목록 커버리지
 - `fact_count`와 `credits_sum`의 독립 집계
 - 중복·빈·미지원 Claim
+- `FIELD_VALUE` subject identity·표시명과 필드별 unit 정책
+- Claim 유형에서 의미 없는 operator·polarity·metadata의 정확한 기본값
 
-`KoreanAnswerRenderer`는 질문 원문이나 모델 응답을 사용하지 않고 Claim 유형과 필드만으로 문장을 만든다. 지원하지 않는 조합은 임의 설명 대신 `SAFE_FAILURE / ANSWER_RENDERING_UNSUPPORTED`가 된다. `DELETE`, `CREATE`, `Cypher`, `MATCH`, `API key`, `system prompt` 등 내부 표현 검사는 추가 방어선이며, Grounding의 주 방어선은 구조화 Claim이다.
+`KoreanAnswerRenderer`는 raw Claim이나 list/tuple을 받지 않고 validator-issued
+`ValidatedClaims`만 받는다. 질문 원문이나 모델 응답을 사용하지 않고 Claim 유형과
+필드만으로 문장을 만든다. 렌더링 결과도 승인 내용에 결합되며 CitationRenderer는
+그 승인 결과만 받는다. 지원하지 않는 조합은 임의 설명 대신
+`SAFE_FAILURE / ANSWER_RENDERING_UNSUPPORTED`가 된다. `DELETE`, `CREATE`,
+`Cypher`, `MATCH`, `API key`, `system prompt` 등 내부 표현 검사는 추가 방어선이며,
+Grounding의 주 방어선은 구조화 Claim과 승인 경계다.
 
 ## Citation 조립
 
-페이지 번호, Evidence 원문, 검증 상태와 Citation은 LLM 입력·출력이 아니다. Python이 Claim의 직접 provenance를 Verified 조회 행과 대조한 뒤 원래 행에서 복사한다.
+페이지 번호, Evidence 원문, 검증 상태와 Citation은 LLM 입력·출력이 아니다.
+`ClaimValidator`가 승인 시점에 원래 행에서 immutable Citation 소스를 만들고
+`ValidatedClaims`에 결합한다. CitationRenderer는 별도의 행 목록이나 Fact ID 목록을
+받지 않으므로 다른 검증 실행의 Evidence를 뒤늦게 섞을 수 없다.
 
 ```json
 {
@@ -101,9 +129,28 @@ excerpt_page → source_pdf_page → printed_page → evidence_id → fact_id
 | `UNSUPPORTED` | 미지원 안전 문구, Grounding 데이터 없음 |
 | `UNRESOLVED` | 원문·정책 검토 필요 안전 문구, Grounding 데이터 없음 |
 | `NOT_FOUND` | Verified 결과 없음 안전 문구, Grounding 데이터 없음 |
-| `SAFE_FAILURE` | 검증 실패 본문 없이 안전 문구와 내부 오류 코드만 반환 |
+| `SAFE_FAILURE` | 오류 코드별 중앙 고정 안전 문구와 내부 오류 코드만 반환 |
+
+`ChatResponse.safe_failure(error_code)`가 고정 문구를 선택한다. 직접 생성자를 쓰더라도
+오류 코드와 정확한 중앙 문구가 일치하지 않으면 거부하므로, 검증 실패한 답변 본문을
+`SAFE_FAILURE`에 재사용할 수 없다. 알 수 없는 오류 코드는 일반 안전 문구로 축약한다.
 
 비ANSWERABLE 상태는 ClaimBuilder와 renderer에 진입하지 않는다. 내부 예외 메시지와 검증 실패 본문은 사용자 응답에 포함하지 않는다.
+
+## 공식 API와 Python 경계의 범위
+
+패키지 루트의 공식 실행 API는 `CurriculumChatService`와 응답 DTO다.
+`ClaimBuilder`, `ClaimValidator`, `KoreanAnswerRenderer`, `CitationRenderer`와 승인 객체
+factory는 내부 모듈이며 패키지 `__all__`에 노출하지 않는다. 정상 어댑터는 이 내부
+단계를 개별 호출하지 않는다. `CurriculumChatService` 생성자는 query service만 받고
+답변 승인 구성요소를 외부에서 교체하는 injection 지점을 제공하지 않는다.
+
+Python 타입과 module-private seal은 같은 프로세스에서 임의 코드를 실행할 수 있는
+공격자에 대한 완전한 보안 샌드박스가 아니다. private sentinel·digest 함수 탈취,
+monkey patching, `object.__setattr__`, 메모리 변조는 범위 밖이다. 이번 경계는 공개
+생성자, 일반 collection, 단순 dataclass 복사 및 후속 어댑터의 실수로 검증이
+우회되는 것을 차단한다. 프로세스 자체의 코드 실행 권한과 배포 신뢰 경계는 별도로
+보호해야 한다.
 
 ## 실행
 
@@ -128,7 +175,11 @@ KG_NEO4J_INTEGRATION=1 uv run pytest -q
 KG_LOCAL_LLM_INTEGRATION=1 uv run pytest -q tests/test_answer_integration.py -s
 ```
 
-회귀 테스트는 이수구분 의미 반전, 과목 수·학점 합계 교환, 면제 극성 반전, 최소·최대 연산자 교환, 학년·학기 교환, Fact/Evidence 불일치와 Citation 비결정성을 검사한다. 통합 테스트는 임시 trace 디렉터리를 사용하고 전후 노드 1,518개, 관계 3,260개, Evidence 511개 불변을 확인한다.
+회귀 테스트는 raw Claim 렌더링, 승인 객체 직접 생성·복사, 다른 실행 Citation 혼합,
+subject·unit·operator·polarity 변조, 이수구분 의미 반전, 과목 수·학점 합계 교환,
+면제 극성 반전, 최소·최대 연산자 교환, 학년·학기 교환과 고정 `SAFE_FAILURE`
+문구를 검사한다. 통합 테스트는 임시 trace 디렉터리를 사용하고 전후 노드 1,518개,
+관계 3,260개, Evidence 511개 불변을 확인한다.
 
 ## 현재 범위와 확장 방법
 

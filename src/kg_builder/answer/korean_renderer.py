@@ -2,10 +2,15 @@
 
 from __future__ import annotations
 
+import hashlib
+import hmac
 import re
+import secrets
+from dataclasses import dataclass, field
 from typing import Sequence
 
-from .contracts import ClaimPolarity, ClaimType, GroundedClaim, GroundingError, RenderedAnswer
+from .claim_validator import ValidatedClaims
+from .contracts import ClaimPolarity, ClaimType, GroundedClaim, GroundingError
 
 
 ENUM_KO = {
@@ -24,13 +29,84 @@ _INTERNAL_TOKEN = re.compile(
     r"(?i)(?<![A-Za-z0-9_])(?:Cypher|MATCH|RETURN|CREATE|DELETE|MERGE|INSERT|SET|REMOVE|DROP|ALTER|CALL|APOC)(?![A-Za-z0-9_])"
 )
 _SECRET_TEXT = re.compile(r"(?i)(system\s*prompt|api\s*key|비밀번호|토큰)")
+_RENDER_SEAL = object()
+_RENDER_KEY = secrets.token_bytes(32)
+
+
+def _render_digest(answer_text: str, validated: ValidatedClaims) -> str:
+    payload = repr((answer_text, validated._approval)).encode("utf-8")
+    return hmac.new(_RENDER_KEY, payload, hashlib.sha256).hexdigest()
+
+
+@dataclass(frozen=True, slots=True, init=False)
+class RenderedAnswer:
+    """Renderer-issued answer bound to one approved ValidatedClaims value."""
+
+    answer_text: str
+    validated_claims: ValidatedClaims
+    _approval: str = field(repr=False, compare=False)
+    _seal: object = field(repr=False, compare=False)
+
+    def __init__(
+        self,
+        answer_text: str,
+        validated_claims: ValidatedClaims,
+        *,
+        _approval: str = "",
+        _seal: object | None = None,
+    ) -> None:
+        expected = _render_digest(answer_text, validated_claims)
+        if (
+            _seal is not _RENDER_SEAL
+            or not validated_claims._is_approved()
+            or not hmac.compare_digest(_approval, expected)
+        ):
+            raise TypeError("RenderedAnswer can only be issued by KoreanAnswerRenderer")
+        object.__setattr__(self, "answer_text", answer_text)
+        object.__setattr__(self, "validated_claims", validated_claims)
+        object.__setattr__(self, "_approval", _approval)
+        object.__setattr__(self, "_seal", _seal)
+
+    @classmethod
+    def _issue(cls, answer_text: str, validated: ValidatedClaims) -> "RenderedAnswer":
+        return cls(
+            answer_text,
+            validated,
+            _approval=_render_digest(answer_text, validated),
+            _seal=_RENDER_SEAL,
+        )
+
+    def _is_approved(self) -> bool:
+        if self._seal is not _RENDER_SEAL or not self.validated_claims._is_approved():
+            return False
+        return hmac.compare_digest(
+            self._approval, _render_digest(self.answer_text, self.validated_claims)
+        )
+
+    @property
+    def claims(self) -> tuple[GroundedClaim, ...]:
+        return self.validated_claims.claims
+
+    @property
+    def used_fact_ids(self) -> tuple[str, ...]:
+        return self.validated_claims.fact_ids
+
+    @property
+    def used_evidence_ids(self) -> tuple[str, ...]:
+        return self.validated_claims.evidence_ids
 
 
 class KoreanAnswerRenderer:
     def __init__(self, *, max_answer_chars: int = 8_000):
         self.max_answer_chars = max_answer_chars
 
-    def render(self, claims: Sequence[GroundedClaim]) -> RenderedAnswer:
+    def render(self, validated: ValidatedClaims) -> RenderedAnswer:
+        if not isinstance(validated, ValidatedClaims) or not validated._is_approved():
+            raise GroundingError(
+                "ANSWER_CLAIM_APPROVAL_REQUIRED",
+                "renderer accepts only ClaimValidator-issued ValidatedClaims",
+            )
+        claims = validated.claims
         if not claims:
             raise GroundingError("ANSWER_CLAIM_EMPTY", "cannot render empty Claims")
         kinds = {claim.claim_type for claim in claims}
@@ -54,7 +130,7 @@ class KoreanAnswerRenderer:
             raise GroundingError(
                 "ANSWER_INTERNAL_DISCLOSURE", "rendered answer contains internal syntax"
             )
-        return RenderedAnswer(text, tuple(claims))
+        return RenderedAnswer._issue(text, validated)
 
     @staticmethod
     def _rules(claims: Sequence[GroundedClaim]) -> str:

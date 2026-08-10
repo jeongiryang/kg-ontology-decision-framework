@@ -5,7 +5,7 @@
 - 파일명 규칙: `NNNN-short-task-name.md`
   - `NNNN`은 이 폴더에서 독립적으로 증가하는 4자리 번호다.
   - 작업명은 영문 소문자 kebab-case로 작성한다.
-- 현재 다음 로그 번호: `0015`
+- 현재 다음 로그 번호: `0016`
 - 중앙 템플릿: [AI 시뮬레이션 로그 템플릿](../_template.md)
 - 중앙 운영 규칙: [AI 시뮬레이션 로그 운영 규칙](../README.md)
 
@@ -25,3 +25,4 @@
 - [0012. LLM HTTP redirect 보안 강화](0012-llm-http-redirect-hardening.md)
 - [0013. VERIFIED Evidence 기반 한국어 답변 계층](0013-evidence-answer-renderer.md)
 - [0014. 구조화 Claim 기반 답변 Grounding 보안 수정](0014-structured-claim-grounding.md)
+- [0015. ValidatedClaims 승인 경계와 Claim 전체 검증 보완](0015-validated-claims-approval-boundary.md)

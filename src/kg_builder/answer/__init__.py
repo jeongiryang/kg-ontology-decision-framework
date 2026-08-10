@@ -1,6 +1,6 @@
 """Grounded Korean answer generation after verified dynamic query validation."""
 
-from .contracts import ChatResponse, ChatStatus, Citation, GroundedClaim
+from .contracts import ChatResponse, ChatStatus, Citation
 from .service import CurriculumChatService
 
 __all__ = [
@@ -8,5 +8,4 @@ __all__ = [
     "ChatStatus",
     "Citation",
     "CurriculumChatService",
-    "GroundedClaim",
 ]

@@ -213,8 +213,12 @@ class ClaimBuilder:
                 )
             )
             all_links.extend(self._provenance(rows))
-            if isinstance(row.get("completion_type"), str):
-                completion_types.add(row["completion_type"])
+            completion_type = row.get("completion_type")
+            if not isinstance(completion_type, str) or not completion_type:
+                raise GroundingError(
+                    "ANSWER_CLAIM_INVALID", "course list completion_type is invalid"
+                )
+            completion_types.add(completion_type)
         items.sort(key=lambda item: (item.course_code or "", item.display_name, item.fact_id))
         provenance = tuple(sorted(set(all_links)))
         fact_ids = [item.fact_id for item in items]
@@ -253,13 +257,16 @@ class ClaimBuilder:
                 raise GroundingError(
                     "ANSWER_CLAIM_INVALID", "course list completion_type scope is inconsistent"
                 )
+            # QueryPlan is only the requested scope.  The Claim fact value comes
+            # from the single value observed in ResultValidator-approved rows.
+            result_completion_type = next(iter(completion_types))
             claims.append(
                 GroundedClaim(
                     _claim_id("field", "completion_type", fact_ids),
                     ClaimType.FIELD_VALUE,
                     provenance,
                     "completion_type",
-                    expected,
+                    result_completion_type,
                 )
             )
         return claims
@@ -268,7 +275,12 @@ class ClaimBuilder:
     def _course_subject(row: Mapping[str, Any], fact_id: str) -> ClaimSubject:
         name = row.get("name_ko")
         identity = row.get("course_identity") or row.get("course_code") or fact_id
-        if not isinstance(name, str) or not name.strip() or not isinstance(identity, str):
+        if (
+            not isinstance(name, str)
+            or not name.strip()
+            or not isinstance(identity, str)
+            or not identity.strip()
+        ):
             raise GroundingError("ANSWER_CLAIM_INVALID", "Course Claim lacks identity/name")
         return ClaimSubject(identity, name.strip())
 
