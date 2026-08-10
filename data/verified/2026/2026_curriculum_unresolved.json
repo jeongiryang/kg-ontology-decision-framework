@@ -1,0 +1,1514 @@
+{
+  "metadata": {
+    "artifact_role": "온톨로지 V0.2 마이그레이션 후에도 해결되지 않은 활성 검토 항목과 해결 이력",
+    "source_document_sha256": "8ee5ee9d45fde0b00f8c42dc5aa513a46ec6a28bed4db50af25a049ae2dac004",
+    "schema_name": "cwnu_2026_academic_curriculum_ontology_v1",
+    "schema_version": "0.2.0",
+    "generated_on": "2026-08-10",
+    "raw_unresolved_sha256": "5bff959162db138c94e053cd7958e2c77ab46db2cdd773617f75afb2cb2812fa",
+    "policy": "활성 미해결 항목은 해결 전까지 운영 질의의 확정 답변 근거로 사용하지 않음"
+  },
+  "summary": {
+    "schema_gap_count": 10,
+    "unsupported_or_identity_conflict_general_rows": 4,
+    "omitted_cse_offering_rows": 6,
+    "partially_modeled_transition_rows": 14,
+    "modeled_cse_basic_credit_structure_rows": 2,
+    "unmodeled_cse_structural_source_facts": 0,
+    "unmodeled_narrative_fact_groups": 0,
+    "source_internal_inconsistencies": 1,
+    "resolved_migration_groups": 13,
+    "approved_corrections": 2
+  },
+  "schema_gaps": [
+    {
+      "issue_id": "SG-001",
+      "severity": "high",
+      "title_ko": "교양 CourseOffering의 개설 학년 부재",
+      "affected_records": 282,
+      "current_representation": "grade_year=[]로 보존하고 correction_note에 원문 부재를 명시함.",
+      "decision_needed": "빈 배열을 전학년/미지정 중 무엇으로 해석할지 데이터 계약에 명시한다."
+    },
+    {
+      "issue_id": "SG-003",
+      "severity": "high",
+      "title_ko": "개설학기 '이룸' 통제어휘 부재",
+      "affected_records": 4,
+      "current_representation": "Course와 Evidence만 만들고 Offering은 보류함.",
+      "decision_needed": "이룸 학기의 의미와 semester 확장값을 확인한다."
+    },
+    {
+      "issue_id": "SG-004",
+      "severity": "high",
+      "title_ko": "현장실습 실기값의 단위가 주(週)",
+      "affected_records": 6,
+      "current_representation": "Course와 Evidence만 만들고 Offering은 보류함.",
+      "decision_needed": "practice_hours 외 practice_weeks 또는 workload 구조를 추가한다."
+    },
+    {
+      "issue_id": "SG-005",
+      "severity": "high",
+      "title_ko": "경과조치의 교육과정 연도 범위 표현 불가",
+      "affected_records": 14,
+      "current_representation": "TransitionRule.description/source/normalized_value에 보존하고 APPLIES_TO는 생성하지 않음.",
+      "decision_needed": "ApplicabilityScope에 curriculum_year_from/to 또는 별도 TemporalScope를 추가한다."
+    },
+    {
+      "issue_id": "SG-006",
+      "severity": "medium",
+      "title_ko": "교양 관련학과와 학과별 수강제한의 정규화 구조 부재",
+      "affected_records": 287,
+      "current_representation": "related_department는 CourseOffering.source/normalized_value 문자열에, 제한 학과는 student_type에 보존함.",
+      "decision_needed": "Department 참조 관계와 수강제한 전용 규칙/관계를 정의한다."
+    },
+    {
+      "issue_id": "SG-007",
+      "severity": "medium",
+      "title_ko": "공통 교육과정과 Institution 연결 관계 부재",
+      "affected_records": 1,
+      "current_representation": "공통 CurriculumVersion 노드는 생성했으나 Institution으로 직접 연결하지 않음.",
+      "decision_needed": "FOR_INSTITUTION 또는 동등한 관계를 추가한다."
+    },
+    {
+      "issue_id": "SG-010",
+      "severity": "medium",
+      "title_ko": "ApplicabilityScope ID 패턴에 학생·대학 범주 식별자 부재",
+      "affected_records": 21,
+      "current_representation": "충돌 방지를 위해 마지막 ID 토큰에 범주 식별자를 포함함.",
+      "decision_needed": "scope identity rule에 student_type/college_category discriminator를 공식 추가한다."
+    },
+    {
+      "issue_id": "SG-011",
+      "severity": "low",
+      "title_ko": "하계·동계 복합 학기",
+      "affected_records": 3,
+      "current_representation": "SUMMER와 WINTER CourseOffering 두 개로 분리하고 REVIEW_REQUIRED로 표시함.",
+      "decision_needed": "복합 편성을 분리하는 현재 정규화 정책을 승인한다."
+    },
+    {
+      "issue_id": "SG-012",
+      "severity": "medium",
+      "title_ko": "교양 이수구분의 명시값 부재",
+      "affected_records": 282,
+      "current_representation": "기초교양은 GENERAL_REQUIRED, 균형·확대교양은 GENERAL_ELECTIVE로 정규화함.",
+      "decision_needed": "영역에서 이수구분으로 변환하는 현재 매핑 규칙을 데이터 계약으로 승인한다."
+    },
+    {
+      "issue_id": "SG-013",
+      "severity": "high",
+      "title_ko": "CSE 학점구조표의 공통 교양 규칙 배치",
+      "affected_records": 8,
+      "current_representation": "CSE CurriculumVersion 아래에 중복 집계 규칙을 만들되 REVIEW_REQUIRED로 표시함.",
+      "decision_needed": "ontology_spec OD-001에 따라 공통 CurriculumVersion만 사용할지 CSE 집계 규칙을 유지할지 결정한다."
+    }
+  ],
+  "unsupported_or_identity_conflict_general_rows": [
+    {
+      "excerpt_page": 3,
+      "area_group": "균형교양",
+      "area_name": "디지털커뮤니케이션",
+      "course_code": "GEA8694",
+      "name_ko": "AI+디지털리터러시",
+      "name_en": "AI+ Digital Literacy",
+      "credits": 2,
+      "lecture_hours": 2,
+      "practice_hours": 0,
+      "semester_raw": "이룸",
+      "competency": [
+        "실용적 융복합"
+      ],
+      "related_department": "교양교육원(사림아너스)",
+      "note": "개설학기 원문 '이룸'은 ontology_spec.json semester 통제어휘에 없음",
+      "verification_status": "REVIEW_REQUIRED",
+      "evidence_id": "evidence:document:2026-curriculum-excerpt:8ee5ee9d45fd:excerpt-p3:gea8694",
+      "graph_action": "Course와 Evidence 생성; CourseOffering 보류"
+    },
+    {
+      "excerpt_page": 13,
+      "area_group": "확대교양",
+      "area_name": "소양교육",
+      "course_code": "GEA8817",
+      "name_ko": "융합프로젝트Ⅰ",
+      "name_en": "Convergence ProjectⅠ",
+      "credits": 3,
+      "lecture_hours": 3,
+      "practice_hours": 0,
+      "semester_raw": "이룸",
+      "competency": [
+        "실용적융복합"
+      ],
+      "related_department": "교양교육원(사림아너스)",
+      "note": "학수번호는 승인 정정으로 GEA8817을 사용한다. 개설학기 '이룸' 의미는 미확정이므로 CourseOffering은 보류한다.",
+      "verification_status": "REVIEW_REQUIRED",
+      "evidence_id": "evidence:document:2026-curriculum-excerpt:8ee5ee9d45fd:excerpt-p13:gea8617",
+      "graph_action": "Course, Evidence, CorrectionRecord 생성; CourseOffering은 이룸 학기 정책 확정 전 보류",
+      "source_course_code": "GEA8617"
+    },
+    {
+      "excerpt_page": 13,
+      "area_group": "확대교양",
+      "area_name": "소양교육",
+      "course_code": "GEA8818",
+      "name_ko": "융합프로젝트Ⅱ",
+      "name_en": "Convergence ProjectⅡ",
+      "credits": 1,
+      "lecture_hours": 1,
+      "practice_hours": 0,
+      "semester_raw": "이룸",
+      "competency": [
+        "실용적융복합"
+      ],
+      "related_department": "교양교육원(사림아너스)",
+      "note": "개설학기 '이룸'은 ontology semester 통제어휘 밖임",
+      "verification_status": "REVIEW_REQUIRED",
+      "evidence_id": "evidence:document:2026-curriculum-excerpt:8ee5ee9d45fd:excerpt-p13:gea8818",
+      "graph_action": "Course와 Evidence 생성; CourseOffering 보류"
+    },
+    {
+      "excerpt_page": 13,
+      "area_group": "확대교양",
+      "area_name": "소양교육",
+      "course_code": "GEA8689",
+      "name_ko": "탐방실습",
+      "name_en": "Exploration & Practice",
+      "credits": 1,
+      "lecture_hours": 0,
+      "practice_hours": 2,
+      "semester_raw": "이룸",
+      "competency": [
+        "창의적사고"
+      ],
+      "related_department": "교양교육원(사림아너스)",
+      "note": "개설학기 '이룸'은 ontology semester 통제어휘 밖임",
+      "verification_status": "REVIEW_REQUIRED",
+      "evidence_id": "evidence:document:2026-curriculum-excerpt:8ee5ee9d45fd:excerpt-p13:gea8689",
+      "graph_action": "Course와 Evidence 생성; CourseOffering 보류"
+    }
+  ],
+  "omitted_cse_offering_rows": [
+    {
+      "excerpt_page": 18,
+      "source_pdf_page": 263,
+      "printed_page": 255,
+      "section_title": "Ⅱ 전공 교과목 편성표",
+      "table_name": "전공 교과목 편성표",
+      "row_key": "CDA0147",
+      "grade_year": [
+        2,
+        3,
+        4
+      ],
+      "semester_raw": "1,2",
+      "completion_type_raw": "전공선택",
+      "course_code": "CDA0147",
+      "name_ko": "현장실습4",
+      "name_en": "Field Practice4",
+      "credits": 12,
+      "lecture_hours": 0,
+      "practice_hours": null,
+      "competency": [
+        "대학핵심역량[주]:실용적융복합",
+        "전공능력[주]:문제해결",
+        "전공능력[부]:주체적창의력",
+        "전공능력[부]:연구"
+      ],
+      "minor_required": false,
+      "note": "실기 열 원문은 '12주'로 주 단위이다. ontology_spec의 number형 실습 시수로 의미 손실 없이 정규화할 수 없음.",
+      "raw_text": "2·3·4학년 1,2학기 전공선택 CDA0147 현장실습4 / Field Practice4 / 12학점 / 이론 0 / 실기 12주",
+      "verification_status": "REVIEW_REQUIRED",
+      "evidence_id": "evidence:document:2026-curriculum-excerpt:8ee5ee9d45fd:excerpt-p18:cda0147",
+      "graph_action": "Course와 Evidence 생성; CourseOffering 보류"
+    },
+    {
+      "excerpt_page": 18,
+      "source_pdf_page": 263,
+      "printed_page": 255,
+      "section_title": "Ⅱ 전공 교과목 편성표",
+      "table_name": "전공 교과목 편성표",
+      "row_key": "CDA0173",
+      "grade_year": [
+        2,
+        3,
+        4
+      ],
+      "semester_raw": "1,2",
+      "completion_type_raw": "전공선택",
+      "course_code": "CDA0173",
+      "name_ko": "표준현장실습4",
+      "name_en": "Co-op4",
+      "credits": 12,
+      "lecture_hours": 0,
+      "practice_hours": null,
+      "competency": [
+        "대학핵심역량[주]:실용적융복합",
+        "전공능력[주]:문제해결",
+        "전공능력[부]:주체적창의력",
+        "전공능력[부]:연구"
+      ],
+      "minor_required": false,
+      "note": "실기 열 원문은 '12주'로 주 단위이다. ontology_spec의 number형 실습 시수로 의미 손실 없이 정규화할 수 없음.",
+      "raw_text": "2·3·4학년 1,2학기 전공선택 CDA0173 표준현장실습4 / Co-op4 / 12학점 / 이론 0 / 실기 12주",
+      "verification_status": "REVIEW_REQUIRED",
+      "evidence_id": "evidence:document:2026-curriculum-excerpt:8ee5ee9d45fd:excerpt-p18:cda0173",
+      "graph_action": "Course와 Evidence 생성; CourseOffering 보류"
+    },
+    {
+      "excerpt_page": 18,
+      "source_pdf_page": 263,
+      "printed_page": 255,
+      "section_title": "Ⅱ 전공 교과목 편성표",
+      "table_name": "전공 교과목 편성표",
+      "row_key": "CDA0144",
+      "grade_year": [
+        2,
+        3,
+        4
+      ],
+      "semester_raw": "하계·동계",
+      "completion_type_raw": "전공선택",
+      "course_code": "CDA0144",
+      "name_ko": "현장실습1",
+      "name_en": "Working Practices1",
+      "credits": 3,
+      "lecture_hours": 0,
+      "practice_hours": null,
+      "competency": [
+        "대학핵심역량[주]:실용적융복합",
+        "전공능력[주]:문제해결",
+        "전공능력[부]:주체적창의력",
+        "전공능력[부]:연구"
+      ],
+      "minor_required": false,
+      "note": "실기 열 원문은 '4주'이다. semester 통제어휘에는 하계·동계 동시값이 없어 단일 편성으로 직접 정규화할 수 없음.",
+      "raw_text": "2·3·4학년 하계·동계 전공선택 CDA0144 현장실습1 / Working Practices1 / 3학점 / 이론 0 / 실기 4주",
+      "verification_status": "REVIEW_REQUIRED",
+      "evidence_id": "evidence:document:2026-curriculum-excerpt:8ee5ee9d45fd:excerpt-p18:cda0144",
+      "graph_action": "Course와 Evidence 생성; CourseOffering 보류"
+    },
+    {
+      "excerpt_page": 18,
+      "source_pdf_page": 263,
+      "printed_page": 255,
+      "section_title": "Ⅱ 전공 교과목 편성표",
+      "table_name": "전공 교과목 편성표",
+      "row_key": "CDA0145",
+      "grade_year": [
+        2,
+        3,
+        4
+      ],
+      "semester_raw": "하계·동계",
+      "completion_type_raw": "전공선택",
+      "course_code": "CDA0145",
+      "name_ko": "현장실습3",
+      "name_en": "Working Practices3",
+      "credits": 6,
+      "lecture_hours": 0,
+      "practice_hours": null,
+      "competency": [
+        "대학핵심역량[주]:실용적융복합",
+        "전공능력[주]:문제해결",
+        "전공능력[부]:주체적창의력",
+        "전공능력[부]:연구"
+      ],
+      "minor_required": false,
+      "note": "실기 열 원문은 '8주'이다. semester 통제어휘에는 하계·동계 동시값이 없어 단일 편성으로 직접 정규화할 수 없음.",
+      "raw_text": "2·3·4학년 하계·동계 전공선택 CDA0145 현장실습3 / Working Practices3 / 6학점 / 이론 0 / 실기 8주",
+      "verification_status": "REVIEW_REQUIRED",
+      "evidence_id": "evidence:document:2026-curriculum-excerpt:8ee5ee9d45fd:excerpt-p18:cda0145",
+      "graph_action": "Course와 Evidence 생성; CourseOffering 보류"
+    },
+    {
+      "excerpt_page": 18,
+      "source_pdf_page": 263,
+      "printed_page": 255,
+      "section_title": "Ⅱ 전공 교과목 편성표",
+      "table_name": "전공 교과목 편성표",
+      "row_key": "CDA0171",
+      "grade_year": [
+        2,
+        3,
+        4
+      ],
+      "semester_raw": "하계·동계",
+      "completion_type_raw": "전공선택",
+      "course_code": "CDA0171",
+      "name_ko": "표준현장실습1",
+      "name_en": "Co-op1",
+      "credits": 3,
+      "lecture_hours": 0,
+      "practice_hours": null,
+      "competency": [
+        "대학핵심역량[주]:실용적융복합",
+        "전공능력[주]:문제해결",
+        "전공능력[부]:주체적창의력",
+        "전공능력[부]:연구"
+      ],
+      "minor_required": false,
+      "note": "실기 열 원문은 '4주'이다. semester 통제어휘에는 하계·동계 동시값이 없어 단일 편성으로 직접 정규화할 수 없음.",
+      "raw_text": "2·3·4학년 하계·동계 전공선택 CDA0171 표준현장실습1 / Co-op1 / 3학점 / 이론 0 / 실기 4주",
+      "verification_status": "REVIEW_REQUIRED",
+      "evidence_id": "evidence:document:2026-curriculum-excerpt:8ee5ee9d45fd:excerpt-p18:cda0171",
+      "graph_action": "Course와 Evidence 생성; CourseOffering 보류"
+    },
+    {
+      "excerpt_page": 18,
+      "source_pdf_page": 263,
+      "printed_page": 255,
+      "section_title": "Ⅱ 전공 교과목 편성표",
+      "table_name": "전공 교과목 편성표",
+      "row_key": "CDA0172",
+      "grade_year": [
+        2,
+        3,
+        4
+      ],
+      "semester_raw": "하계·동계",
+      "completion_type_raw": "전공선택",
+      "course_code": "CDA0172",
+      "name_ko": "표준현장실습3",
+      "name_en": "Co-op3",
+      "credits": 6,
+      "lecture_hours": 0,
+      "practice_hours": null,
+      "competency": [
+        "대학핵심역량[주]:실용적융복합",
+        "전공능력[주]:문제해결",
+        "전공능력[부]:주체적창의력",
+        "전공능력[부]:연구"
+      ],
+      "minor_required": false,
+      "note": "실기 열 원문은 '8주'이다. semester 통제어휘에는 하계·동계 동시값이 없어 단일 편성으로 직접 정규화할 수 없음.",
+      "raw_text": "2·3·4학년 하계·동계 전공선택 CDA0172 표준현장실습3 / Co-op3 / 6학점 / 이론 0 / 실기 8주",
+      "verification_status": "REVIEW_REQUIRED",
+      "evidence_id": "evidence:document:2026-curriculum-excerpt:8ee5ee9d45fd:excerpt-p18:cda0172",
+      "graph_action": "Course와 Evidence 생성; CourseOffering 보류"
+    }
+  ],
+  "partially_modeled_transition_rows": [
+    {
+      "transition_id": "cse-transition-2002-2007-graduation-after-2012-02",
+      "applicable_curriculum_years": {
+        "from": 2002,
+        "to": 2007
+      },
+      "condition": {
+        "field": "graduation_target_date",
+        "operator": "GTE",
+        "value_raw": "2012년 2월 이후"
+      },
+      "action_type": "APPLY_CURRICULUM_VERSION",
+      "action": {
+        "target_academic_year": 2008
+      },
+      "excerpt_page": 19,
+      "source_pdf_page": 264,
+      "printed_page": 256,
+      "section_title": "Ⅲ 연도별 경과조치",
+      "table_name": "연도별 경과조치",
+      "row_key": "2002-2007:2012-02-after",
+      "raw_text": "2012년 2월 이후 졸업대상자들은 2008학년도 교육과정 적용",
+      "verification_status": "VERIFIED",
+      "ontology_modeling_note": "ApplicabilityScope.academic_year가 단일 정수라 연도 구간과 졸업시점 조건을 직접 표현하기 어려움.",
+      "graph_rule_id": "rule:cwnu:2026:major:cse:cse-transition-2002-2007-graduation-after-2012-02",
+      "graph_action": "TransitionRule과 Evidence는 생성했으나 연도 범위 APPLIES_TO는 보류"
+    },
+    {
+      "transition_id": "cse-transition-2002-2012-capstone-design2",
+      "applicable_curriculum_years": {
+        "from": 2002,
+        "to": 2012
+      },
+      "condition": {
+        "field": "completed_course_name",
+        "operator": "NOT_IN",
+        "value_raw": "Capstone Design2"
+      },
+      "action_type": "COURSE_REQUIREMENT_REPLACEMENT",
+      "action": {
+        "required_course_name": "산학캡스톤디자인2"
+      },
+      "excerpt_page": 19,
+      "source_pdf_page": 264,
+      "printed_page": 256,
+      "section_title": "Ⅲ 연도별 경과조치",
+      "table_name": "연도별 경과조치",
+      "row_key": "2002-2012:capstone-design2",
+      "raw_text": "‘Capstone Design2’를 이수하지 않은 학생은 ‘산학캡스톤디자인2’를 필히 이수하여야 함",
+      "verification_status": "VERIFIED",
+      "ontology_modeling_note": "현재 TARGETS만으로 구과목과 신과목의 대체 방향을 명시하기 어려움.",
+      "graph_rule_id": "rule:cwnu:2026:major:cse:cse-transition-2002-2012-capstone-design2",
+      "graph_action": "TransitionRule과 Evidence는 생성했으나 연도 범위 APPLIES_TO는 보류"
+    },
+    {
+      "transition_id": "cse-transition-credit-retroactive-2002-2010",
+      "applicable_curriculum_years": {
+        "from": 2002,
+        "to": 2010
+      },
+      "condition": null,
+      "action_type": "RETROACTIVE_CREDIT_REQUIREMENT",
+      "action": {
+        "general_credits": 26,
+        "major_required_credits": 15,
+        "major_elective_credits": 48
+      },
+      "excerpt_page": 19,
+      "source_pdf_page": 264,
+      "printed_page": 256,
+      "section_title": "Ⅲ 연도별 경과조치",
+      "table_name": "2002~2020 교양 및 전공 이수 학점 소급표",
+      "row_key": "2002-2010:credits",
+      "raw_text": "2002~2010: 교양 26, 전공필수 15, 전공선택 48",
+      "verification_status": "VERIFIED",
+      "ontology_modeling_note": "연도 범위별 세 개의 CreditRequirement로 분해 가능하나 범위 표현 방식 결정 필요.",
+      "graph_rule_id": "rule:cwnu:2026:major:cse:cse-transition-credit-retroactive-2002-2010",
+      "graph_action": "TransitionRule과 Evidence는 생성했으나 연도 범위 APPLIES_TO는 보류"
+    },
+    {
+      "transition_id": "cse-transition-credit-retroactive-2011-2020",
+      "applicable_curriculum_years": {
+        "from": 2011,
+        "to": 2020
+      },
+      "condition": null,
+      "action_type": "RETROACTIVE_CREDIT_REQUIREMENT",
+      "action": {
+        "general_credits": 26,
+        "major_required_credits": 21,
+        "major_elective_credits": 48
+      },
+      "excerpt_page": 19,
+      "source_pdf_page": 264,
+      "printed_page": 256,
+      "section_title": "Ⅲ 연도별 경과조치",
+      "table_name": "2002~2020 교양 및 전공 이수 학점 소급표",
+      "row_key": "2011-2020:credits",
+      "raw_text": "2011~2020: 교양 26, 전공필수 21, 전공선택 48",
+      "verification_status": "VERIFIED",
+      "ontology_modeling_note": "연도 범위별 세 개의 CreditRequirement로 분해 가능하나 범위 표현 방식 결정 필요.",
+      "graph_rule_id": "rule:cwnu:2026:major:cse:cse-transition-credit-retroactive-2011-2020",
+      "graph_action": "TransitionRule과 Evidence는 생성했으나 연도 범위 APPLIES_TO는 보류"
+    },
+    {
+      "transition_id": "cse-transition-2002-2020-msc-professional-general-waiver",
+      "applicable_curriculum_years": {
+        "from": 2002,
+        "to": 2020
+      },
+      "condition": null,
+      "action_type": "REQUIREMENT_WAIVER",
+      "action": {
+        "targets": [
+          {
+            "name": "MSC",
+            "credits": 30
+          },
+          {
+            "name": "전문교양",
+            "credits": 20
+          }
+        ]
+      },
+      "excerpt_page": 19,
+      "source_pdf_page": 264,
+      "printed_page": 256,
+      "section_title": "Ⅲ 연도별 경과조치",
+      "table_name": "연도별 경과조치",
+      "row_key": "2002-2020:msc-professional-general-waiver",
+      "raw_text": "MSC(30학점), 전문교양(20학점) 이수 해제",
+      "verification_status": "VERIFIED",
+      "ontology_modeling_note": "MSC와 전문교양을 EducationArea로 만들지 여부가 현재 명세에서 확정되지 않음.",
+      "graph_rule_id": "rule:cwnu:2026:major:cse:cse-transition-2002-2020-msc-professional-general-waiver",
+      "graph_action": "TransitionRule과 Evidence는 생성했으나 연도 범위 APPLIES_TO는 보류"
+    },
+    {
+      "transition_id": "cse-transition-2002-2020-msc-professional-general-recognition",
+      "applicable_curriculum_years": {
+        "from": 2002,
+        "to": 2020
+      },
+      "condition": {
+        "field": "previously_completed_area",
+        "operator": "IN",
+        "value_raw": [
+          "전문교양",
+          "MSC"
+        ]
+      },
+      "action_type": "CREDIT_RECOGNITION",
+      "action": {
+        "recognized_as": "교양학점",
+        "method": "일괄 인정"
+      },
+      "excerpt_page": 19,
+      "source_pdf_page": 264,
+      "printed_page": 256,
+      "section_title": "Ⅲ 연도별 경과조치",
+      "table_name": "연도별 경과조치",
+      "row_key": "2002-2020:msc-professional-general-recognition",
+      "raw_text": "기 이수한 전문교양, MSC 교과목은 교양학점으로 일괄 인정",
+      "verification_status": "VERIFIED",
+      "ontology_modeling_note": "기존 명세에 학점 인정 변환 관계가 없어 TransitionRule.description_ko 중심 표현이 필요함.",
+      "graph_rule_id": "rule:cwnu:2026:major:cse:cse-transition-2002-2020-msc-professional-general-recognition",
+      "graph_action": "TransitionRule과 Evidence는 생성했으나 연도 범위 APPLIES_TO는 보류"
+    },
+    {
+      "transition_id": "cse-transition-2002-2020-foundational-balanced-waiver",
+      "applicable_curriculum_years": {
+        "from": 2002,
+        "to": 2020
+      },
+      "condition": null,
+      "action_type": "REQUIREMENT_WAIVER",
+      "action": {
+        "targets": [
+          "기초교양",
+          "균형교양"
+        ]
+      },
+      "excerpt_page": 19,
+      "source_pdf_page": 264,
+      "printed_page": 256,
+      "section_title": "Ⅲ 연도별 경과조치",
+      "table_name": "연도별 경과조치",
+      "row_key": "2002-2020:foundational-balanced-waiver",
+      "raw_text": "기초교양 및 균형교양 이수 의무 면제",
+      "verification_status": "VERIFIED",
+      "ontology_modeling_note": "ExemptionRule이 일반 규칙을 OVERRIDES하도록 모델링 가능하나 연도 범위 표현 결정 필요.",
+      "graph_rule_id": "rule:cwnu:2026:major:cse:cse-transition-2002-2020-foundational-balanced-waiver",
+      "graph_action": "TransitionRule과 Evidence는 생성했으나 연도 범위 APPLIES_TO는 보류"
+    },
+    {
+      "transition_id": "cse-transition-2002-2020-general-cap-excess-recognition",
+      "applicable_curriculum_years": {
+        "from": 2002,
+        "to": 2020
+      },
+      "condition": {
+        "field": "general_credits",
+        "operator": "ABOVE_MAXIMUM",
+        "value_raw": "교양 최대 상한 학점 초과"
+      },
+      "action_type": "CREDIT_RECOGNITION",
+      "action": {
+        "recognized_as": "잔여학점"
+      },
+      "excerpt_page": 19,
+      "source_pdf_page": 264,
+      "printed_page": 256,
+      "section_title": "Ⅲ 연도별 경과조치",
+      "table_name": "연도별 경과조치",
+      "row_key": "2002-2020:general-cap-excess",
+      "raw_text": "교양 최대 상한 학점 초과 시 잔여학점으로 인정",
+      "verification_status": "VERIFIED",
+      "ontology_modeling_note": "ABOVE_MAXIMUM은 원문 의미를 설명하기 위한 임시 표기이며 현재 comparison_operator 통제어휘에는 없음.",
+      "graph_rule_id": "rule:cwnu:2026:major:cse:cse-transition-2002-2020-general-cap-excess-recognition",
+      "graph_action": "TransitionRule과 Evidence는 생성했으나 연도 범위 APPLIES_TO는 보류"
+    },
+    {
+      "transition_id": "cse-transition-2002-2020-design-credit-waiver",
+      "applicable_curriculum_years": {
+        "from": 2002,
+        "to": 2020
+      },
+      "condition": null,
+      "action_type": "REQUIREMENT_WAIVER",
+      "action": {
+        "target": "설계학점",
+        "credits": 12
+      },
+      "excerpt_page": 19,
+      "source_pdf_page": 264,
+      "printed_page": 256,
+      "section_title": "Ⅲ 연도별 경과조치",
+      "table_name": "연도별 경과조치",
+      "row_key": "2002-2020:design-credit-waiver",
+      "raw_text": "설계학점 12학점 이수 해제",
+      "verification_status": "VERIFIED",
+      "ontology_modeling_note": "설계학점을 EducationArea 또는 별도 규칙 대상으로 둘지 결정 필요.",
+      "graph_rule_id": "rule:cwnu:2026:major:cse:cse-transition-2002-2020-design-credit-waiver",
+      "graph_action": "TransitionRule과 Evidence는 생성했으나 연도 범위 APPLIES_TO는 보류"
+    },
+    {
+      "transition_id": "cse-transition-2002-2020-consultation-waiver",
+      "applicable_curriculum_years": {
+        "from": 2002,
+        "to": 2020
+      },
+      "condition": null,
+      "action_type": "REQUIREMENT_WAIVER",
+      "action": {
+        "target_course_name": "심층상담",
+        "minimum_count": 6,
+        "unit": "회"
+      },
+      "excerpt_page": 19,
+      "source_pdf_page": 264,
+      "printed_page": 256,
+      "section_title": "Ⅲ 연도별 경과조치",
+      "table_name": "연도별 경과조치",
+      "row_key": "2002-2020:consultation-six-waiver",
+      "raw_text": "심층상담 6회 이상 이수 해제",
+      "verification_status": "VERIFIED",
+      "ontology_modeling_note": "CDA0088 심층상담 Course를 TARGETS하고 횟수 조건을 description/Condition으로 표현 가능.",
+      "graph_rule_id": "rule:cwnu:2026:major:cse:cse-transition-2002-2020-consultation-waiver",
+      "graph_action": "TransitionRule과 Evidence는 생성했으나 연도 범위 APPLIES_TO는 보류"
+    },
+    {
+      "transition_id": "cse-transition-2012-2016-field-practice-waiver",
+      "applicable_curriculum_years": {
+        "from": 2012,
+        "to": 2016
+      },
+      "parent_transition_scope": {
+        "from": 2002,
+        "to": 2020
+      },
+      "condition": null,
+      "action_type": "REQUIREMENT_WAIVER",
+      "action": {
+        "target": "현장실습",
+        "minimum_credits": 4
+      },
+      "excerpt_page": 19,
+      "source_pdf_page": 264,
+      "printed_page": 256,
+      "section_title": "Ⅲ 연도별 경과조치",
+      "table_name": "연도별 경과조치",
+      "row_key": "2012-2016:field-practice-four-waiver",
+      "raw_text": "현장실습 4학점 이상 이수 해제(2012~2016학년도)",
+      "verification_status": "VERIFIED",
+      "ontology_modeling_note": "현장실습 계열 다수 Course를 대상으로 묶는 기준이 필요함.",
+      "graph_rule_id": "rule:cwnu:2026:major:cse:cse-transition-2012-2016-field-practice-waiver",
+      "graph_action": "TransitionRule과 Evidence는 생성했으나 연도 범위 APPLIES_TO는 보류"
+    },
+    {
+      "transition_id": "cse-transition-2014-2017-korean-history-waiver",
+      "applicable_curriculum_years": {
+        "from": 2014,
+        "to": 2017
+      },
+      "parent_transition_scope": {
+        "from": 2002,
+        "to": 2020
+      },
+      "condition": null,
+      "action_type": "REQUIREMENT_WAIVER",
+      "action": {
+        "target_area_raw": "핵심교양-인문예술영역",
+        "target_course_name": "한국사의 이해"
+      },
+      "excerpt_page": 19,
+      "source_pdf_page": 264,
+      "printed_page": 256,
+      "section_title": "Ⅲ 연도별 경과조치",
+      "table_name": "연도별 경과조치",
+      "row_key": "2014-2017:korean-history-waiver",
+      "raw_text": "핵심교양-인문예술영역 ‘한국사의 이해’ 교과목 이수 해제(2014~2017학년도)",
+      "verification_status": "VERIFIED",
+      "ontology_modeling_note": "과거 영역명과 2026 영역 체계의 매핑을 임의로 동일시하지 않아야 함.",
+      "graph_rule_id": "rule:cwnu:2026:major:cse:cse-transition-2014-2017-korean-history-waiver",
+      "graph_action": "TransitionRule과 Evidence는 생성했으나 연도 범위 APPLIES_TO는 보류"
+    },
+    {
+      "transition_id": "cse-transition-credit-retroactive-2021-2024",
+      "applicable_curriculum_years": {
+        "from": 2021,
+        "to": 2024
+      },
+      "condition": null,
+      "action_type": "RETROACTIVE_CREDIT_REQUIREMENT",
+      "action": {
+        "general_credits": 26,
+        "major_required_credits": 21,
+        "major_elective_credits": 57,
+        "minimum_major_recognition_credits": 35
+      },
+      "excerpt_page": 19,
+      "source_pdf_page": 264,
+      "printed_page": 256,
+      "section_title": "Ⅲ 연도별 경과조치",
+      "table_name": "2021~2024 교양 및 전공 이수 학점 소급표",
+      "row_key": "2021-2024:credits",
+      "raw_text": "2021~2024: 교양 26, 전공필수 21, 전공선택 57(35); ( )학점: 최소전공인정학점",
+      "verification_status": "VERIFIED",
+      "ontology_modeling_note": "전공선택 57과 괄호 안 최소전공인정학점 35를 별도 의미로 보존해야 함.",
+      "graph_rule_id": "rule:cwnu:2026:major:cse:cse-transition-credit-retroactive-2021-2024",
+      "graph_action": "TransitionRule과 Evidence는 생성했으나 연도 범위 APPLIES_TO는 보류"
+    },
+    {
+      "transition_id": "cse-transition-2021-2024-department-designated-course-waiver",
+      "applicable_curriculum_years": {
+        "from": 2021,
+        "to": 2024
+      },
+      "condition": null,
+      "action_type": "REQUIREMENT_WAIVER",
+      "action": {
+        "target": "학과지정 교과목"
+      },
+      "excerpt_page": 19,
+      "source_pdf_page": 264,
+      "printed_page": 256,
+      "section_title": "Ⅲ 연도별 경과조치",
+      "table_name": "연도별 경과조치",
+      "row_key": "2021-2024:department-designated-course-waiver",
+      "raw_text": "학과지정 교과목 이수 해제",
+      "verification_status": "VERIFIED",
+      "ontology_modeling_note": "어떤 과목이 학과지정 교과목인지 이 페이지에서 열거되지 않음.",
+      "graph_rule_id": "rule:cwnu:2026:major:cse:cse-transition-2021-2024-department-designated-course-waiver",
+      "graph_action": "TransitionRule과 Evidence는 생성했으나 연도 범위 APPLIES_TO는 보류"
+    }
+  ],
+  "modeled_cse_basic_credit_structure_source_facts": [
+    {
+      "rule_id": "cse-basic-credit-structure-single-minor",
+      "category": "BASIC_CREDIT_STRUCTURE",
+      "applicability": {
+        "department": "컴퓨터공학과",
+        "major_types": [
+          "SINGLE_MAJOR",
+          "MINOR"
+        ],
+        "major_types_raw": [
+          "단일전공",
+          "부전공"
+        ]
+      },
+      "values": {
+        "general_foundational_credits": 9,
+        "general_balanced_credits": 12,
+        "general_expanded_credits": null,
+        "general_remaining_credits": 13,
+        "general_total_credits": 34,
+        "major_foundation_credits": null,
+        "major_required_credits": 21,
+        "major_elective_credits": 24,
+        "advanced_major_credits": 33,
+        "major_total_credits": 78,
+        "graduation_remaining_credits": 18,
+        "graduation_credits": 130,
+        "minimum_major_credit_system_applies": true
+      },
+      "excerpt_page": 16,
+      "source_pdf_page": 261,
+      "printed_page": 253,
+      "section_title": "Ⅰ 교육과정 체계",
+      "table_name": "10. 기본이수 학점구조표",
+      "row_key": "컴퓨터공학과:단일전공-부전공",
+      "raw_text": "단일전공·부전공: 기초교양 9, 균형교양 12, 교양잔여 13, 교양계 34, 전공필수 21, 전공선택 24, 심화전공 33, 전공계 78, 졸업잔여 18, 졸업학점 130",
+      "verification_status": "VERIFIED",
+      "note": "병합 셀이 단일전공과 부전공 두 행에 공통 적용됨. 확대교양과 전공기초는 빈 칸이며 0으로 변환하지 않음."
+    },
+    {
+      "rule_id": "cse-basic-credit-structure-double-linked-convergence",
+      "category": "BASIC_CREDIT_STRUCTURE",
+      "applicability": {
+        "department": "컴퓨터공학과",
+        "major_types": [
+          "DOUBLE_MAJOR",
+          "LINKED_MAJOR",
+          "CONVERGENCE_MAJOR"
+        ],
+        "major_types_raw": [
+          "복수전공",
+          "연계전공",
+          "융합전공"
+        ]
+      },
+      "values": {
+        "general_foundational_credits": 9,
+        "general_balanced_credits": 12,
+        "general_expanded_credits": null,
+        "general_remaining_credits": 13,
+        "general_total_credits": 34,
+        "major_foundation_credits": null,
+        "major_required_credits": 21,
+        "major_elective_credits": 24,
+        "advanced_major_credits": null,
+        "advanced_major_credits_raw": "-",
+        "major_total_credits": 45,
+        "graduation_remaining_credits": 51,
+        "graduation_credits": 130,
+        "minimum_major_credit_system_applies": true
+      },
+      "excerpt_page": 16,
+      "source_pdf_page": 261,
+      "printed_page": 253,
+      "section_title": "Ⅰ 교육과정 체계",
+      "table_name": "10. 기본이수 학점구조표",
+      "row_key": "컴퓨터공학과:복수전공-연계전공-융합전공",
+      "raw_text": "복수전공·연계전공·융합전공: 기초교양 9, 균형교양 12, 교양잔여 13, 교양계 34, 전공필수 21, 전공선택 24, 심화전공 -, 전공계 45, 졸업잔여 51, 졸업학점 130",
+      "verification_status": "VERIFIED",
+      "note": "병합 셀이 복수전공·연계전공·융합전공 세 행에 공통 적용됨. 확대교양과 전공기초는 빈 칸이며 0으로 변환하지 않음."
+    }
+  ],
+  "unmodeled_cse_structural_source_facts": [],
+  "unmodeled_narrative_source_facts": [],
+  "source_internal_inconsistencies": [
+    {
+      "issue_id": "DQ-003",
+      "severity": "low",
+      "description_ko": "영문명 철자, 한·영명 불일치, 관련학과 오탈자 후보가 있음.",
+      "records": [
+        {
+          "excerpt_page": 8,
+          "area_group": "균형교양",
+          "area_name": "사회와문화",
+          "course_code": "GEA8662",
+          "name_ko": "인간관계와의사소통",
+          "name_en": "Human Realationship and Communication",
+          "credits": 3,
+          "lecture_hours": 3,
+          "practice_hours": 0,
+          "semester_raw": "1,2",
+          "competency": [
+            "의사소통"
+          ],
+          "related_department": "교양교육원(사회복지)",
+          "note": "원문 영문명 'Realationship' 철자를 그대로 보존함",
+          "verification_status": "REVIEW_REQUIRED"
+        },
+        {
+          "excerpt_page": 8,
+          "area_group": "균형교양",
+          "area_name": "사회와문화",
+          "course_code": "GEA8518",
+          "name_ko": "기업가정신",
+          "name_en": "Entrepreneurt ship",
+          "credits": 3,
+          "lecture_hours": 3,
+          "practice_hours": 0,
+          "semester_raw": "1,2",
+          "competency": [
+            "창의적사고"
+          ],
+          "related_department": "교양교육원(RISE사업단)",
+          "note": "원문 영문명 'Entrepreneurt ship' 철자·띄어쓰기를 그대로 보존함",
+          "verification_status": "REVIEW_REQUIRED"
+        },
+        {
+          "excerpt_page": 10,
+          "area_group": "균형교양",
+          "area_name": "자연·과학·기술의이해",
+          "course_code": "GEA4009",
+          "name_ko": "인체와질병",
+          "name_en": "Human Anatomy and Disease",
+          "credits": 3,
+          "lecture_hours": 3,
+          "practice_hours": 0,
+          "semester_raw": "1,2",
+          "competency": [
+            "실용적융복합"
+          ],
+          "related_department": "생면보건",
+          "note": "관련학과가 원문에 '생면보건'으로 보이며 다음 행의 '생명보건'과 달라 원문 오탈자 여부 검토 필요",
+          "verification_status": "REVIEW_REQUIRED"
+        },
+        {
+          "excerpt_page": 10,
+          "area_group": "균형교양",
+          "area_name": "자연·과학·기술의이해",
+          "course_code": "GEA8803",
+          "name_ko": "과학기술사",
+          "name_en": "History of Science and )Technology",
+          "credits": 3,
+          "lecture_hours": 3,
+          "practice_hours": 0,
+          "semester_raw": "2",
+          "competency": [
+            "실용적융복합"
+          ],
+          "related_department": "공학융합학부",
+          "note": "원문 영문명에 닫는 괄호 ')'가 단독으로 포함되어 있어 오탈자 검토 필요",
+          "verification_status": "REVIEW_REQUIRED"
+        },
+        {
+          "excerpt_page": 10,
+          "area_group": "확대교양",
+          "area_name": "언어의세계",
+          "course_code": "GEA8528",
+          "name_ko": "초급영어읽기",
+          "name_en": "Elementary English Speaking",
+          "credits": 3,
+          "lecture_hours": 3,
+          "practice_hours": 0,
+          "semester_raw": "1,2",
+          "competency": [
+            "글로벌"
+          ],
+          "related_department": "영어영문",
+          "note": "한글명은 '초급영어읽기', 영문명은 'Elementary English Speaking'으로 의미가 달라 원문 오탈자 여부 검토 필요",
+          "verification_status": "REVIEW_REQUIRED"
+        },
+        {
+          "excerpt_page": 11,
+          "area_group": "확대교양",
+          "area_name": "언어의세계",
+          "course_code": "GEA8822",
+          "name_ko": "한국어기초말하기와문법Ⅱ",
+          "name_en": "Basic Korean Speaking and GrammarⅠ",
+          "credits": 3,
+          "lecture_hours": 3,
+          "practice_hours": 0,
+          "semester_raw": "2",
+          "competency": [
+            "의사소통"
+          ],
+          "related_department": "글로벌자율전공학부",
+          "note": "한글명은 Ⅱ, 원문 영문명은 GrammarⅠ로 표기되어 있어 오탈자 여부 검토 필요",
+          "verification_status": "REVIEW_REQUIRED"
+        },
+        {
+          "excerpt_page": 11,
+          "area_group": "확대교양",
+          "area_name": "언어의세계",
+          "course_code": "GEA8824",
+          "name_ko": "한국어듣기와읽기Ⅱ",
+          "name_en": "Korean Listening and ReadingⅠ",
+          "credits": 3,
+          "lecture_hours": 3,
+          "practice_hours": 0,
+          "semester_raw": "2",
+          "competency": [
+            "의사소통"
+          ],
+          "related_department": "글로벌자율전공학부",
+          "note": "한글명은 Ⅱ, 원문 영문명은 ReadingⅠ로 표기되어 있어 오탈자 여부 검토 필요",
+          "verification_status": "REVIEW_REQUIRED"
+        },
+        {
+          "excerpt_page": 12,
+          "area_group": "확대교양",
+          "area_name": "소양교육",
+          "course_code": "GEA7555",
+          "name_ko": "진정한기업가정신과혁신챌린지",
+          "name_en": "Authentic Entrepreneurship and Inovation Challenge",
+          "credits": 3,
+          "lecture_hours": 3,
+          "practice_hours": 0,
+          "semester_raw": "2",
+          "competency": [
+            "창의적사고"
+          ],
+          "related_department": "경영",
+          "note": "원문 영문명 'Inovation' 철자를 그대로 보존함",
+          "verification_status": "REVIEW_REQUIRED"
+        }
+      ],
+      "current_action": "원문을 수정하지 않고 해당 CourseOffering을 REVIEW_REQUIRED로 유지함."
+    }
+  ],
+  "resolved_migrations": [
+    {
+      "source_section": "cse-talent-profile",
+      "status": "MIGRATED",
+      "destination_node_ids": [
+        "evidence:document:2026-curriculum-excerpt:8ee5ee9d45fd:excerpt-p14:talent-profile-01",
+        "talent-profile:cwnu:2026:cse:01",
+        "evidence:document:2026-curriculum-excerpt:8ee5ee9d45fd:excerpt-p14:talent-profile-02",
+        "talent-profile:cwnu:2026:cse:02",
+        "evidence:document:2026-curriculum-excerpt:8ee5ee9d45fd:excerpt-p14:talent-profile-03",
+        "talent-profile:cwnu:2026:cse:03"
+      ],
+      "destination_relationship_count": 9
+    },
+    {
+      "source_section": "cse-education-goals",
+      "status": "MIGRATED",
+      "destination_node_ids": [
+        "evidence:document:2026-curriculum-excerpt:8ee5ee9d45fd:excerpt-p14:department-goal-01",
+        "education-goal:cwnu:2026:cse:01",
+        "evidence:document:2026-curriculum-excerpt:8ee5ee9d45fd:excerpt-p14:department-goal-02",
+        "education-goal:cwnu:2026:cse:02",
+        "evidence:document:2026-curriculum-excerpt:8ee5ee9d45fd:excerpt-p14:department-goal-03",
+        "education-goal:cwnu:2026:cse:03",
+        "evidence:document:2026-curriculum-excerpt:8ee5ee9d45fd:excerpt-p14:department-goal-04",
+        "education-goal:cwnu:2026:cse:04"
+      ],
+      "destination_relationship_count": 12
+    },
+    {
+      "source_section": "cse-career-fields",
+      "status": "MIGRATED",
+      "destination_node_ids": [
+        "evidence:document:2026-curriculum-excerpt:8ee5ee9d45fd:excerpt-p14:career-field-01",
+        "career-field:cwnu:2026:cse:01",
+        "evidence:document:2026-curriculum-excerpt:8ee5ee9d45fd:excerpt-p14:career-field-02",
+        "career-field:cwnu:2026:cse:02",
+        "evidence:document:2026-curriculum-excerpt:8ee5ee9d45fd:excerpt-p14:career-field-03",
+        "career-field:cwnu:2026:cse:03"
+      ],
+      "destination_relationship_count": 9
+    },
+    {
+      "source_section": "cse-major-competencies",
+      "status": "MIGRATED",
+      "destination_node_ids": [
+        "evidence:document:2026-curriculum-excerpt:8ee5ee9d45fd:excerpt-p14:major-competency-01",
+        "competency:cwnu:cse:major-foundation",
+        "evidence:document:2026-curriculum-excerpt:8ee5ee9d45fd:excerpt-p14:major-competency-02",
+        "competency:cwnu:cse:self-directed-creativity",
+        "evidence:document:2026-curriculum-excerpt:8ee5ee9d45fd:excerpt-p14:major-competency-03",
+        "competency:cwnu:cse:teamwork",
+        "evidence:document:2026-curriculum-excerpt:8ee5ee9d45fd:excerpt-p14:major-competency-04",
+        "competency:cwnu:cse:problem-solving",
+        "evidence:document:2026-curriculum-excerpt:8ee5ee9d45fd:excerpt-p14:major-competency-05",
+        "competency:cwnu:cse:research"
+      ],
+      "destination_relationship_count": 15
+    },
+    {
+      "source_section": "cse-linkage-matrices",
+      "status": "MIGRATED",
+      "destination_node_ids": [
+        "evidence:document:2026-curriculum-excerpt:8ee5ee9d45fd:excerpt-p14:university-goal-01",
+        "education-goal:cwnu:2026:university:01",
+        "evidence:document:2026-curriculum-excerpt:8ee5ee9d45fd:excerpt-p14:university-goal-02",
+        "education-goal:cwnu:2026:university:02",
+        "evidence:document:2026-curriculum-excerpt:8ee5ee9d45fd:excerpt-p14:university-goal-03",
+        "education-goal:cwnu:2026:university:03",
+        "evidence:document:2026-curriculum-excerpt:8ee5ee9d45fd:excerpt-p15:university-core-01",
+        "competency:cwnu:university-core:regional-leadership",
+        "evidence:document:2026-curriculum-excerpt:8ee5ee9d45fd:excerpt-p15:university-core-02",
+        "competency:cwnu:university-core:creative-thinking",
+        "evidence:document:2026-curriculum-excerpt:8ee5ee9d45fd:excerpt-p15:university-core-03",
+        "competency:cwnu:university-core:practical-convergence",
+        "evidence:document:2026-curriculum-excerpt:8ee5ee9d45fd:excerpt-p15:university-core-04",
+        "competency:cwnu:university-core:communication",
+        "evidence:document:2026-curriculum-excerpt:8ee5ee9d45fd:excerpt-p15:university-core-05",
+        "competency:cwnu:university-core:global",
+        "evidence:document:2026-curriculum-excerpt:8ee5ee9d45fd:excerpt-p14:alignment-university-goal-to-department-goal-01-01",
+        "alignment:cwnu:2026:cse:university-goal-to-department-goal:01:01",
+        "evidence:document:2026-curriculum-excerpt:8ee5ee9d45fd:excerpt-p14:alignment-university-goal-to-department-goal-01-02",
+        "alignment:cwnu:2026:cse:university-goal-to-department-goal:01:02",
+        "evidence:document:2026-curriculum-excerpt:8ee5ee9d45fd:excerpt-p14:alignment-university-goal-to-department-goal-01-03",
+        "alignment:cwnu:2026:cse:university-goal-to-department-goal:01:03",
+        "evidence:document:2026-curriculum-excerpt:8ee5ee9d45fd:excerpt-p14:alignment-university-goal-to-department-goal-01-04",
+        "alignment:cwnu:2026:cse:university-goal-to-department-goal:01:04",
+        "evidence:document:2026-curriculum-excerpt:8ee5ee9d45fd:excerpt-p14:alignment-university-goal-to-department-goal-02-01",
+        "alignment:cwnu:2026:cse:university-goal-to-department-goal:02:01",
+        "evidence:document:2026-curriculum-excerpt:8ee5ee9d45fd:excerpt-p14:alignment-university-goal-to-department-goal-02-02",
+        "alignment:cwnu:2026:cse:university-goal-to-department-goal:02:02",
+        "evidence:document:2026-curriculum-excerpt:8ee5ee9d45fd:excerpt-p14:alignment-university-goal-to-department-goal-02-03",
+        "alignment:cwnu:2026:cse:university-goal-to-department-goal:02:03",
+        "evidence:document:2026-curriculum-excerpt:8ee5ee9d45fd:excerpt-p14:alignment-university-goal-to-department-goal-02-04",
+        "alignment:cwnu:2026:cse:university-goal-to-department-goal:02:04",
+        "evidence:document:2026-curriculum-excerpt:8ee5ee9d45fd:excerpt-p14:alignment-university-goal-to-department-goal-03-01",
+        "alignment:cwnu:2026:cse:university-goal-to-department-goal:03:01",
+        "evidence:document:2026-curriculum-excerpt:8ee5ee9d45fd:excerpt-p14:alignment-university-goal-to-department-goal-03-02",
+        "alignment:cwnu:2026:cse:university-goal-to-department-goal:03:02",
+        "evidence:document:2026-curriculum-excerpt:8ee5ee9d45fd:excerpt-p14:alignment-university-goal-to-department-goal-03-03",
+        "alignment:cwnu:2026:cse:university-goal-to-department-goal:03:03",
+        "evidence:document:2026-curriculum-excerpt:8ee5ee9d45fd:excerpt-p14:alignment-university-goal-to-department-goal-03-04",
+        "alignment:cwnu:2026:cse:university-goal-to-department-goal:03:04",
+        "evidence:document:2026-curriculum-excerpt:8ee5ee9d45fd:excerpt-p15:alignment-department-goal-to-major-competency-01-01",
+        "alignment:cwnu:2026:cse:department-goal-to-major-competency:01:01",
+        "evidence:document:2026-curriculum-excerpt:8ee5ee9d45fd:excerpt-p15:alignment-department-goal-to-major-competency-01-02",
+        "alignment:cwnu:2026:cse:department-goal-to-major-competency:01:02",
+        "evidence:document:2026-curriculum-excerpt:8ee5ee9d45fd:excerpt-p15:alignment-department-goal-to-major-competency-01-03",
+        "alignment:cwnu:2026:cse:department-goal-to-major-competency:01:03",
+        "evidence:document:2026-curriculum-excerpt:8ee5ee9d45fd:excerpt-p15:alignment-department-goal-to-major-competency-01-04",
+        "alignment:cwnu:2026:cse:department-goal-to-major-competency:01:04",
+        "evidence:document:2026-curriculum-excerpt:8ee5ee9d45fd:excerpt-p15:alignment-department-goal-to-major-competency-01-05",
+        "alignment:cwnu:2026:cse:department-goal-to-major-competency:01:05",
+        "evidence:document:2026-curriculum-excerpt:8ee5ee9d45fd:excerpt-p15:alignment-department-goal-to-major-competency-02-01",
+        "alignment:cwnu:2026:cse:department-goal-to-major-competency:02:01",
+        "evidence:document:2026-curriculum-excerpt:8ee5ee9d45fd:excerpt-p15:alignment-department-goal-to-major-competency-02-02",
+        "alignment:cwnu:2026:cse:department-goal-to-major-competency:02:02",
+        "evidence:document:2026-curriculum-excerpt:8ee5ee9d45fd:excerpt-p15:alignment-department-goal-to-major-competency-02-03",
+        "alignment:cwnu:2026:cse:department-goal-to-major-competency:02:03",
+        "evidence:document:2026-curriculum-excerpt:8ee5ee9d45fd:excerpt-p15:alignment-department-goal-to-major-competency-02-04",
+        "alignment:cwnu:2026:cse:department-goal-to-major-competency:02:04",
+        "evidence:document:2026-curriculum-excerpt:8ee5ee9d45fd:excerpt-p15:alignment-department-goal-to-major-competency-02-05",
+        "alignment:cwnu:2026:cse:department-goal-to-major-competency:02:05",
+        "evidence:document:2026-curriculum-excerpt:8ee5ee9d45fd:excerpt-p15:alignment-department-goal-to-major-competency-03-01",
+        "alignment:cwnu:2026:cse:department-goal-to-major-competency:03:01",
+        "evidence:document:2026-curriculum-excerpt:8ee5ee9d45fd:excerpt-p15:alignment-department-goal-to-major-competency-03-02",
+        "alignment:cwnu:2026:cse:department-goal-to-major-competency:03:02",
+        "evidence:document:2026-curriculum-excerpt:8ee5ee9d45fd:excerpt-p15:alignment-department-goal-to-major-competency-03-03",
+        "alignment:cwnu:2026:cse:department-goal-to-major-competency:03:03",
+        "evidence:document:2026-curriculum-excerpt:8ee5ee9d45fd:excerpt-p15:alignment-department-goal-to-major-competency-03-04",
+        "alignment:cwnu:2026:cse:department-goal-to-major-competency:03:04",
+        "evidence:document:2026-curriculum-excerpt:8ee5ee9d45fd:excerpt-p15:alignment-department-goal-to-major-competency-03-05",
+        "alignment:cwnu:2026:cse:department-goal-to-major-competency:03:05",
+        "evidence:document:2026-curriculum-excerpt:8ee5ee9d45fd:excerpt-p15:alignment-department-goal-to-major-competency-04-01",
+        "alignment:cwnu:2026:cse:department-goal-to-major-competency:04:01",
+        "evidence:document:2026-curriculum-excerpt:8ee5ee9d45fd:excerpt-p15:alignment-department-goal-to-major-competency-04-02",
+        "alignment:cwnu:2026:cse:department-goal-to-major-competency:04:02",
+        "evidence:document:2026-curriculum-excerpt:8ee5ee9d45fd:excerpt-p15:alignment-department-goal-to-major-competency-04-03",
+        "alignment:cwnu:2026:cse:department-goal-to-major-competency:04:03",
+        "evidence:document:2026-curriculum-excerpt:8ee5ee9d45fd:excerpt-p15:alignment-department-goal-to-major-competency-04-04",
+        "alignment:cwnu:2026:cse:department-goal-to-major-competency:04:04",
+        "evidence:document:2026-curriculum-excerpt:8ee5ee9d45fd:excerpt-p15:alignment-department-goal-to-major-competency-04-05",
+        "alignment:cwnu:2026:cse:department-goal-to-major-competency:04:05",
+        "evidence:document:2026-curriculum-excerpt:8ee5ee9d45fd:excerpt-p15:alignment-university-core-to-major-competency-01-01",
+        "alignment:cwnu:2026:cse:university-core-to-major-competency:01:01",
+        "evidence:document:2026-curriculum-excerpt:8ee5ee9d45fd:excerpt-p15:alignment-university-core-to-major-competency-01-02",
+        "alignment:cwnu:2026:cse:university-core-to-major-competency:01:02",
+        "evidence:document:2026-curriculum-excerpt:8ee5ee9d45fd:excerpt-p15:alignment-university-core-to-major-competency-01-03",
+        "alignment:cwnu:2026:cse:university-core-to-major-competency:01:03",
+        "evidence:document:2026-curriculum-excerpt:8ee5ee9d45fd:excerpt-p15:alignment-university-core-to-major-competency-01-04",
+        "alignment:cwnu:2026:cse:university-core-to-major-competency:01:04",
+        "evidence:document:2026-curriculum-excerpt:8ee5ee9d45fd:excerpt-p15:alignment-university-core-to-major-competency-01-05",
+        "alignment:cwnu:2026:cse:university-core-to-major-competency:01:05",
+        "evidence:document:2026-curriculum-excerpt:8ee5ee9d45fd:excerpt-p15:alignment-university-core-to-major-competency-02-01",
+        "alignment:cwnu:2026:cse:university-core-to-major-competency:02:01",
+        "evidence:document:2026-curriculum-excerpt:8ee5ee9d45fd:excerpt-p15:alignment-university-core-to-major-competency-02-02",
+        "alignment:cwnu:2026:cse:university-core-to-major-competency:02:02",
+        "evidence:document:2026-curriculum-excerpt:8ee5ee9d45fd:excerpt-p15:alignment-university-core-to-major-competency-02-03",
+        "alignment:cwnu:2026:cse:university-core-to-major-competency:02:03",
+        "evidence:document:2026-curriculum-excerpt:8ee5ee9d45fd:excerpt-p15:alignment-university-core-to-major-competency-02-04",
+        "alignment:cwnu:2026:cse:university-core-to-major-competency:02:04",
+        "evidence:document:2026-curriculum-excerpt:8ee5ee9d45fd:excerpt-p15:alignment-university-core-to-major-competency-02-05",
+        "alignment:cwnu:2026:cse:university-core-to-major-competency:02:05",
+        "evidence:document:2026-curriculum-excerpt:8ee5ee9d45fd:excerpt-p15:alignment-university-core-to-major-competency-03-01",
+        "alignment:cwnu:2026:cse:university-core-to-major-competency:03:01",
+        "evidence:document:2026-curriculum-excerpt:8ee5ee9d45fd:excerpt-p15:alignment-university-core-to-major-competency-03-02",
+        "alignment:cwnu:2026:cse:university-core-to-major-competency:03:02",
+        "evidence:document:2026-curriculum-excerpt:8ee5ee9d45fd:excerpt-p15:alignment-university-core-to-major-competency-03-03",
+        "alignment:cwnu:2026:cse:university-core-to-major-competency:03:03",
+        "evidence:document:2026-curriculum-excerpt:8ee5ee9d45fd:excerpt-p15:alignment-university-core-to-major-competency-03-04",
+        "alignment:cwnu:2026:cse:university-core-to-major-competency:03:04",
+        "evidence:document:2026-curriculum-excerpt:8ee5ee9d45fd:excerpt-p15:alignment-university-core-to-major-competency-03-05",
+        "alignment:cwnu:2026:cse:university-core-to-major-competency:03:05",
+        "evidence:document:2026-curriculum-excerpt:8ee5ee9d45fd:excerpt-p15:alignment-university-core-to-major-competency-04-01",
+        "alignment:cwnu:2026:cse:university-core-to-major-competency:04:01",
+        "evidence:document:2026-curriculum-excerpt:8ee5ee9d45fd:excerpt-p15:alignment-university-core-to-major-competency-04-02",
+        "alignment:cwnu:2026:cse:university-core-to-major-competency:04:02",
+        "evidence:document:2026-curriculum-excerpt:8ee5ee9d45fd:excerpt-p15:alignment-university-core-to-major-competency-04-03",
+        "alignment:cwnu:2026:cse:university-core-to-major-competency:04:03",
+        "evidence:document:2026-curriculum-excerpt:8ee5ee9d45fd:excerpt-p15:alignment-university-core-to-major-competency-04-04",
+        "alignment:cwnu:2026:cse:university-core-to-major-competency:04:04",
+        "evidence:document:2026-curriculum-excerpt:8ee5ee9d45fd:excerpt-p15:alignment-university-core-to-major-competency-04-05",
+        "alignment:cwnu:2026:cse:university-core-to-major-competency:04:05",
+        "evidence:document:2026-curriculum-excerpt:8ee5ee9d45fd:excerpt-p15:alignment-university-core-to-major-competency-05-01",
+        "alignment:cwnu:2026:cse:university-core-to-major-competency:05:01",
+        "evidence:document:2026-curriculum-excerpt:8ee5ee9d45fd:excerpt-p15:alignment-university-core-to-major-competency-05-02",
+        "alignment:cwnu:2026:cse:university-core-to-major-competency:05:02",
+        "evidence:document:2026-curriculum-excerpt:8ee5ee9d45fd:excerpt-p15:alignment-university-core-to-major-competency-05-03",
+        "alignment:cwnu:2026:cse:university-core-to-major-competency:05:03",
+        "evidence:document:2026-curriculum-excerpt:8ee5ee9d45fd:excerpt-p15:alignment-university-core-to-major-competency-05-04",
+        "alignment:cwnu:2026:cse:university-core-to-major-competency:05:04",
+        "evidence:document:2026-curriculum-excerpt:8ee5ee9d45fd:excerpt-p15:alignment-university-core-to-major-competency-05-05",
+        "alignment:cwnu:2026:cse:university-core-to-major-competency:05:05"
+      ],
+      "destination_relationship_count": 252
+    },
+    {
+      "source_section": "cse-curriculum-roadmap",
+      "status": "MIGRATED",
+      "destination_node_ids": [
+        "evidence:document:2026-curriculum-excerpt:8ee5ee9d45fd:excerpt-p15:roadmap-01",
+        "roadmap-entry:cwnu:2026:cse:g1:FIRST:CDA0163",
+        "evidence:document:2026-curriculum-excerpt:8ee5ee9d45fd:excerpt-p15:roadmap-02",
+        "roadmap-entry:cwnu:2026:cse:g1:FIRST:CDA0174",
+        "evidence:document:2026-curriculum-excerpt:8ee5ee9d45fd:excerpt-p15:roadmap-03",
+        "roadmap-entry:cwnu:2026:cse:g1:SECOND:CDA0157",
+        "evidence:document:2026-curriculum-excerpt:8ee5ee9d45fd:excerpt-p15:roadmap-04",
+        "roadmap-entry:cwnu:2026:cse:g1:SECOND:CDA0170",
+        "evidence:document:2026-curriculum-excerpt:8ee5ee9d45fd:excerpt-p15:roadmap-05",
+        "roadmap-entry:cwnu:2026:cse:g2:FIRST:CDA0008",
+        "evidence:document:2026-curriculum-excerpt:8ee5ee9d45fd:excerpt-p15:roadmap-06",
+        "roadmap-entry:cwnu:2026:cse:g2:FIRST:CDA0010",
+        "evidence:document:2026-curriculum-excerpt:8ee5ee9d45fd:excerpt-p15:roadmap-07",
+        "roadmap-entry:cwnu:2026:cse:g2:FIRST:CDA0014",
+        "evidence:document:2026-curriculum-excerpt:8ee5ee9d45fd:excerpt-p15:roadmap-08",
+        "roadmap-entry:cwnu:2026:cse:g2:FIRST:CDA0155",
+        "evidence:document:2026-curriculum-excerpt:8ee5ee9d45fd:excerpt-p15:roadmap-09",
+        "roadmap-entry:cwnu:2026:cse:g2:FIRST:CDA0156",
+        "evidence:document:2026-curriculum-excerpt:8ee5ee9d45fd:excerpt-p15:roadmap-10",
+        "roadmap-entry:cwnu:2026:cse:g2:SECOND:CDA0143",
+        "evidence:document:2026-curriculum-excerpt:8ee5ee9d45fd:excerpt-p15:roadmap-11",
+        "roadmap-entry:cwnu:2026:cse:g2:SECOND:CDA0013",
+        "evidence:document:2026-curriculum-excerpt:8ee5ee9d45fd:excerpt-p15:roadmap-12",
+        "roadmap-entry:cwnu:2026:cse:g2:SECOND:CDA0006",
+        "evidence:document:2026-curriculum-excerpt:8ee5ee9d45fd:excerpt-p15:roadmap-13",
+        "roadmap-entry:cwnu:2026:cse:g2:SECOND:CDA0176",
+        "evidence:document:2026-curriculum-excerpt:8ee5ee9d45fd:excerpt-p15:roadmap-14",
+        "roadmap-entry:cwnu:2026:cse:g2:SECOND:CDA0125",
+        "evidence:document:2026-curriculum-excerpt:8ee5ee9d45fd:excerpt-p15:roadmap-15",
+        "roadmap-entry:cwnu:2026:cse:g3:FIRST:CDA0016",
+        "evidence:document:2026-curriculum-excerpt:8ee5ee9d45fd:excerpt-p15:roadmap-16",
+        "roadmap-entry:cwnu:2026:cse:g3:FIRST:CDA0027",
+        "evidence:document:2026-curriculum-excerpt:8ee5ee9d45fd:excerpt-p15:roadmap-17",
+        "roadmap-entry:cwnu:2026:cse:g3:FIRST:CDA0065",
+        "evidence:document:2026-curriculum-excerpt:8ee5ee9d45fd:excerpt-p15:roadmap-18",
+        "roadmap-entry:cwnu:2026:cse:g3:FIRST:CDA0028",
+        "evidence:document:2026-curriculum-excerpt:8ee5ee9d45fd:excerpt-p15:roadmap-19",
+        "roadmap-entry:cwnu:2026:cse:g3:FIRST:CDA0165",
+        "evidence:document:2026-curriculum-excerpt:8ee5ee9d45fd:excerpt-p15:roadmap-20",
+        "roadmap-entry:cwnu:2026:cse:g3:FIRST:CDA0164",
+        "evidence:document:2026-curriculum-excerpt:8ee5ee9d45fd:excerpt-p15:roadmap-21",
+        "roadmap-entry:cwnu:2026:cse:g3:SECOND:CDA0017",
+        "evidence:document:2026-curriculum-excerpt:8ee5ee9d45fd:excerpt-p15:roadmap-22",
+        "roadmap-entry:cwnu:2026:cse:g3:SECOND:CDA0023",
+        "evidence:document:2026-curriculum-excerpt:8ee5ee9d45fd:excerpt-p15:roadmap-23",
+        "roadmap-entry:cwnu:2026:cse:g3:SECOND:CDA0139",
+        "evidence:document:2026-curriculum-excerpt:8ee5ee9d45fd:excerpt-p15:roadmap-24",
+        "roadmap-entry:cwnu:2026:cse:g3:SECOND:CDA0167",
+        "evidence:document:2026-curriculum-excerpt:8ee5ee9d45fd:excerpt-p15:roadmap-25",
+        "roadmap-entry:cwnu:2026:cse:g3:SECOND:CDA0169",
+        "evidence:document:2026-curriculum-excerpt:8ee5ee9d45fd:excerpt-p15:roadmap-26",
+        "roadmap-entry:cwnu:2026:cse:g3:SECOND:CDA0154",
+        "evidence:document:2026-curriculum-excerpt:8ee5ee9d45fd:excerpt-p15:roadmap-27",
+        "roadmap-entry:cwnu:2026:cse:g4:FIRST:CDA0119",
+        "evidence:document:2026-curriculum-excerpt:8ee5ee9d45fd:excerpt-p15:roadmap-28",
+        "roadmap-entry:cwnu:2026:cse:g4:FIRST:CDA0031",
+        "evidence:document:2026-curriculum-excerpt:8ee5ee9d45fd:excerpt-p15:roadmap-29",
+        "roadmap-entry:cwnu:2026:cse:g4:FIRST:CDA0168",
+        "evidence:document:2026-curriculum-excerpt:8ee5ee9d45fd:excerpt-p15:roadmap-30",
+        "roadmap-entry:cwnu:2026:cse:g4:FIRST:CDA0030",
+        "evidence:document:2026-curriculum-excerpt:8ee5ee9d45fd:excerpt-p15:roadmap-31",
+        "roadmap-entry:cwnu:2026:cse:g4:FIRST:CDA0177",
+        "evidence:document:2026-curriculum-excerpt:8ee5ee9d45fd:excerpt-p15:roadmap-32",
+        "roadmap-entry:cwnu:2026:cse:g4:FIRST:extracurricular:32",
+        "evidence:document:2026-curriculum-excerpt:8ee5ee9d45fd:excerpt-p15:roadmap-33",
+        "roadmap-entry:cwnu:2026:cse:g4:SECOND:CDA0153",
+        "evidence:document:2026-curriculum-excerpt:8ee5ee9d45fd:excerpt-p15:roadmap-34",
+        "roadmap-entry:cwnu:2026:cse:g4:SECOND:CDA0175",
+        "evidence:document:2026-curriculum-excerpt:8ee5ee9d45fd:excerpt-p15:roadmap-35",
+        "roadmap-entry:cwnu:2026:cse:g4:SECOND:CDA0150",
+        "evidence:document:2026-curriculum-excerpt:8ee5ee9d45fd:excerpt-p15:roadmap-36",
+        "roadmap-entry:cwnu:2026:cse:g4:SECOND:CDA0166",
+        "evidence:document:2026-curriculum-excerpt:8ee5ee9d45fd:excerpt-p15:roadmap-37",
+        "roadmap-entry:cwnu:2026:cse:g4:SECOND:CDA0034",
+        "evidence:document:2026-curriculum-excerpt:8ee5ee9d45fd:excerpt-p15:roadmap-38",
+        "roadmap-entry:cwnu:2026:cse:g4:SECOND:extracurricular:38",
+        "evidence:document:2026-curriculum-excerpt:8ee5ee9d45fd:excerpt-p15:roadmap-guidance-01",
+        "roadmap-entry:cwnu:2026:cse:guidance:01",
+        "evidence:document:2026-curriculum-excerpt:8ee5ee9d45fd:excerpt-p15:roadmap-guidance-02",
+        "roadmap-entry:cwnu:2026:cse:guidance:02",
+        "evidence:document:2026-curriculum-excerpt:8ee5ee9d45fd:excerpt-p15:roadmap-guidance-03",
+        "roadmap-entry:cwnu:2026:cse:guidance:03",
+        "evidence:document:2026-curriculum-excerpt:8ee5ee9d45fd:excerpt-p15:roadmap-guidance-04",
+        "roadmap-entry:cwnu:2026:cse:guidance:04",
+        "evidence:document:2026-curriculum-excerpt:8ee5ee9d45fd:excerpt-p15:roadmap-guidance-05",
+        "roadmap-entry:cwnu:2026:cse:guidance:05"
+      ],
+      "destination_relationship_count": 201
+    },
+    {
+      "source_section": "cse-recommended-general-courses",
+      "status": "MIGRATED",
+      "destination_node_ids": [
+        "evidence:document:2026-curriculum-excerpt:8ee5ee9d45fd:excerpt-p16:recommendation-gea7260",
+        "course-recommendation:cwnu:2026:cse:GEA7260",
+        "evidence:document:2026-curriculum-excerpt:8ee5ee9d45fd:excerpt-p16:recommendation-gea7261",
+        "course-recommendation:cwnu:2026:cse:GEA7261",
+        "evidence:document:2026-curriculum-excerpt:8ee5ee9d45fd:excerpt-p16:recommendation-gea7301",
+        "course-recommendation:cwnu:2026:cse:GEA7301"
+      ],
+      "destination_relationship_count": 12
+    },
+    {
+      "source_section": "cse-minimum-major-credit-system",
+      "status": "MIGRATED",
+      "destination_node_ids": [
+        "evidence:document:2026-curriculum-excerpt:8ee5ee9d45fd:excerpt-p16:minimum-major-credit-system",
+        "curriculum-aggregate:cwnu:2026:cse:minimum-major-credit-system"
+      ],
+      "destination_relationship_count": 3
+    },
+    {
+      "source_section": "cse-major-competency-aggregates",
+      "status": "MIGRATED",
+      "destination_node_ids": [
+        "evidence:document:2026-curriculum-excerpt:8ee5ee9d45fd:excerpt-p16:aggregate-major-competency-major-foundation",
+        "curriculum-aggregate:cwnu:2026:cse:major-competency:major-foundation",
+        "evidence:document:2026-curriculum-excerpt:8ee5ee9d45fd:excerpt-p16:aggregate-major-competency-self-directed-creativity",
+        "curriculum-aggregate:cwnu:2026:cse:major-competency:self-directed-creativity",
+        "evidence:document:2026-curriculum-excerpt:8ee5ee9d45fd:excerpt-p16:aggregate-major-competency-teamwork",
+        "curriculum-aggregate:cwnu:2026:cse:major-competency:teamwork",
+        "evidence:document:2026-curriculum-excerpt:8ee5ee9d45fd:excerpt-p16:aggregate-major-competency-problem-solving",
+        "curriculum-aggregate:cwnu:2026:cse:major-competency:problem-solving",
+        "evidence:document:2026-curriculum-excerpt:8ee5ee9d45fd:excerpt-p16:aggregate-major-competency-research",
+        "curriculum-aggregate:cwnu:2026:cse:major-competency:research",
+        "evidence:document:2026-curriculum-excerpt:8ee5ee9d45fd:excerpt-p16:aggregate-major-competency-total",
+        "curriculum-aggregate:cwnu:2026:cse:major-competency:total"
+      ],
+      "destination_relationship_count": 23
+    },
+    {
+      "source_section": "cse-credit-allocation",
+      "status": "MIGRATED",
+      "destination_node_ids": [
+        "evidence:document:2026-curriculum-excerpt:8ee5ee9d45fd:excerpt-p16:credit-allocation-general-foundational",
+        "credit-allocation:cwnu:2026:cse:general-foundational:g1:FIRST",
+        "credit-allocation:cwnu:2026:cse:general-foundational:g1:SECOND",
+        "credit-allocation:cwnu:2026:cse:general-foundational:g2:FIRST",
+        "credit-allocation:cwnu:2026:cse:general-foundational:g2:SECOND",
+        "credit-allocation:cwnu:2026:cse:general-foundational:g3:FIRST",
+        "credit-allocation:cwnu:2026:cse:general-foundational:g3:SECOND",
+        "credit-allocation:cwnu:2026:cse:general-foundational:g4:FIRST",
+        "credit-allocation:cwnu:2026:cse:general-foundational:g4:SECOND",
+        "credit-allocation:cwnu:2026:cse:general-foundational:total",
+        "evidence:document:2026-curriculum-excerpt:8ee5ee9d45fd:excerpt-p16:credit-allocation-general-balanced",
+        "credit-allocation:cwnu:2026:cse:general-balanced:g1:FIRST",
+        "credit-allocation:cwnu:2026:cse:general-balanced:g1:SECOND",
+        "credit-allocation:cwnu:2026:cse:general-balanced:g2:FIRST",
+        "credit-allocation:cwnu:2026:cse:general-balanced:g2:SECOND",
+        "credit-allocation:cwnu:2026:cse:general-balanced:g3:FIRST",
+        "credit-allocation:cwnu:2026:cse:general-balanced:g3:SECOND",
+        "credit-allocation:cwnu:2026:cse:general-balanced:g4:FIRST",
+        "credit-allocation:cwnu:2026:cse:general-balanced:g4:SECOND",
+        "credit-allocation:cwnu:2026:cse:general-balanced:total",
+        "evidence:document:2026-curriculum-excerpt:8ee5ee9d45fd:excerpt-p16:credit-allocation-general-expanded",
+        "credit-allocation:cwnu:2026:cse:general-expanded:g1:FIRST",
+        "credit-allocation:cwnu:2026:cse:general-expanded:g1:SECOND",
+        "credit-allocation:cwnu:2026:cse:general-expanded:g2:FIRST",
+        "credit-allocation:cwnu:2026:cse:general-expanded:g2:SECOND",
+        "credit-allocation:cwnu:2026:cse:general-expanded:g3:FIRST",
+        "credit-allocation:cwnu:2026:cse:general-expanded:g3:SECOND",
+        "credit-allocation:cwnu:2026:cse:general-expanded:g4:FIRST",
+        "credit-allocation:cwnu:2026:cse:general-expanded:g4:SECOND",
+        "credit-allocation:cwnu:2026:cse:general-expanded:total",
+        "evidence:document:2026-curriculum-excerpt:8ee5ee9d45fd:excerpt-p16:credit-allocation-general-remaining",
+        "credit-allocation:cwnu:2026:cse:general-remaining:g1:FIRST",
+        "credit-allocation:cwnu:2026:cse:general-remaining:g1:SECOND",
+        "credit-allocation:cwnu:2026:cse:general-remaining:g2:FIRST",
+        "credit-allocation:cwnu:2026:cse:general-remaining:g2:SECOND",
+        "credit-allocation:cwnu:2026:cse:general-remaining:g3:FIRST",
+        "credit-allocation:cwnu:2026:cse:general-remaining:g3:SECOND",
+        "credit-allocation:cwnu:2026:cse:general-remaining:g4:FIRST",
+        "credit-allocation:cwnu:2026:cse:general-remaining:g4:SECOND",
+        "credit-allocation:cwnu:2026:cse:general-remaining:total",
+        "evidence:document:2026-curriculum-excerpt:8ee5ee9d45fd:excerpt-p16:credit-allocation-general-subtotal",
+        "credit-allocation:cwnu:2026:cse:general-subtotal:g1:FIRST",
+        "credit-allocation:cwnu:2026:cse:general-subtotal:g1:SECOND",
+        "credit-allocation:cwnu:2026:cse:general-subtotal:g2:FIRST",
+        "credit-allocation:cwnu:2026:cse:general-subtotal:g2:SECOND",
+        "credit-allocation:cwnu:2026:cse:general-subtotal:g3:FIRST",
+        "credit-allocation:cwnu:2026:cse:general-subtotal:g3:SECOND",
+        "credit-allocation:cwnu:2026:cse:general-subtotal:g4:FIRST",
+        "credit-allocation:cwnu:2026:cse:general-subtotal:g4:SECOND",
+        "credit-allocation:cwnu:2026:cse:general-subtotal:total",
+        "evidence:document:2026-curriculum-excerpt:8ee5ee9d45fd:excerpt-p16:credit-allocation-minimum-major-required",
+        "credit-allocation:cwnu:2026:cse:minimum-major-required:g1:FIRST",
+        "credit-allocation:cwnu:2026:cse:minimum-major-required:g1:SECOND",
+        "credit-allocation:cwnu:2026:cse:minimum-major-required:g2:FIRST",
+        "credit-allocation:cwnu:2026:cse:minimum-major-required:g2:SECOND",
+        "credit-allocation:cwnu:2026:cse:minimum-major-required:g3:FIRST",
+        "credit-allocation:cwnu:2026:cse:minimum-major-required:g3:SECOND",
+        "credit-allocation:cwnu:2026:cse:minimum-major-required:g4:FIRST",
+        "credit-allocation:cwnu:2026:cse:minimum-major-required:g4:SECOND",
+        "credit-allocation:cwnu:2026:cse:minimum-major-required:total",
+        "evidence:document:2026-curriculum-excerpt:8ee5ee9d45fd:excerpt-p16:credit-allocation-minimum-major-elective",
+        "credit-allocation:cwnu:2026:cse:minimum-major-elective:g1:FIRST",
+        "credit-allocation:cwnu:2026:cse:minimum-major-elective:g1:SECOND",
+        "credit-allocation:cwnu:2026:cse:minimum-major-elective:g2:FIRST",
+        "credit-allocation:cwnu:2026:cse:minimum-major-elective:g2:SECOND",
+        "credit-allocation:cwnu:2026:cse:minimum-major-elective:g3:FIRST",
+        "credit-allocation:cwnu:2026:cse:minimum-major-elective:g3:SECOND",
+        "credit-allocation:cwnu:2026:cse:minimum-major-elective:g4:FIRST",
+        "credit-allocation:cwnu:2026:cse:minimum-major-elective:g4:SECOND",
+        "credit-allocation:cwnu:2026:cse:minimum-major-elective:total",
+        "evidence:document:2026-curriculum-excerpt:8ee5ee9d45fd:excerpt-p16:credit-allocation-minimum-major-subtotal",
+        "credit-allocation:cwnu:2026:cse:minimum-major-subtotal:g1:FIRST",
+        "credit-allocation:cwnu:2026:cse:minimum-major-subtotal:g1:SECOND",
+        "credit-allocation:cwnu:2026:cse:minimum-major-subtotal:g2:FIRST",
+        "credit-allocation:cwnu:2026:cse:minimum-major-subtotal:g2:SECOND",
+        "credit-allocation:cwnu:2026:cse:minimum-major-subtotal:g3:FIRST",
+        "credit-allocation:cwnu:2026:cse:minimum-major-subtotal:g3:SECOND",
+        "credit-allocation:cwnu:2026:cse:minimum-major-subtotal:g4:FIRST",
+        "credit-allocation:cwnu:2026:cse:minimum-major-subtotal:g4:SECOND",
+        "credit-allocation:cwnu:2026:cse:minimum-major-subtotal:total",
+        "evidence:document:2026-curriculum-excerpt:8ee5ee9d45fd:excerpt-p16:credit-allocation-advanced-major-elective",
+        "credit-allocation:cwnu:2026:cse:advanced-major-elective:g1:FIRST",
+        "credit-allocation:cwnu:2026:cse:advanced-major-elective:g1:SECOND",
+        "credit-allocation:cwnu:2026:cse:advanced-major-elective:g2:FIRST",
+        "credit-allocation:cwnu:2026:cse:advanced-major-elective:g2:SECOND",
+        "credit-allocation:cwnu:2026:cse:advanced-major-elective:g3:FIRST",
+        "credit-allocation:cwnu:2026:cse:advanced-major-elective:g3:SECOND",
+        "credit-allocation:cwnu:2026:cse:advanced-major-elective:g4:FIRST",
+        "credit-allocation:cwnu:2026:cse:advanced-major-elective:g4:SECOND",
+        "credit-allocation:cwnu:2026:cse:advanced-major-elective:total",
+        "evidence:document:2026-curriculum-excerpt:8ee5ee9d45fd:excerpt-p16:credit-allocation-major-subtotal",
+        "credit-allocation:cwnu:2026:cse:major-subtotal:g1:FIRST",
+        "credit-allocation:cwnu:2026:cse:major-subtotal:g1:SECOND",
+        "credit-allocation:cwnu:2026:cse:major-subtotal:g2:FIRST",
+        "credit-allocation:cwnu:2026:cse:major-subtotal:g2:SECOND",
+        "credit-allocation:cwnu:2026:cse:major-subtotal:g3:FIRST",
+        "credit-allocation:cwnu:2026:cse:major-subtotal:g3:SECOND",
+        "credit-allocation:cwnu:2026:cse:major-subtotal:g4:FIRST",
+        "credit-allocation:cwnu:2026:cse:major-subtotal:g4:SECOND",
+        "credit-allocation:cwnu:2026:cse:major-subtotal:total",
+        "evidence:document:2026-curriculum-excerpt:8ee5ee9d45fd:excerpt-p16:credit-allocation-general-plus-major",
+        "credit-allocation:cwnu:2026:cse:general-plus-major:g1:FIRST",
+        "credit-allocation:cwnu:2026:cse:general-plus-major:g1:SECOND",
+        "credit-allocation:cwnu:2026:cse:general-plus-major:g2:FIRST",
+        "credit-allocation:cwnu:2026:cse:general-plus-major:g2:SECOND",
+        "credit-allocation:cwnu:2026:cse:general-plus-major:g3:FIRST",
+        "credit-allocation:cwnu:2026:cse:general-plus-major:g3:SECOND",
+        "credit-allocation:cwnu:2026:cse:general-plus-major:g4:FIRST",
+        "credit-allocation:cwnu:2026:cse:general-plus-major:g4:SECOND",
+        "credit-allocation:cwnu:2026:cse:general-plus-major:total",
+        "evidence:document:2026-curriculum-excerpt:8ee5ee9d45fd:excerpt-p16:credit-allocation-graduation-remaining",
+        "credit-allocation:cwnu:2026:cse:graduation-remaining:g1:FIRST",
+        "credit-allocation:cwnu:2026:cse:graduation-remaining:g1:SECOND",
+        "credit-allocation:cwnu:2026:cse:graduation-remaining:g2:FIRST",
+        "credit-allocation:cwnu:2026:cse:graduation-remaining:g2:SECOND",
+        "credit-allocation:cwnu:2026:cse:graduation-remaining:g3:FIRST",
+        "credit-allocation:cwnu:2026:cse:graduation-remaining:g3:SECOND",
+        "credit-allocation:cwnu:2026:cse:graduation-remaining:g4:FIRST",
+        "credit-allocation:cwnu:2026:cse:graduation-remaining:g4:SECOND",
+        "credit-allocation:cwnu:2026:cse:graduation-remaining:total",
+        "evidence:document:2026-curriculum-excerpt:8ee5ee9d45fd:excerpt-p16:credit-allocation-graduation-total",
+        "credit-allocation:cwnu:2026:cse:graduation-total:g1:FIRST",
+        "credit-allocation:cwnu:2026:cse:graduation-total:g1:SECOND",
+        "credit-allocation:cwnu:2026:cse:graduation-total:g2:FIRST",
+        "credit-allocation:cwnu:2026:cse:graduation-total:g2:SECOND",
+        "credit-allocation:cwnu:2026:cse:graduation-total:g3:FIRST",
+        "credit-allocation:cwnu:2026:cse:graduation-total:g3:SECOND",
+        "credit-allocation:cwnu:2026:cse:graduation-total:g4:FIRST",
+        "credit-allocation:cwnu:2026:cse:graduation-total:g4:SECOND",
+        "credit-allocation:cwnu:2026:cse:graduation-total:total"
+      ],
+      "destination_relationship_count": 337
+    },
+    {
+      "source_section": "approved-course-code-correction",
+      "status": "MIGRATED",
+      "destination_node_ids": [
+        "course:cwnu:GEA8617",
+        "course:cwnu:GEA8817",
+        "offering:cwnu:2026:common:GEA8617:gunspecified:SECOND:GENERAL_ELECTIVE",
+        "correction:cwnu:2026:course-code:GEA8817"
+      ],
+      "destination_relationship_count": 8
+    },
+    {
+      "source_section": "approved-practice-total-correction",
+      "status": "MIGRATED",
+      "destination_node_ids": [
+        "evidence:document:2026-curriculum-excerpt:8ee5ee9d45fd:excerpt-p18:cse-major-practice-total",
+        "curriculum-aggregate:cwnu:2026:cse:major-offering-workload",
+        "correction:cwnu:2026:cse:practice-total"
+      ],
+      "destination_relationship_count": 6
+    },
+    {
+      "source_section": "course-offering-competency-normalization",
+      "status": "MIGRATED",
+      "destination_node_ids": [],
+      "destination_relationship_count": 427
+    }
+  ],
+  "approved_corrections": [
+    {
+      "correction_id": "correction:cwnu:2026:course-code:GEA8817",
+      "status": "APPROVED",
+      "source_value": "GEA8617",
+      "corrected_value": "GEA8817",
+      "target_id": "course:cwnu:GEA8817"
+    },
+    {
+      "correction_id": "correction:cwnu:2026:cse:practice-total",
+      "status": "APPROVED",
+      "source_value": 12,
+      "corrected_value": 14,
+      "target_id": "curriculum-aggregate:cwnu:2026:cse:major-offering-workload"
+    }
+  ]
+}

@@ -1,9 +1,9 @@
-# 2026 학사 교육과정 온톨로지 V1 설계
+# 2026 학사 교육과정 온톨로지 V0.2 설계
 
 | 항목 | 내용 |
 |---|---|
 | 상태 | Draft |
-| 버전 | 0.1.0 |
+| 버전 | 0.2.0 |
 | 기준 데이터 | 2026 교양 이수요건 및 컴퓨터공학과 교육과정 19쪽 |
 | 저장 모델 | Neo4j Labeled Property Graph |
 | 작성 담당 | 정이량 |
@@ -29,7 +29,7 @@
 - SHA-256: `8ee5ee9d45fde0b00f8c42dc5aa513a46ec6a28bed4db50af25a049ae2dac004`
 - 텍스트 레이어: 있음
 
-현재 산출물은 스키마 설계 명세다. PDF에 적힌 전체 과목·학점·규칙을 담은 실제 데이터 JSON은 아직 생성하지 않았다. Neo4j 적재, Cypher, 자연어 질의응답과 전체 PDF 자동 추출도 현재 범위가 아니다.
+현재 산출물은 V0.2 스키마 명세와 [`data/verified/2026/2026_curriculum_kg_data.json`](../../data/verified/2026/2026_curriculum_kg_data.json) 기준 데이터다. Neo4j 적재, Cypher와 자연어 질의응답은 아직 구현하지 않았다.
 
 ## 3. 파일별 역할
 
@@ -37,7 +37,8 @@
 |---|---|---|
 | [`ontology/ontology_spec.json`](../../ontology/ontology_spec.json) | 2026학년도 국립창원대학교 교양 이수요건과 컴퓨터공학과 교육과정을 Neo4j Labeled Property Graph로 표현하기 위한 기계 판독형 온톨로지 스키마 설계 명세 | 실제 데이터 JSON, 표준 JSON Schema, Neo4j 적재 데이터, Cypher, RDF/OWL |
 | `docs/ontology/ontology-v1.md` | `ontology_spec.json`의 한글 의미, 설계 이유와 확장 방식을 설명하는 사람용 문서 | 별도의 스키마 원본 |
-| 향후 실제 데이터 JSON | PDF의 과목·학점·규칙·근거 인스턴스 | 스키마 정의 |
+| [`data/verified/2026/2026_curriculum_kg_data.json`](../../data/verified/2026/2026_curriculum_kg_data.json) | PDF의 과목·학점·규칙·근거와 V0.2 확장 인스턴스 | 스키마 정의 또는 Neo4j 적재 코드 |
+| [`data/verified/2026/2026_curriculum_unresolved.json`](../../data/verified/2026/2026_curriculum_unresolved.json) | V0.2 이후에도 남은 검토 항목과 마이그레이션 이력 | 확정 답변용 데이터 |
 
 `ontology_spec.json`은 다음을 정의한다.
 
@@ -99,6 +100,16 @@ flowchart LR
 | `ApplicabilityScope` | 적용 범위 | 학년도·입학·전공·학생·대학 범주 | `scope_id` |
 | `ConditionGroup` | 조건 그룹 | `AND` 또는 `OR` 조건 묶음 | `condition_group_id` |
 | `Condition` | 단일 조건 | 시험·점수·학생유형 등의 원자 조건 | `condition_id` |
+| `TalentProfile` | 전공 인재상 | 학과가 지향하는 인재상 문장 | `talent_profile_id` |
+| `EducationGoal` | 교육목표 | 대학 또는 학과의 교육목표 | `goal_id` |
+| `CareerField` | 진출 분야 | 학과 졸업 후 진출 분야 | `career_field_id` |
+| `Competency` | 역량 | 대학 핵심역량 또는 전공능력 정체성 | `competency_id` |
+| `Alignment` | 연계성 | 목표·역량 사이 연계 강도를 재구체화한 셀 | `alignment_id` |
+| `RoadmapEntry` | 교육과정 로드맵 항목 | 권장 위치, 비교과 활동 또는 유의사항 | `roadmap_entry_id` |
+| `CourseRecommendation` | 학과 권장과목 | 실제 편성·필수 규칙과 구분되는 권장 항목 | `recommendation_id` |
+| `CurriculumAggregate` | 교육과정 집계값 | 과목 수·학점·시행 여부·시수 집계 | `aggregate_id` |
+| `CreditAllocation` | 학점 배분 | 학년·학기·학점구분별 값과 원문 공란 | `allocation_id` |
+| `CorrectionRecord` | 정정 기록 | PDF 원문값과 승인된 정정값의 추적 | `correction_id` |
 
 규칙 하위 유형은 Neo4j 다중 라벨을 사용한다.
 
@@ -127,8 +138,24 @@ flowchart LR
 | `HAS_CONDITION` | `ConditionGroup` → `Condition` | 그룹의 단일 조건 |
 | `OVERRIDES` | `ExemptionRule` → `Rule` | 예외 규칙이 일반 규칙보다 우선 |
 | `SUPPORTED_BY` | `Rule`·`CourseOffering` → `Evidence` | 규칙·편성의 원문 근거 |
+| `DEFINES_TALENT_PROFILE` | `Department` → `TalentProfile` | 학과 인재상 정의 |
+| `HAS_EDUCATION_GOAL` | 대학·학과 → `EducationGoal` | 교육목표 소유 |
+| `HAS_CAREER_FIELD` | `Department` → `CareerField` | 진출 분야 소유 |
+| `DEFINES_COMPETENCY` | 대학·학과 → `Competency` | 핵심역량 또는 전공능력 정의 |
+| `ALIGNS_FROM` / `ALIGNS_TO` | `Alignment` → 목표·역량 | 연계 셀의 출발·도착 개념 |
+| `HAS_ROADMAP_ENTRY` | `CurriculumVersion` → `RoadmapEntry` | 교육과정의 로드맵 항목 |
+| `MAPS_COURSE` | `RoadmapEntry` → `Course` | 로드맵의 교과목 |
+| `EMPHASIZES_COMPETENCY` | `RoadmapEntry` → `Competency` | 로드맵의 주 전공능력 |
+| `HAS_RECOMMENDATION` | 교육과정·학과 → `CourseRecommendation` | 권장과목 항목 소유 |
+| `RECOMMENDS_COURSE` | `CourseRecommendation` → `Course` | 권장 대상 교과목 |
+| `HAS_AGGREGATE` | `CurriculumVersion` → `CurriculumAggregate` | 집계 사실 소유 |
+| `AGGREGATES_FOR` | `CurriculumAggregate` → 역량·교육영역 | 집계 대상 |
+| `HAS_CREDIT_ALLOCATION` | `CurriculumVersion` → `CreditAllocation` | 학점 배분 셀 소유 |
+| `ALLOCATES_TO` | `CreditAllocation` → `EducationArea` | 학점 배분 대상 영역 |
+| `DEVELOPS_COMPETENCY` | `CourseOffering` → `Competency` | 편성의 주·부·미지정 역량 정규화 |
+| `CORRECTS` | `CorrectionRecord` → 과목·집계값 | 승인된 정정 대상 |
 
-V1은 `Document-[:HAS_EVIDENCE]->Evidence`를 제거하고 `Evidence-[:FROM_DOCUMENT]->Document`만 유지한다. Neo4j는 하나의 관계를 양방향으로 탐색할 수 있으므로 같은 문서–근거 쌍을 역관계로 중복 저장할 필요가 없고, 두 관계의 불일치 위험도 피할 수 있다.
+V0.1 코어는 `Document-[:HAS_EVIDENCE]->Evidence`를 제거하고 `Evidence-[:FROM_DOCUMENT]->Document`만 유지한다. V0.2에서도 이 방향을 유지하며 새 원문 기반 노드는 `SUPPORTED_BY`로 `Evidence`를 참조한다.
 
 ## 7. Course와 CourseOffering 분리 이유
 
@@ -248,12 +275,75 @@ PoC가 우선 답해야 할 대표 질문은 다음과 같다.
 | `OD-005` | 중간 | 동일 학수번호의 기관 내 영구 유일성 |
 | `OD-006` | 중간 | `bbox` 좌표계 원점·단위·회전 규약 |
 | `OD-007` | 중간 | 복수·연계·융합전공 학점구조 표의 병합 행 의미 |
-| `OD-008` | 낮음 | 원문 정정값을 속성으로 둘지 별도 correction 구조로 확장할지 |
+| `OD-008` | 해결 | V0.2의 `CorrectionRecord`와 `CORRECTS`로 원문값·정정값·대상·Evidence를 분리 |
 
 ## 14. 다음 구현 단계
 
-1. 실제 데이터 JSON 계약을 정의한다.
-2. PDF에서 대표 과목·규칙·`Evidence`를 소량 작성하고 사람이 검증한다.
-3. 승인된 명세를 기준으로 Neo4j 제약조건과 멱등 적재를 구현한다.
-4. Cypher 조회 구현과 함께 `tests/fixtures/expected_query_results.json` 및 회귀 테스트를 작성한다.
-5. 이후에만 제한된 자연어 질의와 근거 포함 답변을 구현한다.
+1. V0.2 명세를 기준으로 Neo4j 제약조건과 멱등 적재를 구현한다.
+2. verified 기준 데이터를 적재하고 노드·관계·Evidence 개수를 대조한다.
+3. 근거 포함 Cypher 조회와 회귀 테스트를 작성한다.
+4. 이후에만 제한된 자연어 질의와 근거 포함 답변을 구현한다.
+
+## 15. V0.2 확장 개요
+
+V0.2는 V0.1의 16개 라벨, 14개 관계, 속성, 식별자와 불변조건을 삭제하거나 의미 변경하지 않고 확장했다. 컴퓨터공학과 인재상·목표·진출 분야·역량·연계표·로드맵·권장과목·집계·학점배분과 승인된 정정을 독립 노드로 질의할 수 있다.
+
+`SUPPORTED_BY`의 허용 시작 라벨은 새 원문 기반 노드와 정정된 `Course`까지 추가했다. 과거 데이터에서 Evidence가 없던 기존 `Course`를 소급 변경하지 않으므로 V0.1 데이터와 하위 호환된다.
+
+## 16. 연계표 재구체화
+
+연계표의 각 셀을 `Alignment` 노드로 만든다.
+
+```text
+(Alignment)-[:ALIGNS_FROM]->(EducationGoal 또는 Competency)
+(Alignment)-[:ALIGNS_TO]->(EducationGoal 또는 Competency)
+(Alignment)-[:SUPPORTED_BY]->(Evidence)
+```
+
+직접 관계의 속성만으로 강도를 저장하면 셀 단위 Evidence를 연결하기 어렵다. 재구체화하면 `HIGH`, `LOW`, `NONE`과 원문 기호를 보존하고, 공란도 삭제하지 않고 명시적인 `NONE` 사실로 조회할 수 있다.
+
+## 17. 로드맵·편성·권장과목 분리
+
+- `CourseOffering`은 실제 교육과정 편성의 학년·학기·학점·시수다.
+- `RoadmapEntry`는 권장 이수 위치이며 실제 개설학기를 덮어쓰지 않는다.
+- `CourseRecommendation`은 학과 권장 교양과목이며 필수과목이나 졸업요건을 뜻하지 않는다.
+- 비교과 `봉림소프트웨어전`은 `RoadmapEntry(entry_type=EXTRACURRICULAR)`로만 저장하고 `Course`를 만들지 않는다.
+- 로드맵 유의사항은 `GUIDANCE` 항목으로 보존한다.
+
+## 18. 역량 정규화
+
+`CourseOffering.competency` 배열은 원문 보존용으로 유지한다. 동시에 `DEVELOPS_COMPETENCY` 관계의 `role`, `source_value`, `normalized_value`로 정규화한다.
+
+- `[주]`는 `PRIMARY`, `[부]`는 `SECONDARY`다.
+- 주·부 구분이 없는 교양 핵심역량은 `UNSPECIFIED`다.
+- 원문 `전공기초`는 `전공기초능력`에 연결하되 두 문자열을 모두 보존한다.
+- 대학 핵심역량과 전공능력은 `Competency.competency_type`으로 구분한다.
+
+## 19. 집계·학점배분·공란 정책
+
+`CurriculumAggregate`는 원자 `CourseOffering`과 별개인 PDF 집계 사실이다. 전공능력별 과목 수·학점, 전체 43과목·144학점, 최소전공학점제 시행 여부와 편성 이론·실기 합계를 표현한다.
+
+`CreditAllocation`은 학점배분표의 셀 단위 노드다. 원문 공란도 `source_was_blank=true`, `raw_value=""`로 보존하고 `allocated_credits`를 두지 않는다. 원문에 실제로 적힌 `0`은 `source_was_blank=false`, `allocated_credits=0`으로 구분한다.
+
+## 20. 원문값과 승인 정정값
+
+`CorrectionRecord`는 PDF Evidence를 변경하지 않는다.
+
+- 융합프로젝트Ⅰ Evidence의 원문 학수번호 `GEA8617`을 보존하고 정정값 `GEA8817`을 별도로 기록한다.
+- 수식없는물리로보는세상은 `GEA8617` Course와 2학기 CourseOffering을 복구한다.
+- 융합프로젝트Ⅰ은 `GEA8817` Course를 생성하지만 `이룸` 학기는 추정하지 않아 CourseOffering을 보류한다.
+- 전공 실기 합계는 원문 `12`, 숫자형 행 합계 `14`를 모두 저장한다. `4주·8주·12주`는 시간으로 환산하거나 합산하지 않는다.
+
+## 21. 다른 연도·학과 확장과 남은 unresolved
+
+새 연도·학과에는 별도 인재상·목표·연계·로드맵·권장·집계·배분 노드를 만들고 기존 연도 노드를 덮어쓰지 않는다. 안정적인 `Course`와 대학 핵심역량은 재사용할 수 있지만 연도별 Evidence와 편성은 분리한다.
+
+V0.2 이후에도 다음은 unresolved로 남긴다.
+
+- 개설학기 `이룸`의 의미
+- 현장실습 `4주·8주·12주`와 시간 단위 분리
+- 경과조치 적용 교육과정 연도 범위
+- 교양 개설 학년 부재와 관련학과 정식 매핑
+- 공통 교육과정–대학 관계와 ApplicabilityScope 식별자
+- 하계·동계 복합 학기, 교양 이수구분과 CSE 공통 교양 규칙 배치
+- 승인되지 않은 영문명·관련학과 오탈자 후보
