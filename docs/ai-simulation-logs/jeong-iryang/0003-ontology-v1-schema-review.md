@@ -44,9 +44,9 @@
 - `Rule.operator`를 공통 선택 속성으로 바꾸고 학점·과목 규칙에서만 필수로 유지했다.
 - `HAS_EVIDENCE`를 제거하고 `FROM_DOCUMENT`만 유지했다.
 - VERIFIED 규칙·편성과 사용자 답변에 VERIFIED Evidence를 요구하도록 불변조건을 강화했다.
-- competency questions를 `tests/fixtures/2026/competency_questions.json`으로 이동했다.
-- answerability를 `FULL`, `PARTIAL`, `NOT_SUPPORTED` enum으로 통일했다.
-- gold result, 예상 그래프 패턴과 Evidence 페이지를 구조화했다.
+- PoC 범위 조정에 따라 별도 competency question fixture와 명세의 평가 계약 참조를 제거했다.
+- 설명 문서에는 현재 PoC가 우선 답할 대표 질문 문장 4개만 남겼다.
+- 향후 Neo4j 적재와 Cypher 조회가 구현될 때 `tests/fixtures/expected_query_results.json`과 테스트 코드를 함께 만들도록 후속 범위를 정했다.
 - 설명 문서를 14개 핵심 절로 재구성했다.
 
 ## 5. 변경된 파일
@@ -54,9 +54,9 @@
 | 경로 | 변경 유형 | 내용 |
 |---|---|---|
 | `AGENTS.md` | 로컬 수정 | PM 역할과 자동 로그 규칙. Git 제외 및 커밋 금지 |
-| `ontology/ontology_spec.json` | 수정 | 스키마 역할, curriculum 분리, ID·Rule·Evidence 정책, 평가 fixture 참조 |
+| `ontology/ontology_spec.json` | 수정 | 스키마 역할, curriculum 분리, ID·Rule·Evidence 정책. 평가 fixture 참조 제거 |
 | `docs/ontology/ontology-v1.md` | 수정 | 사람용 설명 역할과 핵심 설계 중심으로 재구성 |
-| `tests/fixtures/2026/competency_questions.json` | 생성 | CQ-001~CQ-010 평가 계약 |
+| `tests/fixtures/2026/competency_questions.json` | 삭제 | PoC 범위에서 상세 평가 계약을 제외 |
 | `docs/ai-simulation-logs/jeong-iryang/0003-ontology-v1-schema-review.md` | 생성 | 본 작업 로그 |
 | `docs/ai-simulation-logs/jeong-iryang/README.md` | 수정 | 로그 `0003` 링크와 다음 번호 `0004` |
 
@@ -73,34 +73,32 @@
 - `CreditRequirement`와 `CourseRequirement`에는 `operator`를 요구하지만 `ExemptionRule`과 `TransitionRule`에는 일괄 강제하지 않는다.
 - 문서–근거 연결은 `FROM_DOCUMENT` 한 방향만 저장하고 역방향으로 조회한다.
 - VERIFIED 사실은 VERIFIED Evidence에 연결해야 하며 사용자 답변도 이를 기본 조건으로 한다.
-- competency questions는 런타임 하드코딩 데이터가 아니라 회귀 평가 계약이다.
+- 현재 PoC에서는 상세 competency question 평가 계약을 만들지 않는다. 조회 구현 이후 기대 결과 fixture와 테스트를 함께 설계한다.
 
-## 7. competency questions 분리
+## 7. competency questions 범위 제외
 
-- 명세의 `competency_questions` 배열을 제거하고 `evaluation_contract_ref`만 남겼다.
-- CQ-001~CQ-010을 별도 fixture의 `questions` 배열로 이동했다.
-- 질문별 intent, parameters, 구조화된 `expected_result`, `expected_graph_patterns`, 숫자 페이지 필드를 정의했다.
-- CQ-007 페이지를 재검증하여 발췌 16쪽·원본 261쪽·인쇄 253쪽으로 교정했다.
-- 실제 사용자 질문은 문자열 비교가 아니라 intent·parameter 변환 후 Neo4j 조회로 처리해야 한다고 명시했다.
+- 명세에는 `competency_questions` 배열과 평가 fixture 참조를 두지 않는다.
+- 이미 생성했던 `tests/fixtures/2026/competency_questions.json`을 삭제했다.
+- 설명 문서에는 expected result나 정답 페이지 없이 PoC 대표 질문 문장 4개만 기록했다.
+- 현재는 `required_nodes`, `expected_graph_patterns`, `answerability`를 정교하게 설계하지 않는다.
+- 실제 사용자 질문을 문자열 비교로 하드코딩하지 않는 원칙은 유지한다.
+- Neo4j 적재와 Cypher 조회가 구현되면 `tests/fixtures/expected_query_results.json`과 실행 가능한 테스트를 함께 만든다.
 
 ## 8. 수행한 검증
 
 | 검증 항목 | 명령 또는 방법 | 실제 결과 |
 |---|---|---|
-| JSON 구문 | `python3 -m json.tool` | 명세와 fixture 모두 통과 |
-| 중복 ID | Python 표준 라이브러리 검사 | 노드·관계·identity·invariant·extension·open decision·CQ ID 중복 없음 |
+| JSON 구문 | `python3 -m json.tool ontology/ontology_spec.json` | 통과 |
+| 중복 ID | Python 표준 라이브러리 검사 | 노드·관계·identity·invariant·extension·open decision ID 중복 없음 |
 | 라벨·관계 참조 | endpoint와 상속 라벨 검사 | 통과 |
 | vocabulary 참조 | 모든 속성 참조와 값 중복 검사 | 통과 |
-| answerability | 허용 enum 집합과 질문 값 검사 | 10개 모두 통과 |
-| Evidence 페이지 | 정수 필드와 발췌 구간 매핑 공식 검사 | 통과 |
-| 그래프 패턴 | 관계의 시작·끝 라벨 및 하위 Rule 라벨 검사 | 통과 |
 | Markdown 링크 | 로컬 상대 링크 대상 존재 검사 | 통과 |
 | PDF 동일성 | `sha256sum`, `file` | 기존 검증과 동일한 SHA-256, 19쪽 확인 |
 | 공백 오류 | `git diff --check` | 통과 |
 
 ## 9. 실패한 접근과 원인
 
-첫 페이지 매핑 검증에서 CQ-007의 기존 값인 발췌 16쪽·원본 260쪽·인쇄 252쪽이 실패했다. 구간 시작점은 발췌 14쪽·원본 259쪽·인쇄 251쪽이므로 두 페이지 뒤인 발췌 16쪽은 원본 261쪽·인쇄 253쪽이다. fixture와 설명 문서를 교정한 뒤 전체 페이지 검사를 다시 통과했다.
+초기 상세 fixture 접근에서 CQ-007의 기존 페이지 매핑 오류를 발견해 교정했으나, 이후 PoC 범위 조정으로 fixture 자체를 제거했다. 현재 산출물에는 질문별 expected result나 정답 페이지를 유지하지 않는다.
 
 Draft PR #8의 제목과 본문을 `gh pr edit`로 갱신하려 했으나 GitHub Projects(classic) GraphQL 필드 폐기 오류로 실패했다. PR 내용은 변경되지 않은 상태임을 확인한 뒤 동일 제목·본문만 GitHub REST API로 갱신했으며 Draft, assignee, reviewer와 라벨은 유지했다.
 
@@ -111,17 +109,18 @@ Draft PR #8의 제목과 본문을 `gh pr edit`로 갱신하려 했으나 GitHub
 - 경과조치 첫 문장의 원문 시각 검증은 완료하지 못했다.
 - 실제 데이터 JSON 계약, Neo4j 제약조건·적재, Cypher와 질의응답은 구현하거나 검증하지 않았다.
 - 전체 PDF 자동 추출과 전체 교과목 데이터 대조는 수행하지 않았다.
+- competency question의 자동 판정 계약과 테스트 코드는 Cypher 조회 구현 이후로 보류했다.
 
 ## 11. 남은 문제
 
 - 실제 데이터 JSON의 최상위 구조와 Rule·Offering·Evidence 인스턴스 계약이 필요하다.
 - 공통 curriculum과 학과 curriculum을 함께 조회하는 집계 경로를 확정해야 한다.
 - `bbox` 좌표계와 원문 정정 데이터 구조를 정해야 한다.
-- fixture를 실행할 테스트 코드와 gold result 비교 규약은 아직 없다.
+- Cypher 조회 구현 이후 기대 결과 fixture와 비교 규약을 함께 설계해야 한다.
 
 ## 12. 다음 권장 작업
 
 1. 실제 데이터 JSON 계약을 정의한다.
 2. PDF에서 대표 과목·규칙·Evidence를 소량 작성하고 사람이 검증한다.
 3. Neo4j 제약조건과 멱등 적재를 구현한다.
-4. fixture 기반 근거 포함 Cypher 질의 회귀 테스트를 작성한다.
+4. Cypher 조회 구현과 함께 `tests/fixtures/expected_query_results.json` 및 회귀 테스트를 작성한다.

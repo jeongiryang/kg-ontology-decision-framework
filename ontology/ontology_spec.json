@@ -11,7 +11,6 @@
     "Cypher 실행 파일",
     "RDF/OWL 온톨로지 파일"
   ],
-  "evaluation_contract_ref": "tests/fixtures/2026/competency_questions.json",
   "scope": {
     "academic_year": 2026,
     "institution": "국립창원대학교",

@@ -37,7 +37,6 @@
 |---|---|---|
 | [`ontology/ontology_spec.json`](../../ontology/ontology_spec.json) | 2026학년도 국립창원대학교 교양 이수요건과 컴퓨터공학과 교육과정을 Neo4j Labeled Property Graph로 표현하기 위한 기계 판독형 온톨로지 스키마 설계 명세 | 실제 데이터 JSON, 표준 JSON Schema, Neo4j 적재 데이터, Cypher, RDF/OWL |
 | `docs/ontology/ontology-v1.md` | `ontology_spec.json`의 한글 의미, 설계 이유와 확장 방식을 설명하는 사람용 문서 | 별도의 스키마 원본 |
-| [`tests/fixtures/2026/competency_questions.json`](../../tests/fixtures/2026/competency_questions.json) | 그래프와 질의 기능이 답해야 할 평가 질문·gold result·예상 그래프 패턴 | 런타임 질문 문자열 하드코딩 테이블 |
 | 향후 실제 데이터 JSON | PDF의 과목·학점·규칙·근거 인스턴스 | 스키마 정의 |
 
 `ontology_spec.json`은 다음을 정의한다.
@@ -225,15 +224,18 @@ Rule 또는 CourseOffering
 
 `Document`, `Evidence`, `Rule`, `ApplicabilityScope`를 공통 코어로 재사용한다. 선수과목·대체과목 등 현재 PDF에 없는 값은 확장 후보일 뿐 실제 데이터로 미리 생성하지 않는다.
 
-## 12. 역량 질문과 평가 fixture
+## 12. PoC 대표 질의
 
-CQ-001~CQ-010은 [`tests/fixtures/2026/competency_questions.json`](../../tests/fixtures/2026/competency_questions.json)으로 분리한다. 이 파일은 질문 문장, intent·parameter, 구조화된 gold result, 예상 그래프 패턴, Evidence 페이지와 answerability를 담는 회귀 평가 계약이다.
+현재 단계에서는 별도 competency question fixture나 gold result JSON을 만들지 않는다. Neo4j 적재와 Cypher 조회가 아직 없어 `required_nodes`, `expected_graph_patterns`, `answerability`를 자동 판정할 실행 기반이 없기 때문이다.
 
-- `answerability`는 `FULL`, `PARTIAL`, `NOT_SUPPORTED`만 사용한다.
-- `expected_graph_patterns`는 독립적인 `(source)-[relationship]->(target)` 패턴 배열이다.
-- 페이지는 발췌·원본·인쇄 번호를 각각 정수로 저장한다.
-- CQ-007은 구간 시작점(발췌 14쪽·원본 259쪽·인쇄 251쪽)을 기준으로 재검증하여 발췌 16쪽, 원본 261쪽, 인쇄 253쪽으로 교정했다.
-- 실제 사용자 질문은 문자열 비교로 답하지 않고 intent와 parameter로 구조화한 뒤 Neo4j에서 조회해야 한다.
+PoC가 우선 답해야 할 대표 질문은 다음과 같다.
+
+1. 2026학년도 교양 최소 이수학점은 얼마인가?
+2. 대학영어 이수 면제를 받으면 해당 학점도 인정되는가?
+3. 컴퓨터공학과 단일전공의 전공필수 학점은 얼마인가?
+4. 자료구조는 몇 학년 몇 학기에 개설되는가?
+
+질문 문장을 런타임에서 직접 비교해 답을 반환하지 않는다. 향후 Neo4j 적재와 Cypher 조회가 구현되면 테스트 코드와 함께 `tests/fixtures/expected_query_results.json`을 만들고, 실제 조회 결과·근거 페이지·지원 여부를 회귀 검증한다.
 
 ## 13. 현재 미결정 사항
 
@@ -253,5 +255,5 @@ CQ-001~CQ-010은 [`tests/fixtures/2026/competency_questions.json`](../../tests/f
 1. 실제 데이터 JSON 계약을 정의한다.
 2. PDF에서 대표 과목·규칙·`Evidence`를 소량 작성하고 사람이 검증한다.
 3. 승인된 명세를 기준으로 Neo4j 제약조건과 멱등 적재를 구현한다.
-4. 평가 fixture의 그래프 패턴과 gold result로 근거 포함 Cypher 질의를 검증한다.
+4. Cypher 조회 구현과 함께 `tests/fixtures/expected_query_results.json` 및 회귀 테스트를 작성한다.
 5. 이후에만 제한된 자연어 질의와 근거 포함 답변을 구현한다.
