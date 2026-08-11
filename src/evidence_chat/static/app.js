@@ -4,6 +4,23 @@
 
 const $ = (id) => document.getElementById(id);
 const SCREEN_ORDER = ["ask", "progress", "answer"];
+const PIPELINE_PHASES = [
+  ["QUESTION_ANALYSIS", "질문 분석 대기"],
+  ["SCHEMA_SELECTION", "스키마 선택 대기"],
+  ["CYPHER_GENERATION", "Cypher 생성 대기"],
+  ["STATIC_VALIDATION", "정적 안전 검증 대기"],
+  ["NEO4J_EXPLAIN", "Neo4j 실행계획 검증 대기"],
+  ["GRAPH_EXECUTION", "지식그래프 조회 대기"],
+  ["RESULT_VALIDATION", "결과·Evidence 검증 대기"],
+  ["CLAIM_BUILDING", "Claim 구성 대기"],
+  ["ANSWER_RENDERING", "답변 구성 대기"],
+  ["COMPLETED", "전체 처리 완료 대기"],
+];
+const ATTEMPT_PHASES = new Set([
+  "CYPHER_GENERATION",
+  "STATIC_VALIDATION",
+  "NEO4J_EXPLAIN",
+]);
 
 const el = {
   status: $("status"),
@@ -32,6 +49,10 @@ const el = {
   clarification: $("clarification"),
   scopeNotice: $("scope-notice"),
   debugMeta: $("debug-meta"),
+  progressInspectionSection: $("progress-inspection-section"),
+  progressInspectionContent: $("progress-inspection-content"),
+  timelineSection: $("timeline-section"),
+  answerProgressSteps: $("answer-progress-steps"),
   inspectionSection: $("inspection-section"),
   inspectionContent: $("inspection-content"),
   evidenceSection: $("evidence-section"),
@@ -61,6 +82,11 @@ let clientTimeoutMs = 180000;
 let pdfPageCount = 0;
 let modalState = null;
 let modalZoom = 1;
+let queryDetailsEnabled = false;
+let timelineEvents = [];
+let inspectionUpdates = new Map();
+let approvedInspection = null;
+let lastResult = null;
 
 const span = (className, text) => {
   const node = document.createElement("span");
@@ -93,6 +119,7 @@ async function loadHealth() {
     const response = await fetch("/api/health", { cache: "no-store" });
     const data = await response.json();
     pdfAvailable = Boolean(data.pdf_mounted);
+    queryDetailsEnabled = Boolean(data.show_query_details);
     clientTimeoutMs = Math.max(60000, Number(data.client_timeout_seconds || 180) * 1000);
     if (Number.isInteger(data.max_question_length)) {
       el.question.maxLength = data.max_question_length;
@@ -187,7 +214,21 @@ async function ask(question) {
   el.spinner.classList.remove("is-done");
   el.progressTitle.textContent = "답변을 확인하고 있습니다";
   el.progressNow.textContent = "질문 전송됨";
-  el.progressSteps.replaceChildren();
+  timelineEvents = PIPELINE_PHASES.map(([phase, message]) => ({
+    phase,
+    attempt: ATTEMPT_PHASES.has(phase) ? 1 : 0,
+    state: "WAITING",
+    message,
+    elapsed_ms: 0,
+    error_code: null,
+  }));
+  inspectionUpdates = new Map();
+  approvedInspection = null;
+  lastResult = null;
+  renderTimelines();
+  el.timelineSection.hidden = true;
+  el.progressInspectionSection.hidden = true;
+  el.progressInspectionContent.replaceChildren();
   el.inspectionSection.hidden = true;
   el.inspectionContent.replaceChildren();
   el.progressBack.textContent = "요청 취소";
@@ -197,7 +238,6 @@ async function ask(question) {
   activeController = new AbortController();
   const timeout = window.setTimeout(() => activeController.abort("timeout"), clientTimeoutMs);
   let result = null;
-  let inspection = null;
   let failed = false;
 
   try {
@@ -228,12 +268,14 @@ async function ask(question) {
         if (payload.type === "progress") {
           el.progressNow.textContent = payload.message;
           renderProgress(payload);
-        } else if (payload.type === "inspection") {
-          inspection = payload;
+        } else if (payload.type === "inspection_update") {
+          renderInspectionUpdate(payload);
         } else if (payload.type === "result") {
           result = payload;
+          lastResult = payload;
         } else if (payload.type === "error") {
           failed = true;
+          markTimelineFailed(payload.message, payload.error_code || "CHAT_REQUEST_FAILED");
           showNotice(el.progressError, payload.message, true);
         }
       }
@@ -242,6 +284,9 @@ async function ask(question) {
   } catch (error) {
     failed = true;
     const timedOut = activeController && activeController.signal.reason === "timeout";
+    markTimelineCancelled(
+      timedOut ? "응답 대기 시간이 초과되었습니다." : "요청이 취소되었습니다."
+    );
     showNotice(
       el.progressError,
       timedOut
@@ -262,64 +307,263 @@ async function ask(question) {
 
   if (result) {
     renderAnswer(result);
-    renderInspection(inspection);
+    renderTimelines();
+    renderInspectionPanels();
     showScreen("answer");
   }
 }
 
 function renderProgress(payload) {
-  let item = el.progressSteps.querySelector(`[data-phase="${payload.phase}"]`);
-  if (!item) {
-    item = document.createElement("li");
-    item.className = "step";
-    item.dataset.phase = payload.phase;
-    const row = document.createElement("div");
-    row.className = "step-row";
-    row.append(span("step-icon", "·"), span("step-label", payload.message));
-    const time = span("step-time", "");
-    row.append(time);
-    item.append(row);
-    el.progressSteps.append(item);
+  const attempt = Number.isInteger(payload.attempt) ? payload.attempt : 0;
+  let entry = [...timelineEvents]
+    .reverse()
+    .find(
+      (item) =>
+        item.phase === payload.phase &&
+        item.attempt === attempt &&
+        (item.state === "STARTED" || item.state === "WAITING")
+    );
+  if (!entry || payload.state === "STARTED") {
+    if (payload.state === "STARTED" && entry && entry.state === "WAITING") {
+      entry.state = "STARTED";
+      entry.message = payload.message;
+    } else if (payload.state === "STARTED" && entry) {
+      entry.message = payload.message;
+    } else {
+      entry = {
+        phase: payload.phase,
+        attempt,
+        state: payload.state,
+        message: payload.message,
+        elapsed_ms: payload.elapsed_ms,
+        error_code: payload.error_code || null,
+      };
+      const firstWaiting = timelineEvents.findIndex((item) => item.state === "WAITING");
+      if (payload.state === "STARTED" && firstWaiting >= 0) {
+        timelineEvents.splice(firstWaiting, 0, entry);
+      } else {
+        timelineEvents.push(entry);
+      }
+    }
+  } else {
+    entry.state = payload.state;
+    entry.message = payload.message;
+    entry.elapsed_ms = payload.elapsed_ms;
+    entry.error_code = payload.error_code || null;
   }
-  item.querySelector(".step-label").textContent = payload.message;
-  item.classList.remove("is-running", "is-done", "is-failed");
-  item.classList.add(
-    payload.state === "STARTED"
-      ? "is-running"
-      : payload.state === "FAILED"
-        ? "is-failed"
-        : "is-done"
-  );
-  item.querySelector(".step-icon").textContent = payload.state === "COMPLETED" ? "✓" : payload.state === "FAILED" ? "!" : "";
-  item.querySelector(".step-time").textContent = payload.elapsed_ms ? `${payload.elapsed_ms}ms` : "";
+  if (payload.phase === "COMPLETED" && payload.state === "COMPLETED") {
+    timelineEvents = timelineEvents.filter((item) => item.state !== "WAITING");
+  }
+  renderTimelines();
 }
 
-function renderInspection(inspection) {
-  el.inspectionSection.hidden = !inspection;
-  el.inspectionSection.open = false;
-  el.inspectionContent.replaceChildren();
-  if (!inspection) return;
-  const fields = [
-    ["QueryPlan", inspection.query_plan],
-    ["사용 라벨", inspection.labels],
-    ["사용 관계", inspection.relationship_types],
-    ["검증된 읽기 전용 Cypher", inspection.validated_cypher],
-    ["정제된 파라미터", inspection.parameters],
-    ["EXPLAIN 연산자", inspection.explain_operators],
-    ["결과 요약", { row_count: inspection.row_count, evidence_count: inspection.evidence_count }],
-    ["단계별 시간(ms)", inspection.stage_timings_ms],
-  ];
-  fields.forEach(([label, value]) => {
-    if (value === null || value === undefined) return;
-    const item = document.createElement("div");
-    item.className = "inspection-item";
-    const title = document.createElement("strong");
-    title.textContent = label;
-    const body = document.createElement("pre");
-    body.textContent = typeof value === "string" ? value : JSON.stringify(value, null, 2);
-    item.append(title, body);
-    el.inspectionContent.append(item);
+function renderTimelines() {
+  renderTimelineInto(el.progressSteps);
+  renderTimelineInto(el.answerProgressSteps);
+  el.timelineSection.hidden = timelineEvents.length === 0;
+}
+
+function renderTimelineInto(container) {
+  container.replaceChildren();
+  timelineEvents.forEach((event) => {
+    const item = document.createElement("li");
+    item.className = "step";
+    item.dataset.phase = event.phase;
+    item.dataset.attempt = String(event.attempt);
+    const stateClass = {
+      WAITING: "is-waiting",
+      STARTED: "is-running",
+      COMPLETED: "is-done",
+      FAILED: "is-failed",
+      CANCELLED: "is-cancelled",
+    }[event.state];
+    if (stateClass) item.classList.add(stateClass);
+    const icon = { COMPLETED: "✓", FAILED: "!", CANCELLED: "×" }[event.state] || "";
+    const labelText = event.error_code
+      ? `${event.message} — ${event.error_code}`
+      : event.message;
+    const row = document.createElement("div");
+    row.className = "step-row";
+    row.append(span("step-icon", icon), span("step-label", labelText));
+    row.append(
+      span(
+        "step-time",
+        event.state !== "STARTED" && event.state !== "WAITING"
+          ? `${event.elapsed_ms}ms`
+          : ""
+      )
+    );
+    item.append(row);
+    container.append(item);
   });
+}
+
+function markTimelineCancelled(message) {
+  const running = [...timelineEvents].reverse().find((item) => item.state === "STARTED");
+  if (running) {
+    running.state = "CANCELLED";
+    running.message = message;
+  }
+  renderTimelines();
+}
+
+function markTimelineFailed(message, errorCode) {
+  const running = [...timelineEvents].reverse().find((item) => item.state === "STARTED");
+  if (running) {
+    running.state = "FAILED";
+    running.message = message;
+    running.error_code = errorCode;
+  }
+  renderTimelines();
+}
+
+function renderInspectionUpdate(update) {
+  if (!update || update.type !== "inspection_update") return;
+  queryDetailsEnabled = true;
+  if (update.summary && update.summary.discard_previous_candidate) {
+    approvedInspection = null;
+    inspectionUpdates.delete("NEO4J_EXPLAIN");
+    inspectionUpdates.delete("GRAPH_EXECUTION");
+    inspectionUpdates.delete("RESULT_VALIDATION");
+  }
+  if (
+    update.stage === "NEO4J_EXPLAIN" &&
+    update.status === "COMPLETED" &&
+    update.summary &&
+    typeof update.summary.approved_cypher === "string"
+  ) {
+    approvedInspection = update.summary;
+  }
+  if (update.stage === "NEO4J_EXPLAIN" && update.status === "FAILED") {
+    approvedInspection = null;
+  }
+  inspectionUpdates.set(update.stage, {
+    status: update.status,
+    elapsed_ms: update.elapsed_ms,
+    summary: update.summary || {},
+  });
+  renderInspectionPanels();
+}
+
+function renderInspectionPanels() {
+  const visible = queryDetailsEnabled && inspectionUpdates.size > 0;
+  el.progressInspectionSection.hidden = !visible;
+  el.inspectionSection.hidden = !visible;
+  if (!visible) {
+    el.progressInspectionContent.replaceChildren();
+    el.inspectionContent.replaceChildren();
+    return;
+  }
+  if (el.screens.progress.classList.contains("is-active")) {
+    el.progressInspectionSection.open = true;
+  }
+  renderInspectionInto(el.progressInspectionContent);
+  renderInspectionInto(el.inspectionContent);
+}
+
+function addInspectionItem(container, label, value, options = {}) {
+  if (value === null || value === undefined) return;
+  const item = document.createElement("div");
+  item.className = "inspection-item";
+  const head = document.createElement("div");
+  head.className = "inspection-head";
+  const title = document.createElement("strong");
+  title.textContent = label;
+  head.append(title);
+  const body = document.createElement("pre");
+  body.textContent = typeof value === "string" ? value : JSON.stringify(value, null, 2);
+  if (options.cypher) {
+    body.classList.add("cypher-code", "is-collapsed");
+    const feedback = span("copy-feedback", "");
+    feedback.setAttribute("role", "status");
+    feedback.setAttribute("aria-live", "polite");
+    const expand = document.createElement("button");
+    expand.type = "button";
+    expand.className = "inspection-action";
+    expand.textContent = "펼치기";
+    expand.addEventListener("click", () => {
+      const collapsed = body.classList.toggle("is-collapsed");
+      expand.textContent = collapsed ? "펼치기" : "접기";
+    });
+    const copy = document.createElement("button");
+    copy.type = "button";
+    copy.className = "inspection-action";
+    copy.textContent = "Cypher 복사";
+    copy.addEventListener("click", async () => {
+      try {
+        await navigator.clipboard.writeText(value);
+        feedback.textContent = "복사했습니다.";
+      } catch (_) {
+        feedback.textContent = "복사하지 못했습니다.";
+      }
+    });
+    head.append(expand, copy, feedback);
+  }
+  item.append(head, body);
+  container.append(item);
+}
+
+function renderInspectionInto(container) {
+  container.replaceChildren();
+  const analysis = inspectionUpdates.get("QUESTION_ANALYSIS");
+  const schema = inspectionUpdates.get("SCHEMA_SELECTION");
+  const graph = inspectionUpdates.get("GRAPH_EXECUTION");
+  const validation = inspectionUpdates.get("RESULT_VALIDATION");
+  const claims = inspectionUpdates.get("CLAIM_BUILDING");
+  const answer = inspectionUpdates.get("ANSWER_RENDERING");
+  const completed = inspectionUpdates.get("COMPLETED");
+  addInspectionItem(container, "정제된 QueryPlan", analysis && analysis.summary.query_plan);
+  addInspectionItem(container, "질문 분석 상태", analysis && analysis.summary.status);
+  if (schema) {
+    addInspectionItem(container, "선택된 스키마", {
+      labels: schema.summary.labels || [],
+      relationships: schema.summary.relationships || [],
+      node_label_count: schema.summary.node_label_count || 0,
+      relationship_count: schema.summary.relationship_count || 0,
+    });
+  }
+  if (approvedInspection) {
+    addInspectionItem(
+      container,
+      "LLM 생성 후 안전 검증된 Cypher",
+      approvedInspection.approved_cypher,
+      { cypher: true }
+    );
+    addInspectionItem(container, "정제된 파라미터", approvedInspection.parameters);
+    addInspectionItem(container, "EXPLAIN 연산자", approvedInspection.operators);
+    addInspectionItem(container, "사용 라벨·관계와 LIMIT", {
+      labels: approvedInspection.labels || [],
+      relationships: approvedInspection.relationships || [],
+      limit: approvedInspection.limit,
+    });
+  }
+  if (graph || validation || claims || answer) {
+    addInspectionItem(container, "조회·검증 결과", {
+      row_count: graph ? graph.summary.row_count : 0,
+      fact_count: validation ? validation.summary.fact_count : 0,
+      verified_evidence_count: validation
+        ? validation.summary.verified_evidence_count
+        : 0,
+      fact_status_verified: validation
+        ? validation.summary.fact_status_verified
+        : false,
+      evidence_status_verified: validation
+        ? validation.summary.evidence_status_verified
+        : false,
+      direct_provenance_verified: validation
+        ? validation.summary.direct_provenance_verified
+        : false,
+      claim_count: claims ? claims.summary.claim_count : 0,
+      citation_count: answer ? answer.summary.citation_count : 0,
+    });
+  }
+  if (completed) {
+    addInspectionItem(container, "단계별 시간(ms)", completed.summary.stage_timings_ms);
+    addInspectionItem(container, "전체 소요시간(ms)", completed.summary.total_elapsed_ms);
+  }
+  if (lastResult && lastResult.response) {
+    addInspectionItem(container, "요청 식별자", lastResult.response.request_id);
+  }
 }
 
 function renderAnswer(result) {

@@ -232,7 +232,17 @@ class SafetyPipeline:
                 ProgressState.COMPLETED,
                 (perf_counter() - started) * 1000,
                 row_count=result.row_count,
+                fact_count=len(
+                    {
+                        row.get("fact_id")
+                        for row in result.rows
+                        if isinstance(row.get("fact_id"), str)
+                    }
+                ),
                 evidence_count=result.evidence_count,
+                fact_status_verified=True,
+                evidence_status_verified=True,
+                direct_provenance_verified=True,
             )
         except Exception as exc:
             emit_progress(

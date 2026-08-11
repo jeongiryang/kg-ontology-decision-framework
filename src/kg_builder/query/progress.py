@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass, field
 from enum import StrEnum
 from typing import Any, Callable, Mapping
@@ -48,6 +49,15 @@ PROGRESS_MESSAGES: Mapping[tuple[ProgressPhase, ProgressState], str] = {
     (ProgressPhase.COMPLETED, ProgressState.COMPLETED): "답변 준비를 완료했습니다.",
 }
 
+_PUBLIC_ERROR_CODE = re.compile(r"[A-Z][A-Z0-9_]{0,79}\Z")
+_ATTEMPT_PHASES = frozenset(
+    {
+        ProgressPhase.CYPHER_GENERATION,
+        ProgressPhase.STATIC_VALIDATION,
+        ProgressPhase.NEO4J_EXPLAIN,
+    }
+)
+
 
 @dataclass(frozen=True, slots=True)
 class ProgressEvent:
@@ -57,18 +67,47 @@ class ProgressEvent:
     details: Mapping[str, Any] = field(default_factory=dict)
 
     def public_payload(self) -> dict[str, Any]:
-        return {
+        attempt = self.details.get("candidate_attempt")
+        safe_attempt = (
+            attempt
+            if self.phase in _ATTEMPT_PHASES
+            and isinstance(attempt, int)
+            and not isinstance(attempt, bool)
+            and 1 <= attempt <= 10
+            else None
+        )
+        message = PROGRESS_MESSAGES.get(
+            (self.phase, self.state),
+            "처리 단계를 안전하게 종료했습니다."
+            if self.state is ProgressState.FAILED
+            else "처리 중입니다.",
+        )
+        if (
+            self.phase is ProgressPhase.CYPHER_GENERATION
+            and self.state is ProgressState.STARTED
+            and safe_attempt is not None
+            and safe_attempt > 1
+        ):
+            message = "안전한 질의를 다시 생성하는 중…"
+
+        payload: dict[str, Any] = {
             "type": "progress",
             "phase": self.phase.value,
             "state": self.state.value,
-            "message": PROGRESS_MESSAGES.get(
-                (self.phase, self.state),
-                "처리 단계를 안전하게 종료했습니다."
-                if self.state is ProgressState.FAILED
-                else "처리 중입니다.",
-            ),
+            "message": message,
             "elapsed_ms": self.elapsed_ms,
         }
+        if safe_attempt is not None:
+            payload["attempt"] = safe_attempt
+            if self.phase is ProgressPhase.CYPHER_GENERATION and safe_attempt > 1:
+                payload["retry"] = True
+        if self.state is ProgressState.FAILED:
+            error_code = self.details.get("error_code")
+            if isinstance(error_code, str) and _PUBLIC_ERROR_CODE.fullmatch(error_code):
+                payload["error_code"] = error_code
+            else:
+                payload["error_code"] = "PIPELINE_STAGE_FAILED"
+        return payload
 
 
 ProgressCallback = Callable[[ProgressEvent], None]

@@ -153,6 +153,7 @@ class CurriculumChatService:
                     ProgressState.COMPLETED,
                     (perf_counter() - answer_started) * 1000,
                     evidence_count=len(response.citations),
+                    citation_count=len(response.citations),
                 )
         emit_progress(
             progress_callback,

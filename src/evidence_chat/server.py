@@ -14,6 +14,7 @@ import asyncio
 import contextlib
 import json
 import os
+import re
 from collections.abc import AsyncIterator, Callable
 from pathlib import Path
 from threading import Thread
@@ -43,6 +44,7 @@ from kg_builder.query.progress import (
 from kg_builder.query.query_executor import DynamicQueryExecutor
 from kg_builder.query.query_explainer import QueryExplainer
 from kg_builder.query.query_plan import MAX_QUESTION_LENGTH
+from kg_builder.query.query_trace import EMAIL_PATTERN, PHONE_PATTERN, STUDENT_ID_PATTERN
 from kg_builder.query.safety_pipeline import SafetyPipeline
 from kg_builder.query.schema_selector import QuerySchemaSelector
 
@@ -74,24 +76,15 @@ class ChatService(Protocol):
 
 
 class InspectionCollector:
-    """Collect only post-validation metadata explicitly approved for local debugging."""
+    """Build stage-scoped inspection updates from approved pipeline facts only."""
 
-    _GLOBAL_DETAIL_KEYS = frozenset(
-        {
-            "query_plan",
-            "labels",
-            "relationship_types",
-            "row_count",
-            "evidence_count",
-            "claim_count",
-        }
-    )
     _STATIC_DETAIL_KEYS = frozenset(
         {"validated_cypher", "parameters", "labels", "relationship_types"}
     )
+    _SECRET_KEY_MARKERS = ("password", "token", "secret", "api_key", "uri")
+    _LIMIT = re.compile(r"\bLIMIT\s+(\d+)\s*\Z", re.IGNORECASE)
 
     def __init__(self) -> None:
-        self.details: dict[str, Any] = {}
         self.stage_timings_ms: dict[str, int] = {}
         self._active_attempt: int | None = None
         self._pending_query: dict[str, Any] = {}
@@ -108,7 +101,85 @@ class InspectionCollector:
         self._pending_attempt = None
         self._approved_query = {}
 
-    def record(self, event: ProgressEvent) -> None:
+    @classmethod
+    def _mask_text(cls, value: str) -> str:
+        masked = EMAIL_PATTERN.sub("<redacted-email>", value)
+        masked = PHONE_PATTERN.sub("<redacted-phone>", masked)
+        return STUDENT_ID_PATTERN.sub("<redacted-student-id>", masked)[:256]
+
+    @classmethod
+    def _safe_mapping(cls, value: Any) -> dict[str, Any]:
+        if not isinstance(value, dict):
+            return {}
+        output: dict[str, Any] = {}
+        for raw_key, raw_value in value.items():
+            if not isinstance(raw_key, str) or len(raw_key) > 80:
+                continue
+            if any(marker in raw_key.lower() for marker in cls._SECRET_KEY_MARKERS):
+                output[raw_key] = "<redacted>"
+            elif isinstance(raw_value, str):
+                output[raw_key] = cls._mask_text(raw_value)
+            elif isinstance(raw_value, bool) or raw_value is None:
+                output[raw_key] = raw_value
+            elif isinstance(raw_value, (int, float)) and not isinstance(raw_value, bool):
+                output[raw_key] = raw_value
+            elif isinstance(raw_value, (list, tuple)):
+                output[raw_key] = [
+                    cls._mask_text(item) if isinstance(item, str) else item
+                    for item in raw_value[:100]
+                    if isinstance(item, (str, int, float, bool)) or item is None
+                ]
+        return output
+
+    @classmethod
+    def _safe_plan(cls, value: Any) -> dict[str, Any]:
+        if not isinstance(value, dict):
+            return {}
+        plan: dict[str, Any] = {}
+        intent = value.get("intent")
+        if isinstance(intent, str):
+            plan["intent"] = cls._mask_text(intent)
+        plan["filters"] = cls._safe_mapping(value.get("filters"))
+        fields = value.get("requested_fields")
+        if isinstance(fields, (list, tuple)):
+            plan["requested_fields"] = [
+                item for item in fields[:100] if isinstance(item, str) and len(item) <= 80
+            ]
+        for key in ("evidence_required", "selection_mode"):
+            item = value.get(key)
+            if isinstance(item, (str, bool)):
+                plan[key] = item
+        return plan
+
+    @staticmethod
+    def _safe_strings(value: Any) -> list[str]:
+        if not isinstance(value, (list, tuple)):
+            return []
+        return sorted({item for item in value if isinstance(item, str) and len(item) <= 80})
+
+    @staticmethod
+    def _safe_count(value: Any) -> int:
+        return (
+            value
+            if isinstance(value, int) and not isinstance(value, bool) and value >= 0
+            else 0
+        )
+
+    @staticmethod
+    def _update(event: ProgressEvent, summary: dict[str, Any]) -> dict[str, Any]:
+        return {
+            "type": "inspection_update",
+            "stage": event.phase.value,
+            "status": event.state.value,
+            "summary": summary,
+            "elapsed_ms": event.elapsed_ms,
+        }
+
+    @staticmethod
+    def _safe_error_code(event: ProgressEvent) -> str:
+        return str(event.public_payload().get("error_code", "PIPELINE_STAGE_FAILED"))
+
+    def record(self, event: ProgressEvent) -> dict[str, Any] | None:
         attempt = self._candidate_attempt(event)
         if (
             event.phase is ProgressPhase.CYPHER_GENERATION
@@ -116,12 +187,29 @@ class InspectionCollector:
         ):
             self._active_attempt = attempt
             self._discard_candidate()
-            return
+            if attempt is not None and attempt > 1:
+                return self._update(
+                    event,
+                    {
+                        "retry": True,
+                        "discard_previous_candidate": True,
+                    },
+                )
+            return None
+
+        if event.state is ProgressState.FAILED:
+            self.stage_timings_ms[event.phase.value] = event.elapsed_ms
+            if event.phase in {
+                ProgressPhase.STATIC_VALIDATION,
+                ProgressPhase.NEO4J_EXPLAIN,
+            }:
+                self._discard_candidate()
+            return self._update(
+                event,
+                {"error_code": self._safe_error_code(event)},
+            )
 
         if event.phase is ProgressPhase.STATIC_VALIDATION:
-            if event.state is ProgressState.FAILED:
-                self._discard_candidate()
-                return
             if (
                 event.state is ProgressState.COMPLETED
                 and attempt is not None
@@ -138,12 +226,16 @@ class InspectionCollector:
                 else:
                     self._discard_candidate()
                 self.stage_timings_ms[event.phase.value] = event.elapsed_ms
-            return
+                return self._update(
+                    event,
+                    {
+                        "read_only_syntax_verified": True,
+                        "ontology_schema_verified": True,
+                    },
+                )
+            return None
 
         if event.phase is ProgressPhase.NEO4J_EXPLAIN:
-            if event.state is ProgressState.FAILED:
-                self._discard_candidate()
-                return
             if (
                 event.state is ProgressState.COMPLETED
                 and attempt is not None
@@ -154,45 +246,96 @@ class InspectionCollector:
                 if isinstance(operators, list) and all(
                     isinstance(item, str) for item in operators
                 ):
+                    cypher = self._pending_query["validated_cypher"]
+                    limit_match = self._LIMIT.search(cypher)
                     self._approved_query = {
                         **self._pending_query,
                         "operators": list(operators),
+                        "limit": int(limit_match.group(1)) if limit_match else None,
                     }
                 self._pending_query = {}
                 self._pending_attempt = None
                 self.stage_timings_ms[event.phase.value] = event.elapsed_ms
-            return
+                if self._approved_query:
+                    return self._update(
+                        event,
+                        {
+                            "approved_cypher": self._approved_query["validated_cypher"],
+                            "parameters": self._safe_mapping(
+                                self._approved_query["parameters"]
+                            ),
+                            "operators": self._safe_strings(
+                                self._approved_query["operators"]
+                            ),
+                            "labels": self._safe_strings(
+                                self._approved_query.get("labels")
+                            ),
+                            "relationships": self._safe_strings(
+                                self._approved_query.get("relationship_types")
+                            ),
+                            "limit": self._approved_query["limit"],
+                        },
+                    )
+            return None
 
         if event.state is not ProgressState.COMPLETED:
-            return
+            return None
         self.stage_timings_ms[event.phase.value] = event.elapsed_ms
-        for key in self._GLOBAL_DETAIL_KEYS:
-            if key in event.details:
-                self.details[key] = event.details[key]
-
-    def payload(self) -> dict[str, Any]:
-        payload = {
-            "type": "inspection",
-            "query_plan": self.details.get("query_plan"),
-            "labels": self.details.get("labels", []),
-            "relationship_types": self.details.get("relationship_types", []),
-            "row_count": self.details.get("row_count", 0),
-            "evidence_count": self.details.get("evidence_count", 0),
-            "stage_timings_ms": dict(sorted(self.stage_timings_ms.items())),
-        }
-        if self._approved_query:
-            payload.update(
-                {
-                    "labels": self._approved_query.get("labels", payload["labels"]),
-                    "relationship_types": self._approved_query.get(
-                        "relationship_types", payload["relationship_types"]
-                    ),
-                    "validated_cypher": self._approved_query["validated_cypher"],
-                    "parameters": self._approved_query["parameters"],
-                    "explain_operators": self._approved_query["operators"],
-                }
-            )
-        return payload
+        summary: dict[str, Any]
+        if event.phase is ProgressPhase.QUESTION_ANALYSIS:
+            summary = {
+                "status": event.details.get("planning_status"),
+                "query_plan": self._safe_plan(event.details.get("query_plan")),
+            }
+        elif event.phase is ProgressPhase.SCHEMA_SELECTION:
+            labels = self._safe_strings(event.details.get("labels"))
+            relationships = self._safe_strings(event.details.get("relationship_types"))
+            summary = {
+                "labels": labels,
+                "relationships": relationships,
+                "node_label_count": len(labels),
+                "relationship_count": len(relationships),
+            }
+        elif event.phase is ProgressPhase.CYPHER_GENERATION:
+            summary = {
+                "candidate_generated": True,
+                "message": "LLM이 Cypher 후보를 생성했습니다. 안전 검증을 진행합니다.",
+            }
+        elif event.phase is ProgressPhase.GRAPH_EXECUTION:
+            summary = {"row_count": self._safe_count(event.details.get("row_count"))}
+        elif event.phase is ProgressPhase.RESULT_VALIDATION:
+            summary = {
+                "row_count": self._safe_count(event.details.get("row_count")),
+                "fact_count": self._safe_count(event.details.get("fact_count")),
+                "verified_evidence_count": self._safe_count(
+                    event.details.get("evidence_count")
+                ),
+                "fact_status_verified": event.details.get("fact_status_verified") is True,
+                "evidence_status_verified": (
+                    event.details.get("evidence_status_verified") is True
+                ),
+                "direct_provenance_verified": (
+                    event.details.get("direct_provenance_verified") is True
+                ),
+            }
+        elif event.phase is ProgressPhase.CLAIM_BUILDING:
+            summary = {"claim_count": self._safe_count(event.details.get("claim_count"))}
+        elif event.phase is ProgressPhase.ANSWER_RENDERING:
+            summary = {
+                "citation_count": self._safe_count(
+                    event.details.get(
+                        "citation_count", event.details.get("evidence_count", 0)
+                    )
+                )
+            }
+        elif event.phase is ProgressPhase.COMPLETED:
+            summary = {
+                "total_elapsed_ms": event.elapsed_ms,
+                "stage_timings_ms": dict(sorted(self.stage_timings_ms.items())),
+            }
+        else:
+            return None
+        return self._update(event, summary)
 
 
 def _env_bool(name: str, default: bool = False) -> bool:
@@ -367,15 +510,15 @@ async def ask(request: Request) -> Response:
             finished = asyncio.Event()
 
             def on_progress(event: ProgressEvent) -> None:
-                collector.record(event)
+                inspection_update = collector.record(event)
                 loop.call_soon_threadsafe(queue.put_nowait, event.public_payload())
+                if state.show_query_details and inspection_update is not None:
+                    loop.call_soon_threadsafe(queue.put_nowait, inspection_update)
 
             def worker() -> None:
                 try:
                     response = service.ask(question, on_progress)
                     result = adapter.adapt(response)
-                    if state.show_query_details:
-                        loop.call_soon_threadsafe(queue.put_nowait, collector.payload())
                     loop.call_soon_threadsafe(queue.put_nowait, result)
                 except Exception:
                     error: dict[str, Any] = {

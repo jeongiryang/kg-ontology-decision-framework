@@ -72,6 +72,10 @@
         </div>
         <blockquote class="asked" id="asked"></blockquote>
         <ol class="steps progress-steps" id="progress-steps" aria-label="실제 처리 단계"></ol>
+        <details class="debug" id="progress-inspection-section" hidden>
+          <summary>Cypher 및 지식그래프 탐색 정보 보기</summary>
+          <div class="inspection-grid" id="progress-inspection-content"></div>
+        </details>
         <p class="notice error" id="progress-error" hidden></p>
         <button class="ghost" id="progress-back" type="button">요청 취소</button>
       </div>
@@ -91,8 +95,13 @@
           <p class="debug-meta" id="debug-meta" hidden></p>
         </article>
 
+        <details class="debug" id="timeline-section" hidden>
+          <summary>처리 과정 보기</summary>
+          <ol class="steps result-timeline" id="answer-progress-steps" aria-label="완료된 처리 단계"></ol>
+        </details>
+
         <details class="debug" id="inspection-section" hidden>
-          <summary>탐색 과정 보기</summary>
+          <summary>Cypher 및 지식그래프 탐색 정보 보기</summary>
           <div class="inspection-grid" id="inspection-content"></div>
         </details>
 

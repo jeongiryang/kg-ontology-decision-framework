@@ -64,7 +64,7 @@ Starlette lifespan에서 다음 객체를 한 번 구성하고 `app.state`에 �
 | `KG_CHAT_MAX_CONCURRENT` | `1` | 동시에 실행할 전체 chat 요청 수(1~4) |
 | `KG_CHAT_CLIENT_TIMEOUT_SECONDS` | `180` | 브라우저 대기 제한(60~900초) |
 | `KG_CHAT_DEBUG` | `false` | 정제된 request ID/error code 표시 |
-| `KG_CHAT_SHOW_QUERY_DETAILS` | `false` | 검증 완료된 탐색 정보의 별도 inspection 표시 |
+| `KG_CHAT_SHOW_QUERY_DETAILS` | `false` | 승인된 Cypher와 정제된 탐색 정보의 실시간 표시 |
 | `KG_CHAT_PDF_PATH` | 빈 값 | Git 제외된 19쪽 발췌 PDF 경로 |
 | `CHATBOT_HOST` | `127.0.0.1` | 로컬 bind 주소 |
 | `CHATBOT_PORT` | `8501` | UI 포트 |
@@ -106,9 +106,13 @@ QUESTION_ANALYSIS → SCHEMA_SELECTION → CYPHER_GENERATION
 → RESULT_VALIDATION → CLAIM_BUILDING → ANSWER_RENDERING → COMPLETED
 ```
 
-실행하지 않은 단계는 전송하지 않으며 가짜 퍼센트, hidden chain-of-thought, system prompt와 모델 원문은 보내지 않는다. `POST /api/ask`는 `progress`, 선택적 `inspection`, `result`, `error`, `end` SSE 이벤트를 보낸다. `result.response`는 승인된 8개 wire 필드이고 `result.presentation`은 상태 라벨, PDF page group, 공개 PDF 상태와 선택적 debug metadata다.
+실행하지 않은 단계를 완료로 만들지 않으며 가짜 퍼센트, hidden chain-of-thought, system prompt와 모델 원문은 보내지 않는다. 화면은 실제 `progress` 이벤트를 대기·진행 중·완료·실패로 누적하고, 완료된 행과 실제 소요시간을 답변 화면의 `처리 과정 보기`에도 유지한다. 연결을 취소하면 이미 완료된 행은 유지하고 당시 진행 중이던 행만 취소 상태로 표시한다. 안전 파이프라인이 후보를 재생성할 때는 실패 오류 코드와 `안전한 질의를 다시 생성하는 중` 이벤트를 남기되 실패 후보 원문은 보내지 않는다.
 
-`KG_CHAT_SHOW_QUERY_DETAILS=true`일 때만 별도 `inspection` envelope로 정제된 QueryPlan, 사용 라벨·관계, 승인된 읽기 전용 Cypher, 파라미터, EXPLAIN 연산자, 행·Evidence 수와 단계 시간을 표시한다. Cypher는 동일 생성 attempt의 `STATIC_VALIDATION`과 `NEO4J_EXPLAIN`이 모두 완료된 뒤에만 승인한다. EXPLAIN 실패 후보는 즉시 폐기하며, 재생성 시 이전 후보의 임시 상태를 초기화한다. 모든 후보가 실패하면 inspection에 Cypher·파라미터·연산자를 포함하지 않는다. 검증 전·실패 후보 Cypher, 접속 URI, 비밀번호·토큰, system prompt, 모델 원문과 traceback은 포함하지 않는다. sealed `ChatResponse` 8필드는 변경하지 않는다.
+`POST /api/ask`는 `progress`, 선택적 `inspection_update`, `result`, `error`, `end` SSE 이벤트를 보낸다. `result.response`는 승인된 8개 wire 필드이고 `result.presentation`은 상태 라벨, PDF page group, 공개 PDF 상태와 선택적 debug metadata다. `inspection_update`는 단계별 allowlist 요약만 담으며 실제 확정 시점에 `result`보다 먼저 전송될 수 있다.
+
+`KG_CHAT_SHOW_QUERY_DETAILS=true`일 때만 처리 중·결과 화면의 `Cypher 및 지식그래프 탐색 정보 보기`에 정제된 QueryPlan, 선택 스키마, 승인된 읽기 전용 Cypher, 정제된 파라미터, EXPLAIN 연산자, 행·Fact·VERIFIED Evidence·Claim·Citation 수와 단계 시간을 누적한다. Cypher는 동일 생성 attempt의 `STATIC_VALIDATION`과 `NEO4J_EXPLAIN`이 모두 완료된 뒤에만 `inspection_update`로 승인한다. 정적 검증 직후에는 후보 생성·검증 중이라는 고정 문구만 표시한다. EXPLAIN 실패 후보는 공개하지 않고, 후속 단계 실패로 재생성을 시작하면 이전 승인 후보도 UI에서 철회한다. 재시도 성공 시 최종 승인 후보만 남으며 모든 후보가 실패하면 Cypher 영역을 표시하지 않는다.
+
+승인된 Cypher는 가로 스크롤, 접기·펼치기와 키보드 접근 가능한 복사 버튼을 제공한다. 검증 전·실패 후보 Cypher, 접속 URI·계정, 로컬 경로, 비밀번호·토큰·API key, system prompt, 모델 원문, traceback, 내부 승인 seal·digest는 상세 모드에서도 포함하지 않는다. sealed `ChatResponse` 8필드는 변경하지 않는다.
 
 ## Citation과 PDF 표시
 
