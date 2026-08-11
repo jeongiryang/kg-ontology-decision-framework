@@ -16,7 +16,12 @@ from kg_builder.query.query_plan import (
 from kg_builder.query.schema_catalog import DEFAULT_SPEC_PATH, ROOT, SchemaCatalog
 
 from .client import LLMResponseError, StructuredLLMClient
-from .models import PlanningOutcome, PlanningStatus
+from .models import (
+    GraduationQuestionClass,
+    PlanningOutcome,
+    PlanningStatus,
+    UnsupportedReason,
+)
 from .prompts import PLANNER_SYSTEM_PROMPT, planner_prompt
 
 
@@ -42,12 +47,36 @@ SELECTION_MODES = frozenset(item.value for item in SelectionMode)
 COURSE_REQUEST_FIELDS = frozenset(
     {"course_code", "name_ko", "grade_year", "semester", "credits", "completion_type"}
 )
-_PERSONAL_HISTORY = re.compile(
-    r"(?:내가|제가|나는|저는|개인|수강(?:했|한|내역)|이수(?:했|한)|들었|성적|취득(?:했|한))"
+_GRADUATION_CONTEXT = re.compile(
+    r"(?:졸업|영어\s*대체|대학영어|공인\s*시험|TOEIC|토익)", re.IGNORECASE
 )
-_PERSONAL_JUDGMENT = re.compile(
-    r"(?:졸업|남은\s*(?:과목|학점)|앞으로|뭘\s*해야|무엇을\s*해야|가능(?:한가|할까|해))"
+_PERSONAL_RECORD = re.compile(
+    r"(?:지금까지|현재까지).{0,12}(?:들|수강|이수)|"
+    r"(?:수강|이수)\s*(?:내역|과목)|성적표|내\s*성적|취득\s*학점|"
+    r"(?:들었|수강했|이수했)(?:는데|지만|고)"
 )
+_HOLISTIC_JUDGMENT = re.compile(
+    r"(?:졸업(?:할\s*수|\s*가능)|남은\s*(?:과목|학점|요건)|"
+    r"(?:뭘|무엇을)\s*해야\s*졸업|졸업(?:하려면|하기\s*위해))"
+)
+_SINGLE_CONDITION = re.compile(
+    r"(?:\d+(?:\.\d+)?\s*(?:점|학점).{0,24}(?:충족|가능|되|면제)|"
+    r"(?:토익|TOEIC|점수|학점).{0,24}\d+(?:\.\d+)?)",
+    re.IGNORECASE,
+)
+_GENERAL_RULE_CRITERION = re.compile(
+    r"(?:기준|최소|최대|요건|규정|점수|학점|필수\s*과목|면제)"
+)
+_SUBJECT_FIELD_QUESTION_ALIASES: Mapping[str, re.Pattern[str]] = {
+    "TOEIC": re.compile(r"(?:TOEIC|토익)", re.IGNORECASE),
+    "TOEIC_SPEAKING": re.compile(r"(?:TOEIC\s*SPEAKING|토익\s*스피킹)", re.IGNORECASE),
+    "TOEFL_IBT": re.compile(r"(?:TOEFL|토플)", re.IGNORECASE),
+    "TEPS": re.compile(r"(?:TEPS|텝스)", re.IGNORECASE),
+    "NEW_TEPS": re.compile(r"(?:NEW\s*TEPS|뉴\s*텝스)", re.IGNORECASE),
+    "OPIC": re.compile(r"(?:OPIC|오픽)", re.IGNORECASE),
+    "GTELP": re.compile(r"(?:G-?TELP|지텔프)", re.IGNORECASE),
+    "FLEX": re.compile(r"FLEX", re.IGNORECASE),
+}
 _REQUESTED_FIELD_PATTERNS: Mapping[str, re.Pattern[str]] = {
     "grade_year": re.compile(r"(?:몇|어느)\s*학년"),
     "semester": re.compile(r"(?:몇|어느)\s*학기"),
@@ -90,7 +119,7 @@ def planner_response_schema(catalog: SchemaCatalog) -> dict[str, Any]:
             "requested_fields": {
                 "type": "array",
                 "items": {"type": "string", "enum": requested_fields},
-                "minItems": 1,
+                "minItems": 0,
                 "uniqueItems": True,
             },
             "evidence_required": {"type": "boolean"},
@@ -117,6 +146,8 @@ def build_planner_context(
     data = json.loads(data_path.read_text(encoding="utf-8"))
     departments = []
     rule_ids = []
+    review_required_rules: dict[str, dict[str, Any]] = {}
+    nodes_by_id = {node["id"]: node for node in data["nodes"]}
     academic_years: set[int] = set()
     for node in data["nodes"]:
         labels = set(node["labels"])
@@ -127,18 +158,45 @@ def build_planner_context(
             departments.append(
                 {"department_id": props["department_id"], "name_ko": props["name_ko"]}
             )
-        if "Rule" in labels and props.get("status") == "VERIFIED":
-            rule_ids.append(
-                {
-                    "rule_id": props["rule_id"],
-                    "rule_type": props.get("rule_type"),
-                    "semantic_hint_without_values": re.sub(
-                        r"\d+(?:[.~～-]\d+)?",
-                        "<number>",
-                        props.get("description_ko", ""),
-                    ),
-                }
-            )
+        if "Rule" in labels:
+            item = {
+                "rule_id": props["rule_id"],
+                "rule_type": props.get("rule_type"),
+                "semantic_hint_without_values": re.sub(
+                    r"\d+(?:[.~～-]\d+)?",
+                    "<number>",
+                    props.get("description_ko", ""),
+                ),
+            }
+            if props.get("status") == "VERIFIED":
+                rule_ids.append(item)
+            elif props.get("status") == "REVIEW_REQUIRED":
+                review_required_rules[node["id"]] = item
+    group_to_rule: dict[str, str] = {}
+    condition_fields_by_rule: dict[str, set[str]] = {
+        rule_id: set() for rule_id in review_required_rules
+    }
+    for relationship in data["relationships"]:
+        if (
+            relationship["type"] == "HAS_CONDITION_GROUP"
+            and relationship["from_id"] in review_required_rules
+        ):
+            group_to_rule[relationship["to_id"]] = relationship["from_id"]
+    for relationship in data["relationships"]:
+        if relationship["type"] != "HAS_CONDITION":
+            continue
+        rule_id = group_to_rule.get(relationship["from_id"])
+        condition = nodes_by_id.get(relationship["to_id"])
+        if rule_id is None or condition is None:
+            continue
+        subject_field = condition.get("properties", {}).get("subject_field")
+        if isinstance(subject_field, str) and subject_field:
+            condition_fields_by_rule[rule_id].add(subject_field)
+    review_items = []
+    for rule_id, item in review_required_rules.items():
+        review_item = dict(item)
+        review_item["condition_fields"] = sorted(condition_fields_by_rule[rule_id])
+        review_items.append(review_item)
     default_scope: dict[str, Any] = {}
     if len(academic_years) == 1:
         default_scope["academic_year"] = next(iter(academic_years))
@@ -148,6 +206,9 @@ def build_planner_context(
         "academic_years": sorted(academic_years),
         "departments": sorted(departments, key=lambda item: item["department_id"]),
         "verified_rule_identifiers": sorted(rule_ids, key=lambda item: item["rule_id"]),
+        "review_required_rule_identifiers": sorted(
+            review_items, key=lambda item: item["rule_id"]
+        ),
         "supported_filters": sorted(FILTER_BINDINGS),
         "controlled_vocabularies": {
             name: sorted(values) for name, values in catalog.controlled_vocabularies.items()
@@ -157,6 +218,44 @@ def build_planner_context(
         ),
         "default_scope": default_scope,
     }
+
+
+def classify_graduation_question(question: str) -> GraduationQuestionClass:
+    """Classify required data scope without inferring any academic rule value."""
+
+    if not _GRADUATION_CONTEXT.search(question):
+        return GraduationQuestionClass.OTHER
+    if _PERSONAL_RECORD.search(question) and _HOLISTIC_JUDGMENT.search(question):
+        return GraduationQuestionClass.FULL_PERSONAL_HISTORY
+    if _SINGLE_CONDITION.search(question):
+        return GraduationQuestionClass.SINGLE_CONDITION_COMPARISON
+    if _GENERAL_RULE_CRITERION.search(question):
+        return GraduationQuestionClass.GENERAL_RULE
+    return GraduationQuestionClass.GENERAL_RULE
+
+
+def _matches_review_required_rule(
+    question: str, context: Mapping[str, Any]
+) -> bool:
+    """Detect a known unresolved rule family without reading or returning its values."""
+
+    items = context.get("review_required_rule_identifiers")
+    if not isinstance(items, list):
+        return False
+    for item in items:
+        if not isinstance(item, Mapping):
+            continue
+        fields = item.get("condition_fields")
+        if not isinstance(fields, list):
+            continue
+        for field in fields:
+            if not isinstance(field, str):
+                continue
+            family = field.split(".", 1)[0].upper()
+            matcher = _SUBJECT_FIELD_QUESTION_ALIASES.get(family)
+            if matcher is not None and matcher.search(question):
+                return True
+    return False
 
 
 class LocalQueryPlanner:
@@ -175,14 +274,26 @@ class LocalQueryPlanner:
         if not isinstance(question, str) or not question.strip():
             raise QueryPlanError("question must be a non-empty string")
         question = question.strip()
-        if _PERSONAL_HISTORY.search(question) and _PERSONAL_JUDGMENT.search(question):
-            return PlanningOutcome(status=PlanningStatus.UNSUPPORTED)
+        question_classification = classify_graduation_question(question)
+        if question_classification is GraduationQuestionClass.FULL_PERSONAL_HISTORY:
+            return PlanningOutcome(
+                status=PlanningStatus.UNSUPPORTED,
+                unsupported_reason=UnsupportedReason.PERSONAL_HISTORY,
+            )
+        if (
+            question_classification is GraduationQuestionClass.GENERAL_RULE
+            and _matches_review_required_rule(question, self.context)
+        ):
+            return PlanningOutcome(status=PlanningStatus.UNRESOLVED)
         previous_error: str | None = None
         for attempt in range(2):
             generation = self.client.generate_json(
                 system_prompt=PLANNER_SYSTEM_PROMPT,
                 user_prompt=planner_prompt(
-                    question, self.context, previous_error=previous_error
+                    question,
+                    self.context,
+                    question_classification=question_classification.value,
+                    previous_error=previous_error,
                 ),
                 response_schema=planner_response_schema(self.catalog),
             )
@@ -245,9 +356,18 @@ class LocalQueryPlanner:
                     if fully_scoped_course and isinstance(requested_fields, list):
                         status = PlanningStatus.READY
                     else:
+                        unsupported_reason = None
+                        if status is PlanningStatus.UNSUPPORTED:
+                            unsupported_reason = (
+                                UnsupportedReason.SINGLE_CONDITION_COMPARISON
+                                if question_classification
+                                is GraduationQuestionClass.SINGLE_CONDITION_COMPARISON
+                                else UnsupportedReason.GENERAL_FEATURE
+                            )
                         return PlanningOutcome(
                             status=status,
                             message=self._safe_status_message(status, selection_mode, filters),
+                            unsupported_reason=unsupported_reason,
                         )
                 # Every executable query in this project is evidence-grounded.  A
                 # small local model can correctly identify a fully scoped course

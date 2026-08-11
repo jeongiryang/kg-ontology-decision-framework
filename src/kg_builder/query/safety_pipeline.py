@@ -84,7 +84,10 @@ class SafetyPipeline:
         cypher: str,
         *,
         progress_callback: ProgressCallback | None = None,
+        candidate_attempt: int = 1,
     ) -> PipelineOutcome:
+        if candidate_attempt < 1:
+            raise ValueError("candidate_attempt must be positive")
         raw_filters = payload.get("filters", {}) if isinstance(payload, Mapping) else {}
         raw_question = payload.get("question", "") if isinstance(payload, Mapping) else ""
         trace = QueryTrace(
@@ -125,6 +128,7 @@ class SafetyPipeline:
             ProgressPhase.STATIC_VALIDATION,
             ProgressState.STARTED,
             0,
+            candidate_attempt=candidate_attempt,
         )
         try:
             validated = CypherValidator(catalog, max_rows=self.max_rows).validate(plan, cypher)
@@ -138,6 +142,7 @@ class SafetyPipeline:
                 parameters=dict(validated.parameters),
                 labels=list(validated.labels),
                 relationship_types=list(validated.relationship_types),
+                candidate_attempt=candidate_attempt,
             )
         except Exception as exc:
             emit_progress(
@@ -146,6 +151,7 @@ class SafetyPipeline:
                 ProgressState.FAILED,
                 (perf_counter() - started) * 1000,
                 error_code=getattr(exc, "code", exc.__class__.__name__),
+                candidate_attempt=candidate_attempt,
             )
             self._raise(trace, TraceStage.CYPHER_VALIDATION, started, exc)
 
@@ -155,6 +161,7 @@ class SafetyPipeline:
             ProgressPhase.NEO4J_EXPLAIN,
             ProgressState.STARTED,
             0,
+            candidate_attempt=candidate_attempt,
         )
         try:
             explained = self.explainer.explain(validated)
@@ -165,6 +172,7 @@ class SafetyPipeline:
                 ProgressState.COMPLETED,
                 (perf_counter() - started) * 1000,
                 operators=list(explained.operators),
+                candidate_attempt=candidate_attempt,
             )
         except Exception as exc:
             emit_progress(
@@ -173,6 +181,7 @@ class SafetyPipeline:
                 ProgressState.FAILED,
                 (perf_counter() - started) * 1000,
                 error_code=getattr(exc, "code", exc.__class__.__name__),
+                candidate_attempt=candidate_attempt,
             )
             self._raise(trace, TraceStage.NEO4J_EXPLAIN, started, exc)
 

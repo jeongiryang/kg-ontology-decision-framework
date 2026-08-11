@@ -43,6 +43,7 @@ class NaturalLanguageResult:
     error_stage: str | None = None
     error_code: str | None = None
     message: str | None = None
+    unsupported_reason: str | None = None
 
     def to_dict(self) -> dict[str, Any]:
         payload: dict[str, Any] = {
@@ -131,6 +132,11 @@ class NaturalLanguageQueryService:
                 model=self.model,
                 elapsed_seconds=perf_counter() - started,
                 message=planning.message,
+                unsupported_reason=(
+                    planning.unsupported_reason.value
+                    if planning.unsupported_reason is not None
+                    else None
+                ),
             )
 
         plan = planning.plan
@@ -178,12 +184,14 @@ class NaturalLanguageQueryService:
 
         previous_error: str | None = None
         for attempt in range(self.generator_retries + 1):
+            candidate_attempt = attempt + 1
             phase_started = perf_counter()
             emit_progress(
                 progress_callback,
                 ProgressPhase.CYPHER_GENERATION,
                 ProgressState.STARTED,
                 0,
+                candidate_attempt=candidate_attempt,
             )
             try:
                 cypher = self.generator.generate(
@@ -198,6 +206,7 @@ class NaturalLanguageQueryService:
                     ProgressState.FAILED,
                     (perf_counter() - phase_started) * 1000,
                     error_code=exc.code,
+                    candidate_attempt=candidate_attempt,
                 )
                 return self._failure(
                     provisional_id,
@@ -213,6 +222,7 @@ class NaturalLanguageQueryService:
                     ProgressState.FAILED,
                     (perf_counter() - phase_started) * 1000,
                     error_code=getattr(exc, "code", exc.__class__.__name__),
+                    candidate_attempt=candidate_attempt,
                 )
                 return self._failure(
                     provisional_id,
@@ -226,6 +236,7 @@ class NaturalLanguageQueryService:
                 ProgressPhase.CYPHER_GENERATION,
                 ProgressState.COMPLETED,
                 (perf_counter() - phase_started) * 1000,
+                candidate_attempt=candidate_attempt,
             )
             try:
                 outcome: PipelineOutcome = self.pipeline.run(
@@ -235,6 +246,7 @@ class NaturalLanguageQueryService:
                     },
                     cypher,
                     progress_callback=progress_callback,
+                    candidate_attempt=candidate_attempt,
                 )
                 return NaturalLanguageResult(
                     request_id=outcome.request_id,

@@ -80,7 +80,7 @@ request_id, status, answer_text, citations,
 used_fact_ids, used_evidence_ids, clarification, error_code
 ```
 
-일반 화면에는 `answer_text`, 상태, clarification과 Citation만 표시한다. 내부 Fact/Evidence ID, request ID와 error code는 숨긴다. `KG_CHAT_DEBUG=true`일 때만 정제된 request ID와 allowlist 오류 코드를 개발 정보로 표시한다. 개인 수강 이력·개인별 졸업 판정은 `SAFE_FAILURE`가 아니라 결정론적 `UNSUPPORTED` 안내로 처리한다.
+일반 화면에는 `answer_text`, 상태, clarification과 Citation만 표시한다. 내부 Fact/Evidence ID, request ID와 error code는 숨긴다. `KG_CHAT_DEBUG=true`일 때만 정제된 request ID와 allowlist 오류 코드를 개발 정보로 표시한다. 개인 수강 이력·개인별 졸업 판정은 `SAFE_FAILURE`가 아니라 결정론적 `UNSUPPORTED` 안내로 처리한다. `내가`, `학생`, `졸업` 같은 단어만으로 개인 이력 질문으로 판정하지 않으며, 일반 규정 조회·단일 조건 비교·전체 개인 이력 판정을 구분한다. 단일 점수와 규정의 자동 비교가 미지원이면 개인 수강 이력 부재가 아닌 별도의 고정 한국어 안내를 사용한다.
 
 화면의 기본 검색 범위는 `2026`, `department:cwnu:cse`다. 사용자가 연도·학과를 생략한 과목 질문에만 기본값을 채우며, 사용자가 명시한 다른 범위를 덮어쓰지 않고 `OUT_OF_SCOPE`로 판정한다. planner 계약은 검색에 이미 주어진 `filters`와 사용자가 답으로 요구한 `requested_fields`를 분리한다. 따라서 “몇 학년·몇 학기”는 누락 필터가 아니라 조회 필드다. 동명 여부는 질문 문자열이 아니라 ResultValidator가 반환된 stable `course_identity` 수로 판단한다.
 
@@ -108,7 +108,7 @@ QUESTION_ANALYSIS → SCHEMA_SELECTION → CYPHER_GENERATION
 
 실행하지 않은 단계는 전송하지 않으며 가짜 퍼센트, hidden chain-of-thought, system prompt와 모델 원문은 보내지 않는다. `POST /api/ask`는 `progress`, 선택적 `inspection`, `result`, `error`, `end` SSE 이벤트를 보낸다. `result.response`는 승인된 8개 wire 필드이고 `result.presentation`은 상태 라벨, PDF page group, 공개 PDF 상태와 선택적 debug metadata다.
 
-`KG_CHAT_SHOW_QUERY_DETAILS=true`일 때만 별도 `inspection` envelope로 정제된 QueryPlan, 사용 라벨·관계, 정적 검증을 통과한 읽기 전용 Cypher, 파라미터, EXPLAIN 연산자, 행·Evidence 수와 단계 시간을 표시한다. 검증 전 Cypher, 접속 URI, 비밀번호·토큰, system prompt, 모델 원문과 traceback은 포함하지 않는다. sealed `ChatResponse` 8필드는 변경하지 않는다.
+`KG_CHAT_SHOW_QUERY_DETAILS=true`일 때만 별도 `inspection` envelope로 정제된 QueryPlan, 사용 라벨·관계, 승인된 읽기 전용 Cypher, 파라미터, EXPLAIN 연산자, 행·Evidence 수와 단계 시간을 표시한다. Cypher는 동일 생성 attempt의 `STATIC_VALIDATION`과 `NEO4J_EXPLAIN`이 모두 완료된 뒤에만 승인한다. EXPLAIN 실패 후보는 즉시 폐기하며, 재생성 시 이전 후보의 임시 상태를 초기화한다. 모든 후보가 실패하면 inspection에 Cypher·파라미터·연산자를 포함하지 않는다. 검증 전·실패 후보 Cypher, 접속 URI, 비밀번호·토큰, system prompt, 모델 원문과 traceback은 포함하지 않는다. sealed `ChatResponse` 8필드는 변경하지 않는다.
 
 ## Citation과 PDF 표시
 

@@ -34,7 +34,12 @@ from kg_builder.llm.client import LLMConfigurationError, LLMSettings, create_llm
 from kg_builder.llm.cypher_generator import LocalCypherGenerator
 from kg_builder.llm.planner import LocalQueryPlanner
 from kg_builder.query.natural_language_service import NaturalLanguageQueryService
-from kg_builder.query.progress import ProgressCallback, ProgressEvent, ProgressState
+from kg_builder.query.progress import (
+    ProgressCallback,
+    ProgressEvent,
+    ProgressPhase,
+    ProgressState,
+)
 from kg_builder.query.query_executor import DynamicQueryExecutor
 from kg_builder.query.query_explainer import QueryExplainer
 from kg_builder.query.query_plan import MAX_QUESTION_LENGTH
@@ -71,45 +76,123 @@ class ChatService(Protocol):
 class InspectionCollector:
     """Collect only post-validation metadata explicitly approved for local debugging."""
 
-    _DETAIL_KEYS = frozenset(
+    _GLOBAL_DETAIL_KEYS = frozenset(
         {
             "query_plan",
             "labels",
             "relationship_types",
-            "validated_cypher",
-            "parameters",
-            "operators",
             "row_count",
             "evidence_count",
             "claim_count",
         }
     )
+    _STATIC_DETAIL_KEYS = frozenset(
+        {"validated_cypher", "parameters", "labels", "relationship_types"}
+    )
 
     def __init__(self) -> None:
         self.details: dict[str, Any] = {}
         self.stage_timings_ms: dict[str, int] = {}
+        self._active_attempt: int | None = None
+        self._pending_query: dict[str, Any] = {}
+        self._pending_attempt: int | None = None
+        self._approved_query: dict[str, Any] = {}
+
+    @staticmethod
+    def _candidate_attempt(event: ProgressEvent) -> int | None:
+        value = event.details.get("candidate_attempt")
+        return value if isinstance(value, int) and value > 0 else None
+
+    def _discard_candidate(self) -> None:
+        self._pending_query = {}
+        self._pending_attempt = None
+        self._approved_query = {}
 
     def record(self, event: ProgressEvent) -> None:
+        attempt = self._candidate_attempt(event)
+        if (
+            event.phase is ProgressPhase.CYPHER_GENERATION
+            and event.state is ProgressState.STARTED
+        ):
+            self._active_attempt = attempt
+            self._discard_candidate()
+            return
+
+        if event.phase is ProgressPhase.STATIC_VALIDATION:
+            if event.state is ProgressState.FAILED:
+                self._discard_candidate()
+                return
+            if (
+                event.state is ProgressState.COMPLETED
+                and attempt is not None
+                and attempt == self._active_attempt
+            ):
+                candidate = {
+                    key: event.details[key]
+                    for key in self._STATIC_DETAIL_KEYS
+                    if key in event.details
+                }
+                if "validated_cypher" in candidate and "parameters" in candidate:
+                    self._pending_query = candidate
+                    self._pending_attempt = attempt
+                else:
+                    self._discard_candidate()
+                self.stage_timings_ms[event.phase.value] = event.elapsed_ms
+            return
+
+        if event.phase is ProgressPhase.NEO4J_EXPLAIN:
+            if event.state is ProgressState.FAILED:
+                self._discard_candidate()
+                return
+            if (
+                event.state is ProgressState.COMPLETED
+                and attempt is not None
+                and attempt == self._active_attempt == self._pending_attempt
+                and self._pending_query
+            ):
+                operators = event.details.get("operators")
+                if isinstance(operators, list) and all(
+                    isinstance(item, str) for item in operators
+                ):
+                    self._approved_query = {
+                        **self._pending_query,
+                        "operators": list(operators),
+                    }
+                self._pending_query = {}
+                self._pending_attempt = None
+                self.stage_timings_ms[event.phase.value] = event.elapsed_ms
+            return
+
         if event.state is not ProgressState.COMPLETED:
             return
         self.stage_timings_ms[event.phase.value] = event.elapsed_ms
-        for key in self._DETAIL_KEYS:
+        for key in self._GLOBAL_DETAIL_KEYS:
             if key in event.details:
                 self.details[key] = event.details[key]
 
     def payload(self) -> dict[str, Any]:
-        return {
+        payload = {
             "type": "inspection",
             "query_plan": self.details.get("query_plan"),
             "labels": self.details.get("labels", []),
             "relationship_types": self.details.get("relationship_types", []),
-            "validated_cypher": self.details.get("validated_cypher"),
-            "parameters": self.details.get("parameters", {}),
-            "explain_operators": self.details.get("operators", []),
             "row_count": self.details.get("row_count", 0),
             "evidence_count": self.details.get("evidence_count", 0),
             "stage_timings_ms": dict(sorted(self.stage_timings_ms.items())),
         }
+        if self._approved_query:
+            payload.update(
+                {
+                    "labels": self._approved_query.get("labels", payload["labels"]),
+                    "relationship_types": self._approved_query.get(
+                        "relationship_types", payload["relationship_types"]
+                    ),
+                    "validated_cypher": self._approved_query["validated_cypher"],
+                    "parameters": self._approved_query["parameters"],
+                    "explain_operators": self._approved_query["operators"],
+                }
+            )
+        return payload
 
 
 def _env_bool(name: str, default: bool = False) -> bool:

@@ -14,8 +14,13 @@ from kg_builder.llm.client import (
 )
 from kg_builder.llm.cypher_generator import LocalCypherGenerator, build_syntax_scaffold
 from kg_builder.query.cypher_validator import CypherValidator
-from kg_builder.llm.models import PlanningOutcome, PlanningStatus
-from kg_builder.llm.planner import LocalQueryPlanner
+from kg_builder.llm.models import (
+    GraduationQuestionClass,
+    PlanningOutcome,
+    PlanningStatus,
+    UnsupportedReason,
+)
+from kg_builder.llm.planner import LocalQueryPlanner, classify_graduation_question
 from kg_builder.query.natural_language_service import NaturalLanguageQueryService
 from kg_builder.query.query_plan import QueryPlan, SelectionMode
 from kg_builder.query.safety_pipeline import SafetyPipeline
@@ -264,6 +269,63 @@ class LocalLLMContractTests(unittest.TestCase):
             "데이터베이스개론을 들었는데 뭘 해야 졸업하려면?"
         )
         self.assertEqual(outcome.status, PlanningStatus.UNSUPPORTED)
+        self.assertEqual(
+            outcome.unsupported_reason, UnsupportedReason.PERSONAL_HISTORY
+        )
+        self.assertFalse(client.prompts)
+
+    def test_general_graduation_rule_with_pronouns_is_not_personal_history(self):
+        question = (
+            "컴공과 학생인데 내가 졸업하고 싶은데 졸업하기 위해서 영어 대체로 "
+            "토익 점수를 얼마나 받아야 할까? 최소 기준점이 있어?"
+        )
+        client = SequenceClient([])
+        outcome = LocalQueryPlanner(client).plan(question)
+        self.assertEqual(
+            classify_graduation_question(question),
+            GraduationQuestionClass.GENERAL_RULE,
+        )
+        self.assertEqual(outcome.status, PlanningStatus.UNRESOLVED)
+        self.assertFalse(client.prompts)
+        context = LocalQueryPlanner(SequenceClient([])).context
+        serialized_review = str(context["review_required_rule_identifiers"])
+        self.assertIn("TOEIC.score", serialized_review)
+        self.assertNotIn("700", serialized_review)
+
+    def test_single_condition_comparison_has_distinct_unsupported_reason(self):
+        question = "토익 700점이면 영어 대체 기준을 충족해?"
+        payload = {
+            "status": "UNSUPPORTED",
+            "intent": None,
+            "filters": {},
+            "requested_fields": [],
+            "evidence_required": True,
+            "message": None,
+            "selection_mode": "SINGLE_RULE",
+        }
+        outcome = LocalQueryPlanner(SequenceClient([payload])).plan(question)
+        self.assertEqual(
+            classify_graduation_question(question),
+            GraduationQuestionClass.SINGLE_CONDITION_COMPARISON,
+        )
+        self.assertEqual(outcome.status, PlanningStatus.UNSUPPORTED)
+        self.assertEqual(
+            outcome.unsupported_reason,
+            UnsupportedReason.SINGLE_CONDITION_COMPARISON,
+        )
+
+    def test_full_personal_history_remains_unsupported_without_llm(self):
+        question = "내가 지금까지 들은 과목과 학점으로 졸업할 수 있어?"
+        client = SequenceClient([])
+        outcome = LocalQueryPlanner(client).plan(question)
+        self.assertEqual(
+            classify_graduation_question(question),
+            GraduationQuestionClass.FULL_PERSONAL_HISTORY,
+        )
+        self.assertEqual(outcome.status, PlanningStatus.UNSUPPORTED)
+        self.assertEqual(
+            outcome.unsupported_reason, UnsupportedReason.PERSONAL_HISTORY
+        )
         self.assertFalse(client.prompts)
 
     def test_generator_returns_only_candidate_cypher(self) -> None:

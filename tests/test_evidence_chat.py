@@ -14,7 +14,7 @@ import httpx2
 
 from evidence_chat import pdf_evidence
 from evidence_chat.chat_adapter import CHAT_RESPONSE_FIELDS, ChatResponseAdapter
-from evidence_chat.server import ChatState, create_app
+from evidence_chat.server import ChatState, InspectionCollector, create_app
 from kg_builder.answer.contracts import ChatErrorCode, ChatResponse, ChatStatus
 from kg_builder.answer.service import CurriculumChatService
 from kg_builder.query.natural_language_service import NaturalLanguageResult
@@ -138,14 +138,25 @@ class _ChatStub:
         }
         if progress_callback:
             for phase in ProgressPhase:
+                phase_details = dict(details.get(phase, {}))
+                if phase in {
+                    ProgressPhase.CYPHER_GENERATION,
+                    ProgressPhase.STATIC_VALIDATION,
+                    ProgressPhase.NEO4J_EXPLAIN,
+                }:
+                    phase_details["candidate_attempt"] = 1
                 if phase is not ProgressPhase.COMPLETED:
-                    progress_callback(ProgressEvent(phase, ProgressState.STARTED, 0))
+                    progress_callback(
+                        ProgressEvent(
+                            phase, ProgressState.STARTED, 0, phase_details
+                        )
+                    )
                 progress_callback(
                     ProgressEvent(
                         phase,
                         ProgressState.COMPLETED,
                         1,
-                        details.get(phase, {}),
+                        phase_details,
                     )
                 )
         return self.response
@@ -203,6 +214,101 @@ class ChatResponseAdapterTests(unittest.TestCase):
         pages = adapted["presentation"]["evidence_pages"]
         self.assertEqual(len(pages), 1)
         self.assertEqual(len(pages[0]["evidence"]), 9)
+
+    def test_unsupported_reason_uses_fixed_non_personal_comparison_message(self):
+        result = NaturalLanguageResult(
+            request_id="request-comparison",
+            status="UNSUPPORTED",
+            model="fake-model",
+            elapsed_seconds=0.01,
+            unsupported_reason="SINGLE_CONDITION_COMPARISON",
+        )
+        response = CurriculumChatService(_QueryStub(result)).ask("단일 조건 비교")
+        self.assertEqual(response.status, ChatStatus.UNSUPPORTED)
+        self.assertIn("단일 점수·학점", response.answer_text)
+        self.assertNotIn("개인 수강 이력", response.answer_text)
+
+
+class InspectionApprovalTests(unittest.TestCase):
+    @staticmethod
+    def _event(phase, state, attempt, **details):
+        return ProgressEvent(
+            phase,
+            state,
+            1,
+            {"candidate_attempt": attempt, **details},
+        )
+
+    def test_explain_failure_discards_statically_validated_candidate(self):
+        collector = InspectionCollector()
+        collector.record(self._event(ProgressPhase.CYPHER_GENERATION, ProgressState.STARTED, 1))
+        collector.record(
+            self._event(
+                ProgressPhase.STATIC_VALIDATION,
+                ProgressState.COMPLETED,
+                1,
+                validated_cypher="MATCH (first:Rule) RETURN first LIMIT 1",
+                parameters={"candidate": "first"},
+                labels=["Rule"],
+                relationship_types=["SUPPORTED_BY"],
+            )
+        )
+        collector.record(
+            self._event(
+                ProgressPhase.NEO4J_EXPLAIN,
+                ProgressState.FAILED,
+                1,
+                error_code="NEO4J_EXPLAIN_FAILED",
+            )
+        )
+        payload = collector.payload()
+        self.assertNotIn("validated_cypher", payload)
+        self.assertNotIn("parameters", payload)
+        self.assertNotIn("explain_operators", payload)
+
+    def test_retry_approves_only_second_candidate_without_mixing(self):
+        collector = InspectionCollector()
+        collector.record(self._event(ProgressPhase.CYPHER_GENERATION, ProgressState.STARTED, 1))
+        collector.record(
+            self._event(
+                ProgressPhase.STATIC_VALIDATION,
+                ProgressState.COMPLETED,
+                1,
+                validated_cypher="MATCH (first:Rule) RETURN first LIMIT 1",
+                parameters={"candidate": "first"},
+                labels=["Rule"],
+                relationship_types=["SUPPORTED_BY"],
+            )
+        )
+        collector.record(
+            self._event(ProgressPhase.NEO4J_EXPLAIN, ProgressState.FAILED, 1)
+        )
+        collector.record(self._event(ProgressPhase.CYPHER_GENERATION, ProgressState.STARTED, 2))
+        collector.record(
+            self._event(
+                ProgressPhase.STATIC_VALIDATION,
+                ProgressState.COMPLETED,
+                2,
+                validated_cypher="MATCH (second:Rule) RETURN second LIMIT 1",
+                parameters={"candidate": "second"},
+                labels=["Rule", "Evidence"],
+                relationship_types=["SUPPORTED_BY"],
+            )
+        )
+        collector.record(
+            self._event(
+                ProgressPhase.NEO4J_EXPLAIN,
+                ProgressState.COMPLETED,
+                2,
+                operators=["NodeIndexSeek"],
+            )
+        )
+        payload = collector.payload()
+        self.assertIn("second:Rule", payload["validated_cypher"])
+        self.assertNotIn("first:Rule", payload["validated_cypher"])
+        self.assertEqual(payload["parameters"], {"candidate": "second"})
+        self.assertEqual(payload["explain_operators"], ["NodeIndexSeek"])
+        self.assertEqual(payload["labels"], ["Rule", "Evidence"])
 
 
 class NeedleExtractionTests(unittest.TestCase):

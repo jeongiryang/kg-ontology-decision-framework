@@ -190,9 +190,12 @@ class CurriculumChatService:
             return ChatResponse.clarification_required(
                 result.request_id, clarification
             )
+        if status is ChatStatus.UNSUPPORTED:
+            return ChatResponse.unsupported(
+                result.request_id, result.unsupported_reason
+            )
         factories = {
             ChatStatus.OUT_OF_SCOPE: ChatResponse.out_of_scope,
-            ChatStatus.UNSUPPORTED: ChatResponse.unsupported,
             ChatStatus.UNRESOLVED: ChatResponse.unresolved,
             ChatStatus.NOT_FOUND: ChatResponse.not_found,
         }

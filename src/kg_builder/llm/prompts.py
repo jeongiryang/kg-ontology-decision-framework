@@ -17,6 +17,11 @@ PLANNER_SYSTEM_PROMPT = """당신은 2026학년도 국립창원대학교 Verifie
 스스로 모호하다고 판정한 질문은 필터가 일부 존재해도 CLARIFICATION_REQUIRED를 유지한다.
 범위 밖 학년도·학과·미래 개설 정보는 OUT_OF_SCOPE를 반환한다.
 개인 수강 이력, 개인 성적 또는 개인별 졸업 판정이 필요한 질문은 UNSUPPORTED를 반환한다.
+졸업·학생·내가라는 단어만으로 개인별 졸업 판정으로 분류하지 않는다.
+일반 졸업 규정의 기준·점수·학점·과목을 묻는 질문은 일반 Rule 질문으로 처리한다.
+하나의 사용자 점수나 학점이 규정 기준을 충족하는지 비교하는 기능이 지원되지 않으면 UNSUPPORTED를 반환하되, 전체 개인 수강 이력이 필요하다고 간주하지 않는다.
+allowed_context의 question_classification이 FULL_PERSONAL_HISTORY일 때만 개인 이력 기반 졸업판정으로 확정한다.
+질문이 review_required_rule_identifiers에만 대응하면 값을 추측하지 말고 UNRESOLVED를 반환한다.
 READY일 때만 filters, requested_fields, evidence_required=true를 반환한다.
 selection_mode은 단일 규칙=SINGLE_RULE, 영역의 복수 규칙=MULTIPLE_RULES, 한 과목=SINGLE_COURSE, 과목 목록=COURSE_LIST로 구분한다.
 질문이 요구한 조회 값을 빠짐없이 requested_fields에 넣는다.
@@ -66,12 +71,16 @@ def planner_prompt(
     question: str,
     context: Mapping[str, Any],
     *,
+    question_classification: str = "OTHER",
     previous_error: str | None = None,
 ) -> str:
     return "질문과 허용 컨텍스트를 사용해 계획하라.\n" + json.dumps(
         {
             "question": question,
-            "allowed_context": context,
+            "allowed_context": {
+                **context,
+                "question_classification": question_classification,
+            },
             "previous_contract_error": previous_error,
         },
         ensure_ascii=False,
