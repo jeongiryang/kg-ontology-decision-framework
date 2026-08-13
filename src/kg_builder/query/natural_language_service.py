@@ -12,6 +12,7 @@ from kg_builder.llm.cypher_generator import public_plan_payload
 from kg_builder.llm.models import PlanningStatus
 from kg_builder.llm.planner import LocalQueryPlanner
 
+from .query_trace import TraceStage, TraceStatus
 from .safety_pipeline import PipelineOutcome, SafetyPipeline, SafetyPipelineError
 from .schema_selector import QuerySchemaSelector
 
@@ -36,7 +37,12 @@ class NaturalLanguageResult:
     evidence_count: int = 0
     error_stage: str | None = None
     error_code: str | None = None
+    # 계획 모델 원문. 진단용이며 사용자 화면 문구로 쓰지 않는다.
     message: str | None = None
+    # 무엇이 부족한지에 대한 통제 코드. 화면 문구는 이 값으로 서비스가 만든다.
+    missing: tuple[str, ...] = ()
+    # 조회 범위를 좁히지 못해 넓게 답한 경우의 사유 코드. 화면에 밝힌다.
+    broadened: str | None = None
 
     def to_dict(self) -> dict[str, Any]:
         payload: dict[str, Any] = {
@@ -86,19 +92,24 @@ class NaturalLanguageQueryService:
         try:
             planning = self.planner.plan(question)
         except Exception as exc:
+            code = getattr(exc, "code", exc.__class__.__name__)
+            request_id = self._trace_planning(
+                question, getattr(exc, "attempts", ()), code
+            )
             return self._failure(
-                provisional_id,
-                started,
-                "PLANNING",
-                getattr(exc, "code", exc.__class__.__name__),
+                request_id or provisional_id, started, "PLANNING", code
             )
         if planning.status is not PlanningStatus.READY or planning.plan is None:
+            request_id = self._trace_planning(
+                question, planning.attempts, planning.status.value
+            )
             return NaturalLanguageResult(
-                request_id=provisional_id,
+                request_id=request_id or provisional_id,
                 status=planning.status.value,
                 model=self.model,
                 elapsed_seconds=perf_counter() - started,
                 message=planning.message,
+                missing=tuple(str(item) for item in planning.missing),
             )
 
         plan = planning.plan
@@ -155,6 +166,7 @@ class NaturalLanguageQueryService:
                     cypher=cypher,
                     rows=outcome.result.rows,
                     evidence_count=outcome.result.evidence_count,
+                    broadened=planning.broadened,
                 )
             except SafetyPipelineError as exc:
                 if exc.code == "RESULT_COURSE_AMBIGUOUS":
@@ -170,6 +182,7 @@ class NaturalLanguageQueryService:
                             "동일한 과목명에 서로 다른 학수번호가 있습니다. "
                             "학수번호를 지정해 주세요."
                         ),
+                        missing=("COURSE_IDENTITY",),
                     )
                 previous_error = exc.code
                 if attempt >= self.generator_retries:
@@ -181,6 +194,28 @@ class NaturalLanguageQueryService:
                         query_plan=public_plan,
                     )
         raise AssertionError("unreachable retry state")
+
+    def _trace_planning(
+        self, question: str, attempts: Any, error_code: str
+    ) -> str | None:
+        """Write what the planner produced before it stopped.
+
+        계획 단계에서 끝난 요청은 종전까지 아무 기록도 남기지 않았다. 커버리지가 왜
+        낮은지 사후에 좁힐 수 없으므로 여기서 시도 골격을 남긴다. 기록 실패가 응답을
+        막지는 않는다.
+        """
+
+        try:
+            trace = self.pipeline.new_trace(question)
+            trace.record_planning(attempts)
+            trace.record(
+                TraceStage.PLANNING, TraceStatus.FAIL, 0.0, error_code=error_code
+            )
+            trace.skip_after(TraceStage.PLANNING)
+            trace.write()
+            return trace.request_id
+        except Exception:
+            return None
 
     def _failure(
         self,

@@ -2032,6 +2032,11 @@
         "operator": "EQUALS",
         "property": "course_code"
       },
+      "credit_category": {
+        "label": "CreditAllocation",
+        "operator": "EQUALS",
+        "property": "credit_category"
+      },
       "credits": {
         "label": "CourseOffering",
         "operator": "EQUALS",
@@ -2042,10 +2047,25 @@
         "operator": "EQUALS",
         "property": "department_id"
       },
+      "entry_type": {
+        "label": "RoadmapEntry",
+        "operator": "EQUALS",
+        "property": "entry_type"
+      },
+      "goal_scope": {
+        "label": "EducationGoal",
+        "operator": "EQUALS",
+        "property": "goal_scope"
+      },
       "grade_year": {
         "label": "CourseOffering",
         "operator": "PARAMETER_IN_PROPERTY",
         "property": "grade_year"
+      },
+      "is_total": {
+        "label": "CreditAllocation",
+        "operator": "EQUALS",
+        "property": "is_total"
       },
       "major_type": {
         "label": "ApplicabilityScope",
@@ -2056,6 +2076,16 @@
         "label": "Course",
         "operator": "EQUALS",
         "property": "name_ko"
+      },
+      "recommended_grade_year": {
+        "label": "CourseRecommendation",
+        "operator": "EQUALS",
+        "property": "recommended_grade_year"
+      },
+      "recommended_semester": {
+        "label": "CourseRecommendation",
+        "operator": "EQUALS",
+        "property": "recommended_semester"
       },
       "rule_id": {
         "label": "Rule",
@@ -2071,6 +2101,11 @@
         "label": "CourseOffering",
         "operator": "EQUALS",
         "property": "semester"
+      },
+      "source_was_blank": {
+        "label": "CreditAllocation",
+        "operator": "EQUALS",
+        "property": "source_was_blank"
       }
     },
     "maximum_result_rows": 100,

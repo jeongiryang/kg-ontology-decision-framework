@@ -11,14 +11,18 @@ from typing import Any, Mapping, Sequence
 
 from kg_builder.query.schema_catalog import SchemaCatalog
 
-from .claim_builder import ClaimBuilder, _freeze
+from .claim_builder import NARRATIVE_SOURCES, ClaimBuilder, _freeze
 from .contracts import (
+    AllocationClaimItem,
     ClaimPolarity,
     ClaimType,
     CourseClaimItem,
     FactEvidenceLink,
     GroundedClaim,
     GroundingError,
+    NarrativeClaimItem,
+    RecommendationClaimItem,
+    RoadmapClaimItem,
 )
 
 
@@ -28,6 +32,41 @@ FIELD_UNITS: Mapping[str, str | None] = {
     "semester": None,
     "credits": "CREDIT",
     "completion_type": None,
+}
+EXTENDED_LIST_CLAIM_TYPES = frozenset(
+    {
+        ClaimType.ALLOCATION_LIST,
+        ClaimType.ROADMAP_LIST,
+        ClaimType.NARRATIVE_LIST,
+        ClaimType.RECOMMENDATION_LIST,
+    }
+)
+# (Claim 항목 속성, 그 값이 와야 하는 결과 행 컬럼). 서술형 항목은 fact label 마다
+# 원문 컬럼이 달라 ``_item_columns`` 에서 따로 해석한다.
+EXTENDED_ITEM_COLUMNS: Mapping[type, tuple[tuple[str, str], ...]] = {
+    AllocationClaimItem: (
+        ("credit_category", "credit_category"),
+        ("allocated_credits", "allocated_credits"),
+        ("grade_year", "grade_year"),
+        ("semester", "semester"),
+        ("is_total", "is_total"),
+    ),
+    RoadmapClaimItem: (
+        ("raw_label", "raw_label"),
+        ("entry_type", "entry_type"),
+        ("grade_year", "grade_year"),
+        ("semester", "semester"),
+        ("is_required", "is_required"),
+    ),
+    RecommendationClaimItem: (
+        ("course_name_ko", "course_name_ko"),
+        ("course_code", "course_code"),
+        ("area_raw", "area_raw"),
+        ("recommended_grade_year", "recommended_grade_year"),
+        ("recommended_semester", "recommended_semester"),
+        ("credits", "credits"),
+    ),
+    NarrativeClaimItem: (),
 }
 _VALIDATION_SEAL = object()
 _VALIDATION_KEY = secrets.token_bytes(32)
@@ -204,6 +243,8 @@ class ClaimValidator:
                 self._course_list(claim, by_fact)
             elif claim.claim_type is ClaimType.AGGREGATE:
                 self._aggregate(claim, by_fact)
+            elif claim.claim_type in EXTENDED_LIST_CLAIM_TYPES:
+                self._extended_list(claim, by_fact)
             else:
                 raise GroundingError(
                     "ANSWER_CLAIM_TYPE_UNSUPPORTED", "unsupported Claim type"
@@ -373,6 +414,53 @@ class ClaimValidator:
                 or item.credits != row.get("credits")
             ):
                 self._invalid("course list item differs from its fact")
+
+    def _extended_list(self, claim: GroundedClaim, by_fact) -> None:
+        """Re-check every extended list item against the row it came from.
+
+        ``ClaimBuilder``가 만든 값을 그대로 승인하지 않고, 항목 속성 하나하나를 승인된
+        행과 다시 맞춰 본다. 문자열은 표시용 공백 제거만 허용하고, 그 밖의 변형은
+        모두 불일치로 잡는다.
+        """
+
+        if not (
+            claim.subject is None
+            and isinstance(claim.value, tuple)
+            and claim.value
+            and claim.unit is None
+            and claim.operator is None
+            and claim.polarity is ClaimPolarity.POSITIVE
+            and claim.description_ko is None
+        ):
+            self._invalid("extended list Claim contains unsupported metadata")
+        items = claim.value
+        kinds = {type(item) for item in items}
+        if len(kinds) != 1 or next(iter(kinds)) not in EXTENDED_ITEM_COLUMNS:
+            self._invalid("extended list items are invalid")
+        if {item.fact_id for item in items} != set(by_fact):
+            self._invalid("extended list does not cover all result facts")
+        if len({item.fact_id for item in items}) != len(items):
+            self._invalid("extended list contains duplicate facts")
+        for item in items:
+            row = by_fact[item.fact_id][0]
+            for attribute, column in self._item_columns(item, row):
+                expected = row.get(column)
+                if isinstance(expected, str):
+                    expected = expected.strip()
+                if getattr(item, attribute) != expected:
+                    self._invalid(f"extended list item differs from its fact: {attribute}")
+
+    @staticmethod
+    def _item_columns(item: Any, row: Mapping[str, Any]) -> tuple[tuple[str, str], ...]:
+        if isinstance(item, NarrativeClaimItem):
+            fact_label = row.get("fact_label")
+            if fact_label not in NARRATIVE_SOURCES:
+                raise GroundingError(
+                    "ANSWER_CLAIM_INVALID", "narrative Claim has an unknown fact label"
+                )
+            text_column, order_column = NARRATIVE_SOURCES[fact_label]
+            return (("text", text_column), ("order", order_column))
+        return EXTENDED_ITEM_COLUMNS[type(item)]
 
     def _aggregate(self, claim: GroundedClaim, by_fact) -> None:
         if (

@@ -77,6 +77,21 @@ class SafetyPipeline:
             else trace_retention_days
         )
 
+    def new_trace(self, question: str, parameters: Mapping[str, Any] | None = None) -> QueryTrace:
+        """Open a trace under this pipeline's policy without running a query.
+
+        계획 단계에서 멈춘 요청도 같은 보존·마스킹 정책으로 기록을 남기기 위한 입구다.
+        """
+
+        return QueryTrace(
+            question=question if isinstance(question, str) else "",
+            parameters=parameters or {},
+            trace_dir=self.trace_dir,
+            store_raw_question=self.store_raw_question,
+            fingerprint_hmac_key=self.trace_fingerprint_hmac_key,
+            retention_days=self.trace_retention_days,
+        )
+
     def run(self, payload: Mapping[str, Any], cypher: str) -> PipelineOutcome:
         raw_filters = payload.get("filters", {}) if isinstance(payload, Mapping) else {}
         raw_question = payload.get("question", "") if isinstance(payload, Mapping) else ""

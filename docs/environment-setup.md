@@ -245,6 +245,59 @@ chmod 600 .env
 
 실제 계정명, 비밀번호, API 키, 토큰 또는 개인식별정보를 문서와 AI 로그에 복사하지 않는다.
 
+### 9.1 로컬 LLM(Ollama) 설치
+
+자연어 질의 경로에는 로컬 LLM이 필요하다. 2026-08-13 황대겸 환경에서 확인한 설치 절차는
+다음과 같다. `sudo` 권한이 없는 계정에서도 되도록 홈 디렉터리에 설치한다.
+
+배포 자산 이름과 압축 형식이 바뀌었다. 예전 안내에 있던 `ollama-linux-amd64.tgz`는 현재
+404이며, `ollama-linux-amd64.tar.zst`(약 1.4GB)를 받아야 한다. 자산 이름은 다음으로 확인한다.
+
+```bash
+curl -fsS https://api.github.com/repos/ollama/ollama/releases/latest \
+  | python3 -c "import json,sys; [print(a['name']) for a in json.load(sys.stdin)['assets']]"
+```
+
+Ubuntu 24.04 기본 설치에는 `zstd`가 없고 `tar --zstd`도 실패한다. `sudo` 없이 풀려면
+일회성 파이썬 환경을 쓴다. 프로젝트 의존성은 건드리지 않는다.
+
+```bash
+curl -fL --retry 3 -o /tmp/ollama.tar.zst \
+  https://github.com/ollama/ollama/releases/download/v0.32.9/ollama-linux-amd64.tar.zst
+
+uv run --no-project --with zstandard python - <<'PY'
+import pathlib, tarfile, zstandard
+src = pathlib.Path("/tmp/ollama.tar.zst")
+dest = pathlib.Path.home() / ".local"
+dest.mkdir(parents=True, exist_ok=True)
+with src.open("rb") as raw, zstandard.ZstdDecompressor().stream_reader(raw) as reader:
+    with tarfile.open(fileobj=reader, mode="r|") as tar:
+        tar.extractall(dest, filter="data")
+PY
+rm -f /tmp/ollama.tar.zst
+```
+
+서비스는 `127.0.0.1:11434`에만 노출한다. WSL 세션마다 다시 띄워야 한다.
+
+```bash
+nohup ~/.local/bin/ollama serve > ~/ollama-serve.log 2>&1 &
+curl -s http://127.0.0.1:11434/api/tags
+~/.local/bin/ollama pull qwen2.5-coder:14b
+```
+
+GPU 배치는 다음으로 확인한다. `PROCESSOR`가 `100% GPU`가 아니면 컨텍스트를 줄이거나 더 작은
+모델을 쓴다.
+
+```bash
+~/.local/bin/ollama ps
+```
+
+2026-08-13 실측(RTX 4070 Ti 12GB, 컨텍스트 8192): `qwen2.5-coder:14b`가 `100% GPU`로 올라갔고
+`nvidia-smi` 기준 11,099MiB/12,282MiB를 사용했다. 다른 GPU 프로세스가 있으면 여유가 부족해질
+수 있다. 모델과 선정 근거는 [로컬 LLM PoC 문서](local-llm-query-pipeline.md)를 따른다.
+
+`~/.local/bin`이 `PATH`에 없으면 전체 경로로 실행하거나 셸 프로필에 추가한다.
+
 ## 10. Git과 GitHub CLI 설정
 
 다음 자리표시자를 자신의 로컬 Git 정보로 교체한다. 실제 이메일은 이 문서나 AI 로그에 남기지 않는다.

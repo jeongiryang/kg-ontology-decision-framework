@@ -6,7 +6,7 @@ import re
 from dataclasses import dataclass, field
 from typing import Any
 
-from .query_plan import FILTER_BINDINGS, QueryPlan, SelectionMode
+from .query_plan import QueryPlan, SelectionMode, resolve_filter_bindings
 from .schema_catalog import SchemaCatalog
 
 
@@ -506,7 +506,9 @@ class CypherValidator:
                 )
             if parameter not in plan.filters:
                 self._fail("CYPHER_PARAMETER_MISSING", f"parameter {parameter} is not in QueryPlan")
-            policy = FILTER_BINDINGS[parameter]
+            # 같은 필터 이름이라도 fact family 마다 바인딩 대상 라벨/연산자가 다르다.
+            # plan 의 selection_mode 로 확정된 바인딩만 통과시킨다.
+            policy = resolve_filter_bindings(plan.selection_mode)[parameter]
             if prop != policy.property_name or operator != policy.operator:
                 self._fail(
                     "CYPHER_FILTER_BINDING",

@@ -125,6 +125,7 @@ kg-ontology-decision-framework/
 - [Text-to-Cypher 스키마·검증·실행 안전 기반](docs/text-to-cypher-safety.md)
 - [RTX 4070 Ti 로컬 LLM Text-to-Cypher PoC](docs/local-llm-query-pipeline.md)
 - [VERIFIED Evidence 기반 한국어 답변 계층](docs/evidence-answer-renderer.md)
+- [확장 fact family 기반 답변 커버리지](docs/extended-fact-families.md)
 
 Verified bundle 검증과 로컬 Neo4j 적재는 다음 순서로 실행합니다. 각 팀원은 자신의 빈 로컬 Neo4j 데이터베이스에서 독립적으로 수행합니다.
 
@@ -176,6 +177,15 @@ uv run python -m kg_builder.answer.cli \
 ```
 
 응답 상태, Claim 유형, Citation 필드와 안전 실패 정책은 [Evidence 기반 한국어 답변 계층 문서](docs/evidence-answer-renderer.md)를 참고합니다.
+
+답변 가능한 사실의 범위는 확장 fact family로 넓혔습니다. 학년·학기별 교양 학점 배분, 권장 이수 로드맵, 학과 교육목표, 진출 분야, 인재상, 권장 교양 과목을 Evidence와 함께 답변합니다. 근거 규칙은 그대로이며, Evidence 직접 경로가 있는 사실만 등록됩니다. QueryPlan을 직접 지정해 로컬 LLM 없이 이 경로를 확인하려면 다음 CLI를 사용합니다. 안전 관문과 근거 검증은 모두 실제로 실행됩니다.
+
+```bash
+uv run python -m kg_builder.answer.plan_cli --print-examples
+uv run python -m kg_builder.answer.plan_cli --all-examples
+```
+
+등록된 fact family, 범위 밖으로 남긴 항목, family 추가 절차는 [확장 fact family 문서](docs/extended-fact-families.md)를 참고합니다.
 
 ### AI 시뮬레이션 로그
 

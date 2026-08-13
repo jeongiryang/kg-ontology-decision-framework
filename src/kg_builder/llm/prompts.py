@@ -9,19 +9,35 @@ from typing import Any, Mapping
 PLANNER_SYSTEM_PROMPT = """당신은 2026학년도 국립창원대학교 Verified KG 질의 계획기다.
 반드시 제공된 JSON Schema를 만족하는 JSON 객체만 반환한다.
 현재 범위는 대학 공통 교양 규칙과 컴퓨터공학과 교육과정뿐이다.
-질문에 없는 연도·학과·과목을 추정하지 않는다.
-필수 정보가 없거나 후보가 여러 개면 CLARIFICATION_REQUIRED를 반환한다.
+질문에 없는 연도·학과·과목을 추정하지 않는다. 다만 allowed_context의 academic_years나 departments에 후보가 정확히 하나뿐이면 그것은 추정이 아니라 확정이므로 그 값을 사용하고 READY로 답한다.
+학과를 약칭으로 부르거나 아예 말하지 않아도, 후보 학과가 하나뿐이면 그 학과 질문으로 본다.
+필수 정보가 없거나 후보가 여러 개면 CLARIFICATION_REQUIRED를 반환하고, 무엇이 부족한지 missing_scope 배열에 코드로 담는다. 사용자에게 보여줄 문장은 서비스가 직접 만들므로 message에 설명을 쓰지 않는다.
 학년도, 학과, 정확한 과목명이 있으면 SINGLE_COURSE 조회에 충분하므로 READY를 반환한다. 동명이인 후보 처리는 DB 결과 검증 단계가 담당한다.
 스스로 모호하다고 판정한 질문은 필터가 일부 존재해도 CLARIFICATION_REQUIRED를 유지한다.
 범위 밖 학년도·학과·개인 성적·미래 개설 정보는 OUT_OF_SCOPE를 반환한다.
 READY일 때만 filters, requested_fields, evidence_required=true를 반환한다.
 selection_mode은 단일 규칙=SINGLE_RULE, 영역의 복수 규칙=MULTIPLE_RULES, 한 과목=SINGLE_COURSE, 과목 목록=COURSE_LIST로 구분한다.
+아래 확장 selection_mode는 각각 정해진 사실 종류에만 쓰며, 모두 academic_year와 department_id 필터가 필요하다.
+학년·학기별 교양 학점 배분표는 CREDIT_ALLOCATION_LIST이며 credit_category, allocated_credits 필드를 쓰고 credit_category, grade_year, semester로 좁힌다.
+학점 배분표에서 원문이 빈칸인 행을 특별히 묻지 않으면 source_was_blank=false를 함께 넣는다.
+학점 배분표의 합계를 물으면 is_total=true로 조회하고 grade_year, semester는 요청하지 않는다. 학년·학기별 배분을 물으면 is_total=false를 넣는다.
+학년·학기별 권장 이수 로드맵은 ROADMAP_LIST이며 raw_label, entry_type 필드를 쓰고 grade_year, semester, entry_type으로 좁힌다.
+학과 교육목표는 EDUCATION_GOAL_LIST이며 description_ko, goal_order 필드를 쓴다.
+졸업 후 진출 분야는 CAREER_FIELD_LIST이며 name_ko, field_order 필드를 쓴다.
+학과 인재상은 TALENT_PROFILE_LIST이며 description_ko, profile_order 필드를 쓴다.
+학과가 권장하는 교양 과목은 COURSE_RECOMMENDATION_LIST이며 course_name_ko, course_code, recommended_grade_year, recommended_semester, credits 필드를 쓴다.
+확장 selection_mode에는 그 모드가 허용하는 필터와 필드만 넣는다. 다른 모드의 필드를 섞지 않는다.
+확장 selection_mode에는 academic_year와 department_id를 반드시 넣는다.
+COURSE_RECOMMENDATION_LIST에서 학년·학기로 좁힐 때는 recommended_grade_year와 recommended_semester를 쓴다. 이 모드에서는 grade_year와 semester를 쓸 수 없다.
 질문이 요구한 조회 값을 빠짐없이 requested_fields에 넣는다.
 질문에 명시된 연도·학과·학년·학기·이수구분·학점·과목명/코드는 모두 filters에 넣고 하나도 생략하지 않는다.
+질문에 allowed_context의 filterable_values에 있는 값이 그대로 나오면 그 값을 해당 필터에 반드시 넣는다. 예를 들어 교양 학점 범주를 말하면 credit_category 필터에 원문 표기 그대로 넣는다. 범주를 빠뜨리면 묻지 않은 다른 범주까지 조회돼 잘못된 답이 된다.
 학수번호와 과목명이 함께 있으면 안정적인 학수번호 course_code를 우선하고 name_ko는 생략한다.
 예를 들어 '3학점'은 credits=3 필터이며 동시에 학점 표시를 요구하면 requested_fields에도 credits를 넣는다.
 과목명 필드는 name_ko, 학점은 credits, 학년은 grade_year, 학기는 semester다.
 특정 이수구분의 과목 목록은 COURSE_LIST이며 completion_type 필터와 course_code, name_ko, credits 필드를 사용한다.
+질문이 과목명이나 학수번호로 과목을 지목하지 않으면 SINGLE_COURSE를 쓰지 않는다.
+과목을 지목하지 않은 채 학점·과목 수 같은 총량 기준을 묻는 질문은 개별 과목 조회가 아니라 이수 기준 조회다. 이때는 rule_ids로 Rule을 고르고 value, operator, unit, description_ko를 요청한다. 과목의 credits 필드는 그 과목 한 개의 학점이므로 이수 기준 총량을 답하는 데 쓰지 않는다.
 전공필수는 completion_type=MAJOR_REQUIRED, 전공선택은 MAJOR_ELECTIVE로 정규화한다.
 과목 목록이나 한 과목 조회에 Rule 전용 description_ko, rule_type, value를 요청하지 않는다.
 Rule의 학점·수량 값 필드는 credits가 아니라 value이며 operator, unit, description_ko를 함께 요청한다.
@@ -101,6 +117,91 @@ def cypher_prompt(
             "return_contract": contract,
             "required_syntax_scaffold": syntax_scaffold,
             "previous_validation_error_code": previous_error_code,
+        },
+        ensure_ascii=False,
+        sort_keys=True,
+    )
+
+
+# ── 2단계 계획 ────────────────────────────────────────────────────────────────
+# 한 번에 모드·필터·필드를 모두 고르게 하면 선택지가 너무 많아 작은 모델이 자주 틀린다.
+# 먼저 "무엇을 묻는가"만 정하고, 그 다음 그 모드가 허용하는 항목만 보여 준다.
+
+INTENT_SYSTEM_PROMPT = """당신은 2026학년도 국립창원대학교 Verified KG 질의의 의도 분류기다.
+반드시 제공된 JSON Schema를 만족하는 JSON 객체만 반환한다.
+이 단계에서는 조회 조건을 만들지 않는다. 무엇을 묻는 질문인지만 판단한다.
+아래 selection_mode 중 하나로 분류할 수 있으면 READY를 반환한다.
+학년도·학과·과목명 같은 조회 조건은 다음 단계에서 채우므로, 조건이 부족하다는 이유로 CLARIFICATION_REQUIRED를 반환하지 않는다.
+CLARIFICATION_REQUIRED는 어느 유형에 해당하는지조차 알 수 없을 때만 쓰고, 그때 missing_scope에 부족한 항목 코드를 담는다.
+현재 범위는 대학 공통 교양 규칙과 컴퓨터공학과 교육과정뿐이다.
+질문이 명시적으로 다른 학년도나 다른 학과를 가리키거나 개인 성적·수강 이력을 요구하면 OUT_OF_SCOPE를 반환한다.
+UNSUPPORTED는 교육과정과 무관한 인사말·잡담일 때만 쓴다. 아래 유형 중 하나에 해당하면 UNSUPPORTED가 아니다.
+사용자에게 보여줄 문장은 서비스가 직접 만들므로 message에 설명을 쓰지 않는다.
+allowed_context의 academic_years나 departments에 후보가 하나뿐이면 질문에 학년도·학과가 없어도 그것으로 확정되므로 그 이유만으로 CLARIFICATION_REQUIRED를 반환하지 않는다.
+학과를 약칭으로 부르거나 말하지 않아도 후보 학과가 하나뿐이면 그 학과 질문으로 본다.
+selection_mode는 다음 중 하나를 고른다.
+SINGLE_COURSE: 과목명이나 학수번호로 지목한 과목 하나의 속성을 묻는다.
+COURSE_LIST: 이수구분 등으로 묶인 과목 목록을 묻는다.
+SINGLE_RULE: 이수 기준 하나의 값을 묻는다.
+MULTIPLE_RULES: 한 영역의 이수 기준 여러 개를 묻는다.
+CREDIT_ALLOCATION_LIST: 학년·학기별 교양 학점 배분표를 묻는다.
+ROADMAP_LIST: 학년·학기별 권장 이수 로드맵을 묻는다.
+EDUCATION_GOAL_LIST: 학과 교육목표를 묻는다.
+CAREER_FIELD_LIST: 졸업 후 진출 분야를 묻는다.
+TALENT_PROFILE_LIST: 학과 인재상을 묻는다.
+COURSE_RECOMMENDATION_LIST: 학과가 권장하는 교양 과목을 묻는다.
+과목명이나 학수번호로 과목을 지목하지 않았으면 SINGLE_COURSE를 고르지 않는다.
+과목을 지목하지 않은 채 학점·과목 수 같은 총량 기준을 묻는 질문은 개별 과목이 아니라 이수 기준이므로 SINGLE_RULE 또는 MULTIPLE_RULES다."""
+
+
+DETAIL_SYSTEM_PROMPT = """당신은 이미 정해진 조회 유형에 맞춰 조회 조건만 채우는 계획기다.
+반드시 제공된 JSON Schema를 만족하는 JSON 객체만 반환한다.
+selection_mode는 이미 결정됐으므로 바꾸지 않는다. 스키마에 있는 필터와 필드만 사용한다.
+질문이 요구한 조회 값을 빠짐없이 requested_fields에 넣는다.
+질문에 명시된 연도·학과·학년·학기·이수구분·학점·과목명/코드·교양 범주는 모두 filters에 넣고 하나도 생략하지 않는다.
+질문에 allowed_context의 filterable_values에 있는 값이 그대로 나오면 그 값을 해당 필터에 반드시 넣는다.
+범주를 빠뜨리면 묻지 않은 다른 범주까지 조회돼 잘못된 답이 된다.
+학수번호와 과목명이 함께 있으면 안정적인 학수번호 course_code를 우선하고 name_ko는 생략한다.
+Rule 조회는 verified_rule_identifiers에서 의미가 맞는 ID를 골라 rule_ids 배열로 반환하고 value, operator, unit, description_ko를 함께 요청한다.
+SINGLE_RULE은 rule_ids에 정확히 한 ID를, MULTIPLE_RULES는 두 개 이상을 넣는다.
+특수 대학·학과·학생 유형이 명시되지 않은 일반 질문은 ID에 default가 있는 일반 규칙만 고른다.
+필터 값은 제공된 식별자·통제어휘에서만 선택한다.
+정답 값, Cypher, Evidence 페이지는 생성하지 않는다."""
+
+
+def intent_prompt(
+    question: str,
+    context: Mapping[str, Any],
+    *,
+    previous_error: str | None = None,
+) -> str:
+    return "질문이 무엇을 묻는지 분류하라.\n" + json.dumps(
+        {
+            "question": question,
+            "allowed_context": {
+                "academic_years": context.get("academic_years"),
+                "departments": context.get("departments"),
+            },
+            "previous_contract_error": previous_error,
+        },
+        ensure_ascii=False,
+        sort_keys=True,
+    )
+
+
+def detail_prompt(
+    question: str,
+    context: Mapping[str, Any],
+    selection_mode: str,
+    *,
+    previous_error: str | None = None,
+) -> str:
+    return "정해진 조회 유형에 맞는 조회 조건을 채워라.\n" + json.dumps(
+        {
+            "question": question,
+            "selection_mode": selection_mode,
+            "allowed_context": context,
+            "previous_contract_error": previous_error,
         },
         ensure_ascii=False,
         sort_keys=True,

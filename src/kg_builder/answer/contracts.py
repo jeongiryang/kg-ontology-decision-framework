@@ -7,7 +7,7 @@ import hmac
 import secrets
 from dataclasses import dataclass, field
 from enum import StrEnum
-from typing import Any
+from typing import Any, Sequence
 
 
 class ChatStatus(StrEnum):
@@ -22,9 +22,80 @@ class ChatStatus(StrEnum):
 
 class ChatErrorCode(StrEnum):
     QUERY_SAFE_FAILURE = "QUERY_SAFE_FAILURE"
+    # 질의 파이프라인의 어느 관문에서 멈췄는지 남긴다. 사용자 문구는 단계마다 달라도
+    # 근거 없는 내용을 만들지 않는다는 점은 같고, 운영자는 이 코드로 원인을 좁힌다.
+    QUERY_PLANNING_FAILED = "QUERY_PLANNING_FAILED"
+    QUERY_SCHEMA_SELECTION_FAILED = "QUERY_SCHEMA_SELECTION_FAILED"
+    QUERY_CYPHER_GENERATION_FAILED = "QUERY_CYPHER_GENERATION_FAILED"
+    QUERY_CYPHER_VALIDATION_FAILED = "QUERY_CYPHER_VALIDATION_FAILED"
+    QUERY_EXPLAIN_FAILED = "QUERY_EXPLAIN_FAILED"
+    QUERY_EXECUTION_FAILED = "QUERY_EXECUTION_FAILED"
+    QUERY_RESULT_VALIDATION_FAILED = "QUERY_RESULT_VALIDATION_FAILED"
     ANSWER_CLAIM_VALIDATION_FAILED = "ANSWER_CLAIM_VALIDATION_FAILED"
     ANSWER_RENDERING_UNSUPPORTED = "ANSWER_RENDERING_UNSUPPORTED"
     UNKNOWN_SAFE_FAILURE = "UNKNOWN_SAFE_FAILURE"
+
+
+# 질의 단계 이름 -> 오류 코드. 단계 이름은 QueryTrace 와 자연어 서비스가 쓰는 값이다.
+QUERY_STAGE_ERROR_CODES: dict[str, ChatErrorCode] = {
+    "PLANNING": ChatErrorCode.QUERY_PLANNING_FAILED,
+    "PLAN_VALIDATION": ChatErrorCode.QUERY_PLANNING_FAILED,
+    "SCHEMA_SELECTION": ChatErrorCode.QUERY_SCHEMA_SELECTION_FAILED,
+    "CYPHER_GENERATION": ChatErrorCode.QUERY_CYPHER_GENERATION_FAILED,
+    "CYPHER_VALIDATION": ChatErrorCode.QUERY_CYPHER_VALIDATION_FAILED,
+    "NEO4J_EXPLAIN": ChatErrorCode.QUERY_EXPLAIN_FAILED,
+    "EXECUTION": ChatErrorCode.QUERY_EXECUTION_FAILED,
+    "RESULT_VALIDATION": ChatErrorCode.QUERY_RESULT_VALIDATION_FAILED,
+}
+
+# 계획 모델이 알려 준 "무엇이 부족한가" 코드의 한국어 표기. 사용자에게 보이는 문장은
+# 이 표에서 조립하며, 계획 모델이 쓴 자연어를 그대로 내보내지 않는다.
+MISSING_SCOPE_LABELS: dict[str, str] = {
+    "ACADEMIC_YEAR": "학년도",
+    "DEPARTMENT": "학과",
+    "COURSE_IDENTITY": "과목명 또는 학수번호",
+    "RULE_TOPIC": "어떤 이수요건을 묻는지",
+    "QUESTION_INTENT": "무엇을 알고 싶은지",
+}
+CLARIFICATION_FALLBACK = (
+    "질문을 조금 더 구체적으로 알려 주세요. 학년도, 학과, 과목명 가운데 아는 것을 "
+    "함께 적어 주시면 확인해 드릴 수 있습니다."
+)
+
+
+def clarification_message(missing: Sequence[str] | None) -> str:
+    """Build the user-facing prompt from controlled codes, never from model prose."""
+
+    labels = [
+        MISSING_SCOPE_LABELS[str(code)]
+        for code in (missing or [])
+        if str(code) in MISSING_SCOPE_LABELS
+    ]
+    if not labels:
+        return CLARIFICATION_FALLBACK
+    return "질문을 확인하려면 다음 정보가 더 필요합니다: " + ", ".join(labels) + "."
+
+
+# 조회 범위를 좁히지 못해 넓게 답했을 때 답변 앞에 붙일 안내. 어떤 경우에도 없는
+# 사실을 만들지 않으며, 좁히지 못했다는 사실만 밝힌다.
+BROADENED_NOTICES = {
+    "RULE_TOPIC_UNRESOLVED": (
+        "질문이 어떤 이수요건을 가리키는지 좁히지 못해, 확인된 이수요건을 모두 "
+        "근거와 함께 보여 드립니다."
+    ),
+    "RULE_TOPIC_NARROWED": (
+        "질문이 어떤 이수요건을 가리키는지 확정하지 못해, 질문과 관련된 이수요건을 "
+        "근거와 함께 보여 드립니다."
+    ),
+}
+
+
+def broadened_notice(reason: str | None) -> str | None:
+    """Map a controlled broadening reason to its Korean notice."""
+
+    if not reason:
+        return None
+    return BROADENED_NOTICES.get(str(reason))
 
 
 class ClaimType(StrEnum):
@@ -34,6 +105,12 @@ class ClaimType(StrEnum):
     VERIFIED_RULE_TEXT = "VERIFIED_RULE_TEXT"
     COURSE_LIST = "COURSE_LIST"
     AGGREGATE = "AGGREGATE"
+    # 확장 fact family 의 Claim. 값은 모두 승인된 행에서 그대로 오고, 아래 어느
+    # 항목도 계산·추론으로 만들어진 값을 담지 않는다.
+    ALLOCATION_LIST = "ALLOCATION_LIST"
+    ROADMAP_LIST = "ROADMAP_LIST"
+    NARRATIVE_LIST = "NARRATIVE_LIST"
+    RECOMMENDATION_LIST = "RECOMMENDATION_LIST"
 
 
 class ClaimPolarity(StrEnum):
@@ -67,6 +144,52 @@ class CourseClaimItem:
     display_name: str
     course_code: str | None
     credits: int | float | None
+
+
+@dataclass(frozen=True, slots=True)
+class AllocationClaimItem:
+    """One row of the verified credit-allocation table."""
+
+    fact_id: str
+    credit_category: str
+    allocated_credits: int | float
+    grade_year: int | None = None
+    semester: str | None = None
+    is_total: bool | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class RoadmapClaimItem:
+    """One verified entry of the recommended course roadmap."""
+
+    fact_id: str
+    raw_label: str
+    entry_type: str
+    grade_year: int | None = None
+    semester: str | None = None
+    is_required: bool | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class NarrativeClaimItem:
+    """One verified sentence taken verbatim from the source document."""
+
+    fact_id: str
+    text: str
+    order: int | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class RecommendationClaimItem:
+    """One verified department-recommended general-education course."""
+
+    fact_id: str
+    course_name_ko: str
+    course_code: str | None = None
+    area_raw: str | None = None
+    recommended_grade_year: int | None = None
+    recommended_semester: str | None = None
+    credits: int | float | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -115,6 +238,28 @@ class Citation:
 
 SAFE_FAILURE_MESSAGES: dict[ChatErrorCode, str] = {
     ChatErrorCode.QUERY_SAFE_FAILURE: "요청을 안전하게 처리하지 못했습니다.",
+    ChatErrorCode.QUERY_PLANNING_FAILED: (
+        "질문을 조회 조건으로 옮기지 못했습니다. 학년도나 학과를 넣어 다시 물어봐 주세요."
+    ),
+    ChatErrorCode.QUERY_SCHEMA_SELECTION_FAILED: (
+        "이 질문에 맞는 데이터 범위를 찾지 못했습니다. 현재 범위 안의 항목인지 확인해 주세요."
+    ),
+    ChatErrorCode.QUERY_CYPHER_GENERATION_FAILED: (
+        "조회문을 만들지 못했습니다. 잠시 후 다시 시도해 주세요."
+    ),
+    ChatErrorCode.QUERY_CYPHER_VALIDATION_FAILED: (
+        "생성된 조회문이 안전 규칙을 통과하지 못해 실행하지 않았습니다."
+    ),
+    ChatErrorCode.QUERY_EXPLAIN_FAILED: (
+        "조회 계획 점검에서 중단했습니다. 데이터베이스 상태를 확인해 주세요."
+    ),
+    ChatErrorCode.QUERY_EXECUTION_FAILED: (
+        "데이터베이스 조회에 실패했습니다. 연결 상태를 확인해 주세요."
+    ),
+    ChatErrorCode.QUERY_RESULT_VALIDATION_FAILED: (
+        "조회 결과가 근거 검증을 통과하지 못해 답변하지 않았습니다. "
+        "원문에 값이 비어 있거나 검증되지 않은 항목일 수 있습니다."
+    ),
     ChatErrorCode.ANSWER_CLAIM_VALIDATION_FAILED: "답변의 근거를 검증하지 못했습니다.",
     ChatErrorCode.ANSWER_RENDERING_UNSUPPORTED: "현재 조회 결과는 안전한 답변 형식으로 제공할 수 없습니다.",
     ChatErrorCode.UNKNOWN_SAFE_FAILURE: "요청을 안전하게 처리하지 못했습니다.",

@@ -3,9 +3,16 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from enum import StrEnum
 from typing import Any, Mapping
 
+from .fact_families import (
+    BASE_FILTER_BINDINGS,
+    EXTENDED_ONLY_FILTERS,
+    FilterBinding,
+    SelectionMode,
+    family_for_mode,
+    resolve_filter_bindings,
+)
 from .schema_catalog import SchemaCatalog
 
 
@@ -15,43 +22,22 @@ class QueryPlanError(ValueError):
 
 MAX_QUESTION_LENGTH = 2_000
 
+# ``SelectionMode``/``FilterBinding``/``FILTER_BINDINGS`` are declared in
+# ``fact_families`` so that fact-family declarations and the plan contract cannot
+# drift apart.  They stay importable from here for the existing call sites.
+__all__ = [
+    "FILTER_BINDINGS",
+    "FilterBinding",
+    "MAX_QUESTION_LENGTH",
+    "QueryPlan",
+    "QueryPlanError",
+    "SelectionMode",
+    "SUPPORTED_FILTERS",
+    "resolve_filter_bindings",
+    "validate_filter_policy",
+]
 
-class SelectionMode(StrEnum):
-    """Expected result cardinality semantics carried through result validation."""
-
-    SINGLE_RULE = "SINGLE_RULE"
-    MULTIPLE_RULES = "MULTIPLE_RULES"
-    SINGLE_COURSE = "SINGLE_COURSE"
-    COURSE_LIST = "COURSE_LIST"
-
-
-@dataclass(frozen=True, slots=True)
-class FilterBinding:
-    """Query contract binding, validated against the ontology catalog at runtime."""
-
-    label: str
-    property_name: str
-    operator: str = "EQUALS"
-
-
-# This is query-policy metadata, not a duplicate schema definition.  Every referenced
-# label/property is checked against the generated ontology catalog before a plan is
-# accepted.  External filter names intentionally match ontology properties.
-FILTER_BINDINGS = {
-    "academic_year": FilterBinding("CurriculumVersion", "academic_year"),
-    "department_id": FilterBinding("Department", "department_id"),
-    "grade_year": FilterBinding("CourseOffering", "grade_year", "PARAMETER_IN_PROPERTY"),
-    "semester": FilterBinding("CourseOffering", "semester"),
-    "completion_type": FilterBinding("CourseOffering", "completion_type"),
-    "credits": FilterBinding("CourseOffering", "credits"),
-    "course_code": FilterBinding("Course", "course_code"),
-    "name_ko": FilterBinding("Course", "name_ko"),
-    "rule_id": FilterBinding("Rule", "rule_id"),
-    "rule_ids": FilterBinding("Rule", "rule_id", "PROPERTY_IN_PARAMETER"),
-    "area_id": FilterBinding("EducationArea", "area_id"),
-    "major_type": FilterBinding("ApplicabilityScope", "major_type"),
-    "admission_type": FilterBinding("ApplicabilityScope", "admission_type"),
-}
+FILTER_BINDINGS = BASE_FILTER_BINDINGS
 SUPPORTED_FILTERS = frozenset(FILTER_BINDINGS)
 REQUIRED_SCOPE_FILTERS = frozenset({"academic_year"})
 DEPARTMENT_SCOPED_FILTERS = frozenset(
@@ -75,11 +61,37 @@ VOCABULARY_FILTERS = {
     "completion_type": "completion_type",
     "major_type": "major_type",
     "admission_type": "admission_type",
+    "recommended_semester": "semester",
+    "entry_type": "roadmap_entry_type",
+    "goal_scope": "goal_scope",
 }
+# 자유 문자열 필터. 통제어휘가 아니므로 값 자체를 검사하지 않고, 일치하는 사실이
+# 없으면 NOT_FOUND 로 끝난다. 없는 값을 지어내지 않는다는 성질은 그대로다.
+FREE_TEXT_FILTERS = frozenset({"credit_category"})
+BOOLEAN_FILTERS = frozenset({"source_was_blank", "is_total"})
 
 
 def validate_filter_policy(catalog: SchemaCatalog) -> None:
-    for name, binding in FILTER_BINDINGS.items():
+    """Check every declared binding, including per-family overrides, against the catalog."""
+
+    bindings = dict(FILTER_BINDINGS)
+    for mode in SelectionMode:
+        family = family_for_mode(mode)
+        if family is not None:
+            bindings.update(
+                {
+                    f"{mode.value}.{name}": binding
+                    for name, binding in family.filter_overrides.items()
+                }
+            )
+            for field, alias in family.field_owners.items():
+                if alias != family.fact_alias:
+                    continue
+                if field not in catalog.properties_for_labels({family.fact_label}):
+                    raise QueryPlanError(
+                        f"fact family {family.fact_label} declares an undeclared field {field}"
+                    )
+    for name, binding in bindings.items():
         definition = catalog.nodes.get(binding.label)
         if definition is None or binding.property_name not in catalog.properties_for_labels(
             {binding.label}
@@ -144,6 +156,14 @@ class QueryPlan:
             isinstance(credits, bool) or not isinstance(credits, (int, float)) or credits < 0
         ):
             raise QueryPlanError("credits must be a non-negative number")
+        for name in BOOLEAN_FILTERS.intersection(filters):
+            if not isinstance(filters[name], bool):
+                raise QueryPlanError(f"{name} must be a boolean")
+        for name in FREE_TEXT_FILTERS.intersection(filters):
+            value = filters[name]
+            if not isinstance(value, str) or not value.strip():
+                raise QueryPlanError(f"{name} must be a non-empty string")
+            filters[name] = value.strip()
         for name in ("department_id", "course_code", "name_ko", "rule_id", "area_id"):
             if name in filters:
                 value = filters[name]
@@ -217,8 +237,39 @@ class QueryPlan:
             {"course_code", "name_ko"}.intersection(filters)
         ):
             raise QueryPlanError(
-                "SINGLE_COURSE requires a course_code or name_ko identity filter"
+                "SINGLE_COURSE is only for one course identified by course_code or "
+                "name_ko. A credit or count question without a named course asks for "
+                "a completion requirement: use SINGLE_RULE or MULTIPLE_RULES with "
+                "rule_ids and the value/operator/unit/description_ko fields."
             )
+
+        # 확장 fact family 의 계약. family 는 fact label 하나에 고정되므로 필터와
+        # 요청 필드가 그 label(또는 선언된 이웃)에 실제로 존재하는지 여기서 닫는다.
+        family = family_for_mode(selection_mode)
+        if family is None:
+            stray = EXTENDED_ONLY_FILTERS.intersection(filters)
+            if stray:
+                raise QueryPlanError(
+                    f"filters require an extended fact family: {sorted(stray)}"
+                )
+        else:
+            unsupported_filters = set(filters) - family.allowed_filters
+            if unsupported_filters:
+                raise QueryPlanError(
+                    f"{selection_mode.value} does not support filters: "
+                    f"{sorted(unsupported_filters)}"
+                )
+            missing_required = family.required_filters - set(filters)
+            if missing_required:
+                raise QueryPlanError(
+                    f"{selection_mode.value} requires filters: {sorted(missing_required)}"
+                )
+            unsupported_fields = set(normalized_fields) - set(family.field_owners)
+            if unsupported_fields:
+                raise QueryPlanError(
+                    f"{selection_mode.value} does not expose fields: "
+                    f"{sorted(unsupported_fields)}"
+                )
         return cls(
             question=question.strip(),
             filters=filters,

@@ -31,6 +31,13 @@ RENDER_DPI = 144
 MIN_NEEDLE_LENGTH = 2
 MAX_NEEDLES_PER_EVIDENCE = 12
 MAX_RECTS_PER_EVIDENCE = 40
+# 문장형 원문을 부분 구절로 나눌 때의 한계. 너무 짧은 구절은 페이지 곳곳에 흔해
+# 엉뚱한 위치를 강조하므로 하한을 둔다.
+MIN_PHRASE_LENGTH = 6
+MAX_PHRASE_WINDOWS = 40
+PHRASE_WINDOW_SIZES = (32, 24, 18, 14, 10, 8)
+# 한 검색어가 페이지에서 이보다 많이 나오면 그 구절은 특정 위치를 가리키지 못한다.
+MAX_HITS_PER_NEEDLE = 3
 _LABEL_PREFIX = re.compile(r"^(?:이론|실기|개설학기|핵심역량|관련학과|학점)\s*")
 
 
@@ -151,11 +158,41 @@ def inspect_pdf(path: Path | None = None) -> PdfSource:
     return _inspect_existing(str(target), stat.st_mtime_ns, stat.st_size)
 
 
+def _phrase_windows(chunk: str) -> list[str]:
+    """Break one sentence into progressively shorter word windows.
+
+    한글 조판 PDF는 문장이 텍스트 레이어에서 여러 조각으로 흩어진다. 예를 들어 원문이
+    한 문장이어도 추출하면 `가학과별 교양과목 이수학점` 처럼 번호가 붙거나 뒷부분이
+    다른 조각으로 떨어져, 문장 전체로는 절대 검색되지 않는다. 그래서 어절을 묶은
+    부분 구절도 후보로 만들어 둔다.
+    """
+
+    length = len(chunk)
+    if length <= MIN_PHRASE_LENGTH:
+        return []
+    windows: list[str] = []
+    # 어절 경계로 자르면 조사 하나 때문에 어긋난다. 원문이 "이수학점은"이어도 PDF
+    # 텍스트는 "이수학점"에서 끊기는 식이므로 글자 단위로 겹쳐 가며 자른다.
+    # 긴 구절부터 만들어야 우연한 짧은 일치보다 정확한 위치를 먼저 잡는다.
+    for size in PHRASE_WINDOW_SIZES:
+        if size >= length or size < MIN_PHRASE_LENGTH:
+            continue
+        step = max(2, size // 3)
+        for start in range(0, length - size + 1, step):
+            phrase = chunk[start : start + size].strip()
+            if len(phrase) >= MIN_PHRASE_LENGTH:
+                windows.append(phrase)
+        if len(windows) >= MAX_PHRASE_WINDOWS:
+            break
+    return list(dict.fromkeys(windows))[:MAX_PHRASE_WINDOWS]
+
+
 def needles_from_raw_text(raw_text: str) -> list[str]:
     """Evidence 원문을 페이지에서 찾을 만한 검색어로 쪼갠다.
 
-    원문은 `기초교양 | 미래설계 | GEA8001 | 대학생활의설계(CDP-C) | ...` 형태이므로
-    구분자로 나눈 뒤 라벨 접두어를 떼고 긴 조각을 우선한다.
+    원문은 `기초교양 | 미래설계 | GEA8001 | 대학생활의설계(CDP-C) | ...` 형태이거나 한
+    문장일 수 있다. 구분자로 나눈 뒤 라벨 접두어를 떼고, 문장형 조각은 부분 구절까지
+    후보로 넓혀 긴 것부터 시도한다.
     """
     if not raw_text:
         return []
@@ -168,6 +205,7 @@ def needles_from_raw_text(raw_text: str) -> list[str]:
             # '1', '3' 같은 값은 페이지 전체에 흔해서 강조 대상이 될 수 없다.
             continue
         parts.append(cleaned)
+        parts.extend(_phrase_windows(cleaned))
     unique = list(dict.fromkeys(parts))
     unique.sort(key=len, reverse=True)
     return unique[:MAX_NEEDLES_PER_EVIDENCE]
@@ -193,17 +231,48 @@ def _merge_rects(rects: Sequence[Any], tolerance: float = 2.0) -> list[Any]:
     return merged
 
 
+def needle_groups(raw_text: str) -> list[list[str]]:
+    """Group each source fragment with its fallback phrases, longest first.
+
+    한 그룹은 원문의 조각 하나를 가리킨다. 그룹 안에서는 처음 찾은 검색어만 쓰므로,
+    같은 조각이 부분 구절 때문에 여러 번 강조되지 않는다.
+    """
+
+    if not raw_text:
+        return []
+    groups: list[list[str]] = []
+    for chunk in re.split(r"\s*[|·/]\s*|\s{2,}", raw_text):
+        cleaned = _LABEL_PREFIX.sub("", chunk).strip(" .,()[]")
+        if len(cleaned) < MIN_NEEDLE_LENGTH:
+            continue
+        if cleaned.isdigit() and len(cleaned) <= 2:
+            continue
+        # 그룹 안에서는 첫 성공 하나만 채택하므로 후보를 넉넉히 둬도 강조가
+        # 늘어나지 않는다. 짧은 구절까지 시도해야 조판으로 끊긴 문장을 찾는다.
+        candidates = [cleaned, *_phrase_windows(cleaned)]
+        groups.append(candidates[: MAX_PHRASE_WINDOWS + 1])
+    return groups
+
+
 def _highlights_on_page(page: Any, raw_text: str) -> list[Highlight]:
-    """이미 열려 있는 페이지에서 원문 조각을 찾아 정규화한다."""
+    """이미 열려 있는 페이지에서 원문 조각을 찾아 정규화한다.
+
+    조각마다 긴 검색어부터 시도하고, 위치를 특정할 수 있는 첫 결과만 채택한다.
+    페이지 곳곳에 흔한 구절은 건너뛴다.
+    """
     width = page.rect.width or 1.0
     height = page.rect.height or 1.0
     found: list[Any] = []
-    for needle in needles_from_raw_text(raw_text):
-        try:
-            hits = page.search_for(needle, quads=False)
-        except Exception:  # 검색 실패는 강조 없음으로 처리한다.
-            continue
-        found.extend(hits)
+    for candidates in needle_groups(raw_text):
+        for needle in candidates:
+            try:
+                hits = page.search_for(needle, quads=False)
+            except Exception:  # 검색 실패는 강조 없음으로 처리한다.
+                continue
+            if not hits or len(hits) > MAX_HITS_PER_NEEDLE:
+                continue
+            found.extend(hits)
+            break
         if len(found) >= MAX_RECTS_PER_EVIDENCE:
             break
     return [

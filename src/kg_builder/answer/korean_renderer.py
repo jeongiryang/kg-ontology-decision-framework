@@ -25,6 +25,17 @@ ENUM_KO = {
     "SUMMER": "하계 계절수업",
     "WINTER": "동계 계절수업",
 }
+ROADMAP_ENTRY_KO = {
+    "COURSE": "권장 교과목",
+    "EXTRACURRICULAR": "권장 비교과 활동",
+    "GUIDANCE": "로드맵 유의사항",
+}
+# 헤더에 조사를 함께 둔다. 조사를 자동 판정하면 원문 표기와 어긋날 수 있다.
+NARRATIVE_HEADERS = {
+    "education_goals": "학과 교육목표는",
+    "talent_profiles": "학과 인재상은",
+    "career_fields": "졸업 후 진출 분야는",
+}
 _INTERNAL_TOKEN = re.compile(
     r"(?i)(?<![A-Za-z0-9_])(?:Cypher|MATCH|RETURN|CREATE|DELETE|MERGE|INSERT|SET|REMOVE|DROP|ALTER|CALL|APOC)(?![A-Za-z0-9_])"
 )
@@ -100,7 +111,9 @@ class KoreanAnswerRenderer:
     def __init__(self, *, max_answer_chars: int = 8_000):
         self.max_answer_chars = max_answer_chars
 
-    def render(self, validated: ValidatedClaims) -> RenderedAnswer:
+    def render(
+        self, validated: ValidatedClaims, *, notice: str | None = None
+    ) -> RenderedAnswer:
         if not isinstance(validated, ValidatedClaims) or not validated._is_approved():
             raise GroundingError(
                 "ANSWER_CLAIM_APPROVAL_REQUIRED",
@@ -120,10 +133,22 @@ class KoreanAnswerRenderer:
             text = self._rules(claims)
         elif kinds == {ClaimType.FIELD_VALUE}:
             text = self._single_course(claims)
+        elif kinds == {ClaimType.ALLOCATION_LIST}:
+            text = self._allocations(claims)
+        elif kinds == {ClaimType.ROADMAP_LIST}:
+            text = self._roadmap(claims)
+        elif kinds == {ClaimType.NARRATIVE_LIST}:
+            text = self._narrative(claims)
+        elif kinds == {ClaimType.RECOMMENDATION_LIST}:
+            text = self._recommendations(claims)
         else:
             raise GroundingError(
                 "ANSWER_RENDERING_UNSUPPORTED", "Claim combination is unsupported"
             )
+        # 조회 범위를 좁히지 못해 넓게 답한 경우 그 사실을 답변 앞에 밝힌다. 문구는
+        # 통제 코드에서 Python 이 만들며 모델 문장을 쓰지 않는다.
+        if notice:
+            text = f"{notice}\n\n{text}"
         if len(text) > self.max_answer_chars:
             raise GroundingError("ANSWER_TOO_LARGE", "rendered answer is too large")
         if _INTERNAL_TOKEN.search(text) or _SECRET_TEXT.search(text):
@@ -233,3 +258,116 @@ class KoreanAnswerRenderer:
         if "credits_sum" in aggregates:
             result += f"이며 합계 {aggregates['credits_sum'].value}학점"
         return result + "입니다."
+
+    @staticmethod
+    def _allocations(claims: Sequence[GroundedClaim]) -> str:
+        """Render the verified credit-allocation table without summing anything.
+
+        합계는 원문이 ``is_total`` 행으로 따로 제공한다. 항목을 더해 만든 값은 원문에
+        근거가 없으므로 여기서도, Claim 단계에서도 계산하지 않는다.
+        """
+
+        claim = _single_list_claim(claims, ClaimType.ALLOCATION_LIST)
+        groups: dict[str, list] = {}
+        for item in claim.value:
+            groups.setdefault(item.credit_category, []).append(item)
+        parts: list[str] = []
+        for category, items in groups.items():
+            pieces: list[str] = []
+            for item in items:
+                credits = f"{item.allocated_credits}학점"
+                period = _period_text(item.grade_year, item.semester)
+                if item.is_total is True:
+                    pieces.append(f"합계 {credits}")
+                elif period:
+                    pieces.append(f"{period} {credits}")
+                else:
+                    pieces.append(credits)
+            parts.append(f"{category} 배정 학점은 " + ", ".join(pieces) + "입니다.")
+        return " ".join(parts)
+
+    @staticmethod
+    def _roadmap(claims: Sequence[GroundedClaim]) -> str:
+        claim = _single_list_claim(claims, ClaimType.ROADMAP_LIST)
+        groups: dict[tuple[str, str], list[str]] = {}
+        for item in claim.value:
+            kind = ROADMAP_ENTRY_KO.get(item.entry_type)
+            if kind is None:
+                raise GroundingError(
+                    "ANSWER_RENDERING_UNSUPPORTED", "unsupported roadmap entry type"
+                )
+            groups.setdefault(
+                (_period_text(item.grade_year, item.semester), kind), []
+            ).append(item.raw_label)
+        parts: list[str] = []
+        for (period, kind), labels in groups.items():
+            prefix = f"{period} " if period else ""
+            # ROADMAP_ENTRY_KO 의 값은 모두 받침으로 끝나므로 보조사는 '은'으로 고정된다.
+            parts.append(f"{prefix}{kind}은 " + ", ".join(labels) + "입니다.")
+        return " ".join(parts)
+
+    @staticmethod
+    def _narrative(claims: Sequence[GroundedClaim]) -> str:
+        claim = _single_list_claim(claims, ClaimType.NARRATIVE_LIST)
+        header = NARRATIVE_HEADERS.get(claim.field)
+        if header is None:
+            raise GroundingError(
+                "ANSWER_RENDERING_UNSUPPORTED", "unsupported narrative Claim"
+            )
+        items = claim.value
+        orders = {item.order is not None for item in items}
+        if len(orders) != 1:
+            raise GroundingError(
+                "ANSWER_RENDERING_UNSUPPORTED", "narrative order is inconsistent"
+            )
+        if len(items) == 1:
+            return f"{header} {items[0].text}입니다."
+        # 원문 순번을 그대로 쓴다. 일부만 조회된 경우에도 표시 번호가 원문과 어긋나지
+        # 않아야 하므로 새로 매기지 않는다.
+        numbered = items[0].order is not None
+        body = " ".join(
+            f"{item.order}) {item.text}" if numbered else f"{item.text}."
+            for item in items
+        )
+        return f"{header} 다음과 같습니다. {body}"
+
+    @staticmethod
+    def _recommendations(claims: Sequence[GroundedClaim]) -> str:
+        claim = _single_list_claim(claims, ClaimType.RECOMMENDATION_LIST)
+        pieces: list[str] = []
+        for item in claim.value:
+            details: list[str] = []
+            if item.course_code:
+                details.append(item.course_code)
+            period = _period_text(item.recommended_grade_year, item.recommended_semester)
+            if period:
+                details.append(period)
+            if item.credits is not None:
+                details.append(f"{item.credits}학점")
+            if item.area_raw:
+                details.append(item.area_raw)
+            pieces.append(
+                f"{item.course_name_ko}({', '.join(details)})" if details else item.course_name_ko
+            )
+        return "학과 권장 교양 과목은 " + ", ".join(pieces) + "입니다."
+
+
+def _single_list_claim(
+    claims: Sequence[GroundedClaim], claim_type: ClaimType
+) -> GroundedClaim:
+    matched = [claim for claim in claims if claim.claim_type is claim_type]
+    if len(matched) != 1 or not isinstance(matched[0].value, tuple) or not matched[0].value:
+        raise GroundingError("ANSWER_CLAIM_INVALID", "one non-empty list Claim is required")
+    return matched[0]
+
+
+def _period_text(grade_year: object, semester: object) -> str:
+    parts: list[str] = []
+    if isinstance(grade_year, int) and not isinstance(grade_year, bool):
+        parts.append(f"{grade_year}학년")
+    if semester is not None:
+        label = ENUM_KO.get(semester)
+        if label is None:
+            raise GroundingError("ANSWER_RENDERING_UNSUPPORTED", "unsupported semester")
+        parts.append(label)
+    return " ".join(parts)

@@ -7,7 +7,8 @@ from collections import deque
 from pathlib import Path
 from typing import Any
 
-from .query_plan import FILTER_BINDINGS, QueryPlan
+from .fact_families import family_for_mode
+from .query_plan import QueryPlan, resolve_filter_bindings
 from .schema_catalog import DEFAULT_QUERY_SCHEMA_PATH, DEFAULT_SPEC_PATH, SchemaCatalog, sha256_file
 
 
@@ -31,9 +32,17 @@ class QuerySchemaSelector:
         self.relationships = {item["type"]: item for item in self.generated["relationships"]}
 
     def select(self, plan: QueryPlan) -> dict[str, Any]:
-        seeds = {FILTER_BINDINGS[name].label for name in plan.filters}
+        bindings = resolve_filter_bindings(plan.selection_mode)
+        seeds = {bindings[name].label for name in plan.filters}
         requested = set(plan.requested_fields)
-        if seeds.intersection({"Course", "CourseOffering", "Department"}) or requested.intersection(
+        # 확장 family 는 selection_mode 가 fact label 을 1:1로 확정한다. 확장 family 도
+        # 학과 범위를 쓰기 때문에, 라벨 추론보다 먼저 판정해야 CourseOffering 으로
+        # 잘못 흡수되지 않는다.
+        family = family_for_mode(plan.selection_mode)
+        if family is not None:
+            fact_label = family.fact_label
+            seeds.update({"CurriculumVersion", "Department", fact_label})
+        elif seeds.intersection({"Course", "CourseOffering", "Department"}) or requested.intersection(
             {"course_code", "name_ko", "grade_year", "semester", "credits", "completion_type"}
         ):
             fact_label = "CourseOffering"
