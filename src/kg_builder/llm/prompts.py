@@ -26,6 +26,14 @@ selection_mode은 단일 규칙=SINGLE_RULE, 영역의 복수 규칙=MULTIPLE_RU
 졸업 후 진출 분야는 CAREER_FIELD_LIST이며 name_ko, field_order 필드를 쓴다.
 학과 인재상은 TALENT_PROFILE_LIST이며 description_ko, profile_order 필드를 쓴다.
 학과가 권장하는 교양 과목은 COURSE_RECOMMENDATION_LIST이며 course_name_ko, course_code, recommended_grade_year, recommended_semester, credits 필드를 쓴다.
+대학 교육목표는 UNIVERSITY_GOAL_LIST이며 description_ko, goal_order 필드를 쓴다. 학과 교육목표와 구분한다.
+학과 전공능력은 MAJOR_COMPETENCY_LIST이며 name_ko, description_ko 필드를 쓴다.
+대학 핵심역량은 UNIVERSITY_COMPETENCY_LIST이며 name_ko 필드를 쓴다. 이 모드에는 description_ko를 요청하지 않는다.
+전공능력별 과목 수와 학점은 COMPETENCY_AGGREGATE_LIST이며 aggregate_type, is_total, name_ko, course_count, credit_value 필드를 쓴다.
+전공 전체 과목 수와 학점, 최소전공학점제 시행 여부, 전공 개설 시수는 CURRICULUM_AGGREGATE_LIST이며 aggregate_type, is_total과 필요한 수치 필드를 쓴다.
+학과 교육목표와 전공능력의 연계는 GOAL_COMPETENCY_ALIGNMENT_LIST이며 strength, description_ko, name_ko 필드를 쓴다.
+대학 핵심역량과 전공능력의 연계는 CORE_COMPETENCY_ALIGNMENT_LIST이며 strength, normalized_name_ko, name_ko 필드를 쓴다.
+대학 교육목표와 학과 교육목표의 연계는 GOAL_ALIGNMENT_LIST이며 strength, description_ko, name_ko 필드를 쓴다.
 확장 selection_mode에는 그 모드가 허용하는 필터와 필드만 넣는다. 다른 모드의 필드를 섞지 않는다.
 확장 selection_mode에는 academic_year와 department_id를 반드시 넣는다.
 COURSE_RECOMMENDATION_LIST에서 학년·학기로 좁힐 때는 recommended_grade_year와 recommended_semester를 쓴다. 이 모드에서는 grade_year와 semester를 쓸 수 없다.

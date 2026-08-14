@@ -494,7 +494,8 @@ class CitationAndResponseContractTests(unittest.TestCase):
             tuple(normal.to_dict()),
             (
                 "request_id", "status", "answer_text", "citations",
-                "used_fact_ids", "used_evidence_ids", "clarification", "error_code",
+                "used_fact_ids", "used_evidence_ids", "clarification",
+                "missing", "options", "error_code",
             ),
         )
 

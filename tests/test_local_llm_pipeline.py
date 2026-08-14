@@ -269,13 +269,24 @@ class NaturalLanguageServiceTests(unittest.TestCase):
         self.assertEqual(result.error_code, "LLM_HTTP_REDIRECT_REJECTED")
         self.assertIsNone(result.cypher)
 
-    def test_second_unsafe_candidate_stops_without_direct_execution(self) -> None:
+    def test_unsafe_candidates_never_execute_and_fall_back_to_the_scaffold(self) -> None:
+        """모델이 쓴 위험한 Cypher 는 한 건도 실행되지 않아야 한다.
+
+        재시도를 다 쓰면 계획에서 결정론적으로 만든 스캐폴드로 되돌아간다. 스캐폴드도
+        검증기를 그대로 통과해야 하므로, 이 경로가 안전 관문을 건너뛰지 않는다. 여기서
+        확인할 것은 "무엇이 실행됐는가"이지 상태 문자열이 아니다.
+        """
+
         bad = SAFE_QUERY.replace("MATCH", "CREATE", 1)
         generator = SequenceGenerator([bad, bad])
         with tempfile.TemporaryDirectory() as directory:
             result = self.service(generator, directory).ask(self.plan.question)
-        self.assertEqual(result.status, "SAFE_FAILURE")
-        self.assertEqual(result.error_stage, "CYPHER_VALIDATION")
+        self.assertNotIn("CREATE", result.cypher or "")
+        self.assertEqual(result.status, "ANSWERABLE")
+        # 모델은 재시도 횟수만큼만 호출된다. 마지막 한 번은 모델을 부르지 않고
+        # 스캐폴드를 쓰므로 준비한 후보가 모두 소진돼 있어야 한다.
+        self.assertEqual(len(generator.errors), 2)
+        self.assertEqual(generator.candidates, [])
 
     def test_empty_rows_are_not_found_and_ambiguous_plan_does_not_generate(self) -> None:
         generator = SequenceGenerator([SAFE_QUERY])

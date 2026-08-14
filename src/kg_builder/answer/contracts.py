@@ -63,39 +63,48 @@ CLARIFICATION_FALLBACK = (
 )
 
 
-def clarification_message(missing: Sequence[str] | None) -> str:
-    """Build the user-facing prompt from controlled codes, never from model prose."""
-
-    labels = [
-        MISSING_SCOPE_LABELS[str(code)]
-        for code in (missing or [])
-        if str(code) in MISSING_SCOPE_LABELS
-    ]
-    if not labels:
-        return CLARIFICATION_FALLBACK
-    return "질문을 확인하려면 다음 정보가 더 필요합니다: " + ", ".join(labels) + "."
-
-
-# 조회 범위를 좁히지 못해 넓게 답했을 때 답변 앞에 붙일 안내. 어떤 경우에도 없는
-# 사실을 만들지 않으며, 좁히지 못했다는 사실만 밝힌다.
-BROADENED_NOTICES = {
-    "RULE_TOPIC_UNRESOLVED": (
-        "질문이 어떤 이수요건을 가리키는지 좁히지 못해, 확인된 이수요건을 모두 "
-        "근거와 함께 보여 드립니다."
-    ),
-    "RULE_TOPIC_NARROWED": (
-        "질문이 어떤 이수요건을 가리키는지 확정하지 못해, 질문과 관련된 이수요건을 "
-        "근거와 함께 보여 드립니다."
-    ),
+# 선택지를 함께 낼 때 쓰는 질문형 문구. 고를 것이 있으면 "무엇이 부족하다"가 아니라
+# 무엇을 고르면 되는지 직접 묻는다. 이 문구도 Python 이 통제 코드에서 고른다.
+MISSING_SCOPE_QUESTIONS: dict[str, str] = {
+    "ACADEMIC_YEAR": "어느 학년도를 말씀하시나요?",
+    "DEPARTMENT": "어느 학과를 말씀하시나요?",
+    "COURSE_IDENTITY": "어떤 과목을 말씀하시나요?",
+    "RULE_TOPIC": "어떤 이수요건을 말씀하시나요?",
+    "QUESTION_INTENT": "무엇을 알고 싶으신가요?",
 }
 
 
-def broadened_notice(reason: str | None) -> str | None:
-    """Map a controlled broadening reason to its Korean notice."""
+# 선택지가 어떤 필터를 채우는지에 따른 질문 문구. 부족 코드로 물었더라도 실제로
+# 제시하는 선택지가 다를 수 있어(고를 것이 없어 "무엇을 알고 싶은지"로 되돌아간
+# 경우), 문구는 코드가 아니라 **실제 선택지**를 따라간다.
+FILTER_QUESTIONS: dict[str, str] = {
+    "academic_year": "어느 학년도를 말씀하시나요?",
+    "department_id": "어느 학과를 말씀하시나요?",
+    "course_code": "어떤 과목을 말씀하시나요?",
+    "rule_ids": "어떤 이수요건을 말씀하시나요?",
+    "selection_mode": "무엇을 알고 싶으신가요?",
+}
 
-    if not reason:
-        return None
-    return BROADENED_NOTICES.get(str(reason))
+
+def clarification_message(
+    missing: Sequence[str] | None,
+    options: Sequence["ClarificationOption"] = (),
+) -> str:
+    """Build the user-facing prompt from controlled codes, never from model prose."""
+
+    codes = [str(code) for code in (missing or [])]
+    if options:
+        question = FILTER_QUESTIONS.get(options[0].filter_name)
+        if question:
+            return question
+        for code in codes:
+            question = MISSING_SCOPE_QUESTIONS.get(code)
+            if question:
+                return question
+    labels = [MISSING_SCOPE_LABELS[code] for code in codes if code in MISSING_SCOPE_LABELS]
+    if not labels:
+        return CLARIFICATION_FALLBACK
+    return "질문을 확인하려면 다음 정보가 더 필요합니다: " + ", ".join(labels) + "."
 
 
 class ClaimType(StrEnum):
@@ -111,6 +120,9 @@ class ClaimType(StrEnum):
     ROADMAP_LIST = "ROADMAP_LIST"
     NARRATIVE_LIST = "NARRATIVE_LIST"
     RECOMMENDATION_LIST = "RECOMMENDATION_LIST"
+    COMPETENCY_LIST = "COMPETENCY_LIST"
+    AGGREGATE_LIST = "AGGREGATE_LIST"
+    ALIGNMENT_LIST = "ALIGNMENT_LIST"
 
 
 class ClaimPolarity(StrEnum):
@@ -190,6 +202,69 @@ class RecommendationClaimItem:
     recommended_grade_year: int | None = None
     recommended_semester: str | None = None
     credits: int | float | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class CompetencyClaimItem:
+    """One verified competency defined by the department or the university."""
+
+    fact_id: str
+    name_ko: str
+    competency_type: str | None = None
+    description_ko: str | None = None
+    normalized_name_ko: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class AggregateClaimItem:
+    """One verified curriculum aggregate row taken verbatim from the source table.
+
+    ``aggregate_type``마다 채워지는 수치가 다르다. 비어 있는 항목은 ``None``으로 두며,
+    렌더러는 값이 있는 것만 문장에 넣는다. 항목을 더해 합계를 만들지 않는다.
+    """
+
+    fact_id: str
+    aggregate_type: str
+    is_total: bool
+    name_ko: str | None = None
+    course_count: int | None = None
+    credit_value: int | float | None = None
+    lecture_hours: int | float | None = None
+    practice_hours: int | float | None = None
+    boolean_value: bool | None = None
+    unit: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class AlignmentClaimItem:
+    """One verified cell of an alignment matrix.
+
+    ``source_text``는 출발 쪽 항목의 원문 서술이고 ``name_ko``는 도착 쪽 항목의 이름이다.
+    ``source_value``는 원문 표에 적힌 표기(예: ``연계성 높음(◉)``)를 그대로 옮긴 값이다.
+    """
+
+    fact_id: str
+    alignment_type: str
+    strength: str
+    source_text: str
+    name_ko: str
+    source_value: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class CompetencyAlignmentClaimItem:
+    """One alignment cell whose both ends are competencies.
+
+    양끝이 같은 라벨이라 이름 속성이 겹친다. 출발 쪽은 ``normalized_name_ko``,
+    도착 쪽은 ``name_ko`` 로 서로 다른 온톨로지 속성을 쓴다.
+    """
+
+    fact_id: str
+    alignment_type: str
+    strength: str
+    normalized_name_ko: str
+    name_ko: str
+    source_value: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -290,6 +365,29 @@ def safe_failure_message(error_code: ChatErrorCode | str | None) -> str:
     return SAFE_FAILURE_MESSAGES[normalize_error_code(error_code)]
 
 
+@dataclass(frozen=True, slots=True)
+class ClarificationOption:
+    """One data-derived choice that completes a missing query scope.
+
+    ``value``는 계획의 필터에 그대로 들어갈 값이고 ``label``은 사용자에게 보일 말이다.
+    **둘 다 적재된 데이터에서 나온다.** 사용자가 고를 수 있는 값이 데이터에 있는 것뿐이
+    되므로, 되묻기를 거쳐도 없는 값이 계획에 들어갈 수 없다.
+    """
+
+    filter_name: str
+    value: Any
+    label: str
+    detail: str | None = None
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "filter": self.filter_name,
+            "value": self.value,
+            "label": self.label,
+            "detail": self.detail,
+        }
+
+
 def _response_digest(state: tuple[Any, ...]) -> str:
     return hmac.new(
         _RESPONSE_KEY, repr(state).encode("utf-8"), hashlib.sha256
@@ -307,6 +405,10 @@ class ChatResponse:
     used_fact_ids: tuple[str, ...] = ()
     used_evidence_ids: tuple[str, ...] = ()
     clarification: str | None = None
+    # 무엇이 부족한지에 대한 통제 코드와, 사용자가 고를 수 있는 데이터 유래 선택지.
+    # 되묻기에서만 채워지며 답변 응답에는 들어가지 않는다.
+    missing: tuple[str, ...] = ()
+    options: tuple[ClarificationOption, ...] = ()
     error_code: ChatErrorCode | None = None
     # Claims remain an internal audit contract.  The stable UI JSON contract does not
     # expose them; it exposes their IDs and server-assembled citations instead.
@@ -335,6 +437,8 @@ class ChatResponse:
             used_fact_ids,
             used_evidence_ids,
             clarification,
+            missing,
+            options,
             error_code,
             grounded_claims,
         ) = _state
@@ -345,6 +449,8 @@ class ChatResponse:
         object.__setattr__(self, "used_fact_ids", used_fact_ids)
         object.__setattr__(self, "used_evidence_ids", used_evidence_ids)
         object.__setattr__(self, "clarification", clarification)
+        object.__setattr__(self, "missing", missing)
+        object.__setattr__(self, "options", options)
         object.__setattr__(self, "error_code", error_code)
         object.__setattr__(self, "grounded_claims", grounded_claims)
         object.__setattr__(self, "_approval", _approval)
@@ -362,6 +468,8 @@ class ChatResponse:
         used_fact_ids: tuple[str, ...] = (),
         used_evidence_ids: tuple[str, ...] = (),
         clarification: str | None = None,
+        missing: tuple[str, ...] = (),
+        options: tuple[ClarificationOption, ...] = (),
         error_code: ChatErrorCode | None = None,
         grounded_claims: tuple[GroundedClaim, ...] = (),
     ) -> "ChatResponse":
@@ -373,6 +481,8 @@ class ChatResponse:
             used_fact_ids,
             used_evidence_ids,
             clarification,
+            missing,
+            options,
             error_code,
             grounded_claims,
         )
@@ -391,6 +501,8 @@ class ChatResponse:
             self.used_fact_ids,
             self.used_evidence_ids,
             self.clarification,
+            self.missing,
+            self.options,
             self.error_code,
             self.grounded_claims,
         )
@@ -414,6 +526,8 @@ class ChatResponse:
                 )
             if self.clarification is not None or self.error_code is not None:
                 raise ValueError("ANSWERABLE cannot contain clarification or error_code")
+            if self.missing or self.options:
+                raise ValueError("ANSWERABLE cannot contain clarification options")
             claim_facts = {
                 item for claim in self.grounded_claims for item in claim.fact_ids
             }
@@ -425,6 +539,15 @@ class ChatResponse:
             return
         if self.citations or self.used_fact_ids or self.used_evidence_ids or self.grounded_claims:
             raise ValueError("non-ANSWERABLE responses cannot contain grounded data")
+        if self.status is not ChatStatus.CLARIFICATION_REQUIRED and (
+            self.missing or self.options
+        ):
+            raise ValueError("missing and options are exclusive to CLARIFICATION_REQUIRED")
+        if any(
+            not isinstance(option, ClarificationOption) or not option.label.strip()
+            for option in self.options
+        ):
+            raise ValueError("clarification options require a readable label")
         if self.status is ChatStatus.CLARIFICATION_REQUIRED:
             if not self.clarification or not self.clarification.strip():
                 raise ValueError("CLARIFICATION_REQUIRED requires clarification")
@@ -471,7 +594,11 @@ class ChatResponse:
 
     @classmethod
     def clarification_required(
-        cls, request_id: str, clarification: str
+        cls,
+        request_id: str,
+        clarification: str,
+        missing: Sequence[str] = (),
+        options: Sequence[ClarificationOption] = (),
     ) -> "ChatResponse":
         if not isinstance(clarification, str) or not clarification.strip():
             raise ValueError("clarification must be a non-empty string")
@@ -480,6 +607,8 @@ class ChatResponse:
             status=ChatStatus.CLARIFICATION_REQUIRED,
             answer_text=NON_ANSWERABLE_MESSAGES[ChatStatus.CLARIFICATION_REQUIRED],
             clarification=clarification.strip(),
+            missing=tuple(str(code) for code in missing),
+            options=tuple(options),
         )
 
     @classmethod
@@ -535,5 +664,7 @@ class ChatResponse:
             "used_fact_ids": list(self.used_fact_ids),
             "used_evidence_ids": list(self.used_evidence_ids),
             "clarification": self.clarification,
+            "missing": list(self.missing),
+            "options": [option.to_dict() for option in self.options],
             "error_code": self.error_code.value if self.error_code else None,
         }

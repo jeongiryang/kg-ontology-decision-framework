@@ -23,7 +23,7 @@ from kg_builder.llm.cypher_generator import build_syntax_scaffold
 from kg_builder.query.cypher_validator import CypherValidationError, CypherValidator
 from kg_builder.query.fact_families import (
     EXTENDED_FAMILIES,
-    FAMILY_BY_FACT_LABEL,
+    EXTENDED_FACT_LABELS,
     SelectionMode,
     resolve_filter_bindings,
 )
@@ -157,7 +157,7 @@ class FamilyDeclarationTests(unittest.TestCase):
             for relationship in bundle["relationships"]
             if relationship["type"] == "SUPPORTED_BY"
         }
-        for label in FAMILY_BY_FACT_LABEL:
+        for label in sorted(EXTENDED_FACT_LABELS):
             with self.subTest(label=label):
                 facts = [
                     node["id"] for node in bundle["nodes"] if label in node["labels"]

@@ -2017,10 +2017,35 @@
         "operator": "EQUALS",
         "property": "admission_type"
       },
+      "aggregate_type": {
+        "label": "CurriculumAggregate",
+        "operator": "EQUALS",
+        "property": "aggregate_type"
+      },
+      "alignment_strengths": {
+        "label": "Alignment",
+        "operator": "PROPERTY_IN_PARAMETER",
+        "property": "strength"
+      },
+      "alignment_type": {
+        "label": "Alignment",
+        "operator": "EQUALS",
+        "property": "alignment_type"
+      },
       "area_id": {
         "label": "EducationArea",
         "operator": "EQUALS",
         "property": "area_id"
+      },
+      "competency_id": {
+        "label": "Competency",
+        "operator": "EQUALS",
+        "property": "competency_id"
+      },
+      "competency_type": {
+        "label": "Competency",
+        "operator": "EQUALS",
+        "property": "competency_type"
       },
       "completion_type": {
         "label": "CourseOffering",
@@ -2051,6 +2076,11 @@
         "label": "RoadmapEntry",
         "operator": "EQUALS",
         "property": "entry_type"
+      },
+      "goal_id": {
+        "label": "EducationGoal",
+        "operator": "EQUALS",
+        "property": "goal_id"
       },
       "goal_scope": {
         "label": "EducationGoal",

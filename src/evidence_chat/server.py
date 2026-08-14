@@ -49,6 +49,8 @@ DEFAULT_PORT = 8501
 DEFAULT_CLIENT_TIMEOUT_SECONDS = 180
 DEFAULT_MAX_CONCURRENT = 1
 MAX_BODY_BYTES = 16 * 1024
+# 되묻기로 채울 수 있는 항목 수 상한. 이 이상은 정상 흐름이 아니다.
+MAX_RESOLVED_ENTRIES = 8
 
 EXAMPLE_QUESTIONS = (
     "2026학년도 교양 최소 이수학점은?",
@@ -170,7 +172,13 @@ def _state(request: Request) -> ChatState:
 
 async def index(request: Request) -> Response:
     del request
-    return FileResponse(STATIC_DIR / "index.html")
+    # 화면 문서는 캐시하지 않는다. 브라우저가 예전 index.html 을 들고 있으면 새
+    # app.js 가 없는 요소를 찾다가 답변 렌더링이 통째로 멈춘다. 로컬 개발 서버라
+    # 매번 내려받아도 비용이 없다.
+    return FileResponse(
+        STATIC_DIR / "index.html",
+        headers={"Cache-Control": "no-store"},
+    )
 
 
 async def health(request: Request) -> Response:
@@ -202,8 +210,17 @@ async def ask(request: Request) -> Response:
         payload = json.loads(raw or b"{}")
     except json.JSONDecodeError:
         return JSONResponse({"error": "JSON 본문을 해석할 수 없습니다."}, status_code=400)
-    if not isinstance(payload, dict) or set(payload) != {"question"}:
-        return JSONResponse({"error": "question 필드만 전송할 수 있습니다."}, status_code=400)
+    if not isinstance(payload, dict) or not set(payload) <= {"question", "resolved"}:
+        return JSONResponse(
+            {"error": "question 과 resolved 필드만 전송할 수 있습니다."}, status_code=400
+        )
+    # 되묻기에서 사용자가 고른 값. 서버는 대화 상태를 들지 않으므로 매 요청에 함께
+    # 온다. 값이 실제로 제시된 선택지였는지는 계획 계층이 다시 만들어 대조한다.
+    resolved = payload.get("resolved") or {}
+    if not isinstance(resolved, dict) or len(resolved) > MAX_RESOLVED_ENTRIES:
+        return JSONResponse(
+            {"error": "resolved 는 항목 수가 제한된 객체여야 합니다."}, status_code=400
+        )
     question = payload.get("question")
     if not isinstance(question, str) or not question.strip():
         return JSONResponse({"error": "question 필드가 필요합니다."}, status_code=400)
@@ -245,7 +262,7 @@ async def ask(request: Request) -> Response:
         try:
             async with limiter:
                 response = await anyio.to_thread.run_sync(
-                    service.ask, question
+                    service.ask, question, resolved
                 )
                 result = await anyio.to_thread.run_sync(
                     adapter.adapt, response

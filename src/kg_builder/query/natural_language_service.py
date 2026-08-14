@@ -5,10 +5,10 @@ from __future__ import annotations
 import uuid
 from dataclasses import dataclass
 from time import perf_counter
-from typing import Any, Protocol
+from typing import Any, Mapping, Protocol
 
 from kg_builder.llm.client import LLMResponseError
-from kg_builder.llm.cypher_generator import public_plan_payload
+from kg_builder.llm.cypher_generator import build_syntax_scaffold, public_plan_payload
 from kg_builder.llm.models import PlanningStatus
 from kg_builder.llm.planner import LocalQueryPlanner
 
@@ -18,7 +18,7 @@ from .schema_selector import QuerySchemaSelector
 
 
 class Planner(Protocol):
-    def plan(self, question: str): ...
+    def plan(self, question: str, resolved: Mapping[str, Any] | None = None): ...
 
 
 class Generator(Protocol):
@@ -41,8 +41,8 @@ class NaturalLanguageResult:
     message: str | None = None
     # 무엇이 부족한지에 대한 통제 코드. 화면 문구는 이 값으로 서비스가 만든다.
     missing: tuple[str, ...] = ()
-    # 조회 범위를 좁히지 못해 넓게 답한 경우의 사유 코드. 화면에 밝힌다.
-    broadened: str | None = None
+    # 되묻기 선택지. 값·표기 모두 적재 데이터에서 나오며 서비스가 그대로 전달한다.
+    options: tuple[Any, ...] = ()
 
     def to_dict(self) -> dict[str, Any]:
         payload: dict[str, Any] = {
@@ -86,11 +86,19 @@ class NaturalLanguageQueryService:
         self.model = model
         self.generator_retries = generator_retries
 
-    def ask(self, question: str) -> NaturalLanguageResult:
+    def ask(
+        self, question: str, resolved: Mapping[str, Any] | None = None
+    ) -> NaturalLanguageResult:
         started = perf_counter()
         provisional_id = str(uuid.uuid4())
         try:
-            planning = self.planner.plan(question)
+            # 되묻기로 확정된 값이 없으면 종전과 같은 한 인자 호출을 유지한다.
+            # 계획기 구현이 이 기능을 몰라도 기본 경로는 그대로 동작해야 한다.
+            planning = (
+                self.planner.plan(question, resolved)
+                if resolved
+                else self.planner.plan(question)
+            )
         except Exception as exc:
             code = getattr(exc, "code", exc.__class__.__name__)
             request_id = self._trace_planning(
@@ -110,6 +118,7 @@ class NaturalLanguageQueryService:
                 elapsed_seconds=perf_counter() - started,
                 message=planning.message,
                 missing=tuple(str(item) for item in planning.missing),
+                options=tuple(planning.options),
             )
 
         plan = planning.plan
@@ -126,12 +135,23 @@ class NaturalLanguageQueryService:
             )
 
         previous_error: str | None = None
-        for attempt in range(self.generator_retries + 1):
+        # 마지막 시도는 모델에게 한 번 더 시키지 않고 스캐폴드를 그대로 낸다.
+        # 스캐폴드는 계획에서 결정론적으로 만들어지는 문법 레일이며 정답 값을 담지
+        # 않는다. 모델이 이미 실패한 자리에서 같은 확률을 한 번 더 뽑는 것보다,
+        # 검증을 통과하는 것이 확인된 형태를 쓰는 편이 낫다. 이 Cypher 도 예외 없이
+        # 검증기·EXPLAIN·결과 검증을 다시 거친다.
+        total_attempts = self.generator_retries + 2
+        for attempt in range(total_attempts):
+            fallback = attempt == total_attempts - 1 and previous_error is not None
             try:
-                cypher = self.generator.generate(
-                    plan,
-                    schema_subset,
-                    previous_error_code=previous_error,
+                cypher = (
+                    build_syntax_scaffold(plan, schema_subset)
+                    if fallback
+                    else self.generator.generate(
+                        plan,
+                        schema_subset,
+                        previous_error_code=previous_error,
+                    )
                 )
             except LLMResponseError as exc:
                 return self._failure(
@@ -166,7 +186,6 @@ class NaturalLanguageQueryService:
                     cypher=cypher,
                     rows=outcome.result.rows,
                     evidence_count=outcome.result.evidence_count,
-                    broadened=planning.broadened,
                 )
             except SafetyPipelineError as exc:
                 if exc.code == "RESULT_COURSE_AMBIGUOUS":
@@ -185,7 +204,7 @@ class NaturalLanguageQueryService:
                         missing=("COURSE_IDENTITY",),
                     )
                 previous_error = exc.code
-                if attempt >= self.generator_retries:
+                if attempt >= total_attempts - 1:
                     return self._failure(
                         provisional_id,
                         started,

@@ -325,3 +325,41 @@ kbd {
   background: rgba(154, 103, 0, 0.1); color: var(--warn);
 }
 .notice.error { background: rgba(198, 43, 43, 0.1); color: var(--danger); }
+
+/* 되묻기 선택지. 값과 표기 모두 서버가 적재 데이터에서 만든 것만 쓴다. */
+.choices {
+  margin-top: 0.9rem;
+  padding: 0.9rem 1rem;
+  border: 1px solid var(--line, #3a4252);
+  border-radius: 10px;
+  background: var(--surface-2, rgba(255, 255, 255, 0.03));
+}
+.choice-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+.choice {
+  padding: 0.5rem 0.85rem;
+  border: 1px solid var(--accent, #5b8cff);
+  border-radius: 999px;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  font-size: 0.92rem;
+  cursor: pointer;
+  text-align: left;
+  max-width: 100%;
+}
+.choice:hover:not(:disabled) { background: rgba(91, 140, 255, 0.14); }
+.choice:focus-visible { outline: 2px solid var(--accent, #5b8cff); outline-offset: 2px; }
+.choice-hint {
+  margin: 0.7rem 0 0;
+  font-size: 0.82rem;
+  opacity: 0.72;
+}
+.resolved-note {
+  margin: 0.6rem 0 0;
+  font-size: 0.85rem;
+  opacity: 0.8;
+}

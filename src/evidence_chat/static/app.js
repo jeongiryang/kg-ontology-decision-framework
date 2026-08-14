@@ -30,6 +30,9 @@ const el = {
   answerBadge: $("answer-badge"),
   answerTitle: $("answer-title"),
   clarification: $("clarification"),
+  choices: $("choices"),
+  choiceList: $("choice-list"),
+  resolvedNote: $("resolved-note"),
   scopeNotice: $("scope-notice"),
   debugMeta: $("debug-meta"),
   evidenceSection: $("evidence-section"),
@@ -51,6 +54,39 @@ const span = (className, text) => {
   node.textContent = text;
   return node;
 };
+
+// 되묻기로 확정된 값. 서버는 대화 상태를 들지 않으므로 브라우저가 들고 매 요청에
+// 함께 보낸다. 값이 실제로 제시된 선택지였는지는 서버가 다시 만들어 대조한다.
+const CLARIFY_KEY = "evidence-chat-clarify";
+
+function loadClarify() {
+  try {
+    const saved = JSON.parse(sessionStorage.getItem(CLARIFY_KEY) || "null");
+    if (saved && typeof saved.question === "string" && saved.resolved) return saved;
+  } catch (error) {
+    /* 저장된 값이 깨졌으면 그냥 새로 시작한다. */
+  }
+  return { question: "", resolved: {} };
+}
+
+function saveClarify(state) {
+  try {
+    sessionStorage.setItem(CLARIFY_KEY, JSON.stringify(state));
+  } catch (error) {
+    /* 저장에 실패해도 이번 요청은 그대로 진행한다. */
+  }
+}
+
+function clearClarify() {
+  clarify = { question: "", resolved: {} };
+  try {
+    sessionStorage.removeItem(CLARIFY_KEY);
+  } catch (error) {
+    /* 지우지 못해도 다음 질문에서 덮어쓴다. */
+  }
+}
+
+let clarify = loadClarify();
 
 function showScreen(name) {
   Object.entries(el.screens).forEach(([key, node]) =>
@@ -135,7 +171,13 @@ el.question.addEventListener("keydown", (event) => {
 el.form.addEventListener("submit", (event) => {
   event.preventDefault();
   const question = el.question.value.trim();
-  if (question && !inFlight) ask(question);
+  if (question && !inFlight) {
+    // 새로 입력한 질문은 앞서 채운 조건과 무관하다. 확정값을 버리고 시작한다.
+    clearClarify();
+    clarify = { question, resolved: {} };
+    saveClarify(clarify);
+    ask(question);
+  }
 });
 el.progressBack.addEventListener("click", () => {
   if (activeController) {
@@ -187,7 +229,11 @@ async function ask(question) {
     const response = await fetch("/api/ask", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ question }),
+      body: JSON.stringify(
+        Object.keys(clarify.resolved).length
+          ? { question, resolved: clarify.resolved }
+          : { question }
+      ),
       signal: activeController.signal,
     });
     if (!response.ok || !response.body) {
@@ -242,7 +288,18 @@ async function ask(question) {
   }
 
   if (result) {
-    renderAnswer(result);
+    // 렌더링에서 예외가 나도 화면은 넘어가야 한다. 종전에는 여기서 던지면
+    // 사용자가 '답변 완료' 상태의 진행 화면에 갇혔고, 무엇이 잘못됐는지도
+    // 알 수 없었다.
+    try {
+      renderAnswer(result);
+    } catch (error) {
+      showNotice(
+        el.progressError,
+        "답변을 화면에 그리지 못했습니다. 새로고침 후 다시 시도해 주세요.",
+        true
+      );
+    }
     showScreen("answer");
   }
 }
@@ -256,6 +313,7 @@ function renderAnswer(result) {
 
   el.clarification.hidden = !response.clarification;
   el.clarification.textContent = response.clarification || "";
+  renderChoices(response);
   el.scopeNotice.hidden = !presentation.scope_notice;
   el.scopeNotice.textContent = presentation.scope_notice || "";
   el.debugMeta.hidden = !presentation.debug;
@@ -263,6 +321,46 @@ function renderAnswer(result) {
     ? `request_id=${presentation.debug.request_id} · error_code=${presentation.debug.error_code || "없음"}`
     : "";
   renderEvidence(presentation);
+}
+
+// 사용자가 이미 고른 조건을 답변 화면에 그대로 밝힌다. 무엇을 더해 조회했는지
+// 보이지 않으면 왜 이런 답이 나왔는지 알 수 없다.
+function renderResolvedNote() {
+  if (!el.resolvedNote) return;
+  const picked = Object.keys(clarify.resolved).length;
+  el.resolvedNote.hidden = picked === 0;
+  el.resolvedNote.textContent = picked
+    ? `추가로 지정한 조건 ${picked}개를 함께 조회했습니다.`
+    : "";
+}
+
+function renderChoices(response) {
+  // 화면 문서가 오래됐을 수 있다. 요소가 없으면 선택지만 못 보여 줄 뿐,
+  // 답변과 근거는 그대로 나와야 한다.
+  if (!el.choices || !el.choiceList) return;
+  const options = response.options || [];
+  el.choiceList.textContent = "";
+  el.choices.hidden = options.length === 0;
+  renderResolvedNote();
+  if (!options.length) return;
+  for (const option of options) {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "choice";
+    button.textContent = option.label;
+    if (option.detail && option.detail !== option.label) button.title = option.detail;
+    button.addEventListener("click", () => {
+      if (inFlight) return;
+      // 값은 서버가 준 것을 그대로 되돌려 보낸다. 화면이 값을 만들지 않는다.
+      clarify = {
+        question: clarify.question,
+        resolved: { ...clarify.resolved, [option.filter]: option.value },
+      };
+      saveClarify(clarify);
+      ask(clarify.question);
+    });
+    el.choiceList.append(button);
+  }
 }
 
 function renderEvidence(presentation) {

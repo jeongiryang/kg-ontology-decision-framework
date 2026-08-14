@@ -128,10 +128,46 @@ def example_plans(bundle_path: Path | None = None) -> list[dict[str, Any]]:
         for item in _facts(bundle, "RoadmapEntry")
         if isinstance(item.get("grade_year"), int) and isinstance(item.get("semester"), str)
     ]
+    # 집계는 종류마다 채워진 수치가 다르다. 과목 수와 학점이 함께 있는 종류를 골라
+    # 예시가 특정 aggregate_type 문자열에 묶이지 않게 한다.
+    aggregates = [
+        item
+        for item in _facts(bundle, "CurriculumAggregate")
+        if item.get("course_count") is not None and item.get("credit_value") is not None
+    ]
+    competency_aggregate_ids = {
+        relationship["from_id"]
+        for relationship in bundle["relationships"]
+        if relationship["type"] == "AGGREGATES_FOR"
+    }
+    competency_aggregates = [
+        node["properties"]
+        for node in bundle["nodes"]
+        if "CurriculumAggregate" in node["labels"]
+        and node["id"] in competency_aggregate_ids
+        and node["properties"].get("status") == "VERIFIED"
+        and node["properties"].get("course_count") is not None
+    ]
     if not allocations or not roadmap:
         raise SampleScopeError("bundle lacks credit-allocation or roadmap examples")
+    if not aggregates or not competency_aggregates:
+        raise SampleScopeError("bundle lacks curriculum-aggregate examples")
     allocation = sorted(allocations, key=lambda item: item["credit_category"])[0]
     entry = sorted(roadmap, key=lambda item: (item["grade_year"], item["semester"]))[0]
+    # 역량에 매달린 집계는 COMPETENCY_AGGREGATE_LIST 가 이름과 함께 답한다. 일반
+    # 모드 예시는 그 연결이 없는 집계를 골라야 두 모드의 쓰임이 구분돼 드러난다.
+    standalone = [
+        node["properties"]["aggregate_type"]
+        for node in bundle["nodes"]
+        if "CurriculumAggregate" in node["labels"]
+        and node["id"] not in competency_aggregate_ids
+        and node["properties"].get("status") == "VERIFIED"
+        and node["properties"].get("course_count") is not None
+    ]
+    aggregate_type = sorted(standalone or [item["aggregate_type"] for item in aggregates])[0]
+    competency_aggregate_type = sorted(
+        item["aggregate_type"] for item in competency_aggregates
+    )[0]
 
     samples: dict[str, tuple[dict[str, Any], list[str]]] = {
         "CREDIT_ALLOCATION_LIST": (
@@ -161,6 +197,40 @@ def example_plans(bundle_path: Path | None = None) -> list[dict[str, Any]]:
                 "recommended_semester",
                 "credits",
             ],
+        ),
+        "UNIVERSITY_GOAL_LIST": (
+            {**scope, "goal_scope": "UNIVERSITY"},
+            ["description_ko", "goal_order"],
+        ),
+        "MAJOR_COMPETENCY_LIST": (
+            {**scope, "competency_type": "MAJOR"},
+            ["name_ko", "description_ko"],
+        ),
+        # 대학 핵심역량은 description_ko 가 전부 비어 있다. 값이 없는 속성을 요청하면
+        # ResultValidator 가 결과 전체를 막으므로 이름만 요청한다.
+        "UNIVERSITY_COMPETENCY_LIST": (
+            {**scope, "competency_type": "UNIVERSITY_CORE"},
+            ["name_ko"],
+        ),
+        "CURRICULUM_AGGREGATE_LIST": (
+            {**scope, "aggregate_type": aggregate_type},
+            ["aggregate_type", "is_total", "course_count", "credit_value"],
+        ),
+        "COMPETENCY_AGGREGATE_LIST": (
+            {**scope, "aggregate_type": competency_aggregate_type},
+            ["aggregate_type", "is_total", "name_ko", "course_count", "credit_value"],
+        ),
+        "GOAL_COMPETENCY_ALIGNMENT_LIST": (
+            {**scope, "alignment_strengths": ["HIGH", "LOW"]},
+            ["alignment_type", "strength", "description_ko", "name_ko"],
+        ),
+        "CORE_COMPETENCY_ALIGNMENT_LIST": (
+            {**scope, "alignment_strengths": ["HIGH", "LOW"]},
+            ["alignment_type", "strength", "normalized_name_ko", "name_ko"],
+        ),
+        "GOAL_ALIGNMENT_LIST": (
+            {**scope, "alignment_strengths": ["HIGH", "LOW"]},
+            ["alignment_type", "strength", "description_ko", "name_ko"],
         ),
     }
     plans = []

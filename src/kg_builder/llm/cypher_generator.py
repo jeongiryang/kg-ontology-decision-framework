@@ -6,7 +6,7 @@ from typing import Any, Mapping
 
 from kg_builder.query.query_plan import QueryPlan, SelectionMode
 from kg_builder.query.query_plan import resolve_filter_bindings
-from kg_builder.query.fact_families import FAMILY_BY_FACT_LABEL
+from kg_builder.query.fact_families import family_for_result
 
 from .client import LLMResponseError, StructuredLLMClient
 from .prompts import CYPHER_SYSTEM_PROMPT, cypher_prompt
@@ -46,7 +46,9 @@ def build_syntax_scaffold(plan: QueryPlan, schema_subset: Mapping[str, Any]) -> 
     """Build a plan-specific grammar rail; it contains no answer values or question branches."""
 
     family = schema_subset.get("selected_fact_family")
-    extended = FAMILY_BY_FACT_LABEL.get(family)
+    # 모드를 키로 찾고 라벨이 일치할 때만 채택한다. 같은 라벨이 소유자별로 여러
+    # 모드에 걸리므로 라벨만으로는 어떤 MATCH 경로를 써야 하는지 정해지지 않는다.
+    extended = family_for_result(plan.selection_mode, family) if isinstance(family, str) else None
     if family == "CourseOffering":
         aliases = {
             "CurriculumVersion": "cv",
@@ -76,7 +78,7 @@ def build_syntax_scaffold(plan: QueryPlan, schema_subset: Mapping[str, Any]) -> 
             matches.append("MATCH (r)-[:APPLIES_TO]->(s:ApplicabilityScope)")
         matches.append("MATCH (r)-[:SUPPORTED_BY]->(e:Evidence)")
         fact_alias, fact_id = "r", "rule_id"
-    elif extended is not None and extended.selection_mode is plan.selection_mode:
+    elif extended is not None:
         # 선언형 확장 family. MATCH 경로와 필드 소유 alias 는 fact_families 에만
         # 존재하므로, family 를 추가할 때 이 함수를 다시 고칠 필요가 없다.
         aliases = dict(extended.aliases)

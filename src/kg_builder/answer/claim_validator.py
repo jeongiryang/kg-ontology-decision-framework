@@ -13,9 +13,13 @@ from kg_builder.query.schema_catalog import SchemaCatalog
 
 from .claim_builder import NARRATIVE_SOURCES, ClaimBuilder, _freeze
 from .contracts import (
+    AggregateClaimItem,
+    AlignmentClaimItem,
     AllocationClaimItem,
     ClaimPolarity,
     ClaimType,
+    CompetencyAlignmentClaimItem,
+    CompetencyClaimItem,
     CourseClaimItem,
     FactEvidenceLink,
     GroundedClaim,
@@ -39,6 +43,9 @@ EXTENDED_LIST_CLAIM_TYPES = frozenset(
         ClaimType.ROADMAP_LIST,
         ClaimType.NARRATIVE_LIST,
         ClaimType.RECOMMENDATION_LIST,
+        ClaimType.COMPETENCY_LIST,
+        ClaimType.AGGREGATE_LIST,
+        ClaimType.ALIGNMENT_LIST,
     }
 )
 # (Claim 항목 속성, 그 값이 와야 하는 결과 행 컬럼). 서술형 항목은 fact label 마다
@@ -65,6 +72,37 @@ EXTENDED_ITEM_COLUMNS: Mapping[type, tuple[tuple[str, str], ...]] = {
         ("recommended_grade_year", "recommended_grade_year"),
         ("recommended_semester", "recommended_semester"),
         ("credits", "credits"),
+    ),
+    CompetencyClaimItem: (
+        ("name_ko", "name_ko"),
+        ("competency_type", "competency_type"),
+        ("description_ko", "description_ko"),
+        ("normalized_name_ko", "normalized_name_ko"),
+    ),
+    AggregateClaimItem: (
+        ("aggregate_type", "aggregate_type"),
+        ("is_total", "is_total"),
+        ("name_ko", "name_ko"),
+        ("course_count", "course_count"),
+        ("credit_value", "credit_value"),
+        ("lecture_hours", "lecture_hours"),
+        ("practice_hours", "practice_hours"),
+        ("boolean_value", "boolean_value"),
+        ("unit", "unit"),
+    ),
+    AlignmentClaimItem: (
+        ("alignment_type", "alignment_type"),
+        ("strength", "strength"),
+        ("source_text", "description_ko"),
+        ("name_ko", "name_ko"),
+        ("source_value", "source_value"),
+    ),
+    CompetencyAlignmentClaimItem: (
+        ("alignment_type", "alignment_type"),
+        ("strength", "strength"),
+        ("normalized_name_ko", "normalized_name_ko"),
+        ("name_ko", "name_ko"),
+        ("source_value", "source_value"),
     ),
     NarrativeClaimItem: (),
 }

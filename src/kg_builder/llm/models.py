@@ -68,8 +68,8 @@ class PlanningOutcome:
     missing: tuple[MissingScope, ...] = ()
     # 계획 단계 진단 기록. 사용자 화면에는 쓰지 않는다.
     attempts: tuple[PlanningAttempt, ...] = ()
-    # 범위를 좁히지 못해 넓은 조회로 답한 경우 그 사유 코드.
-    broadened: str | None = None
+    # 되묻기에서 사용자가 고를 수 있는 선택지. 값·표기 모두 적재 데이터에서 나온다.
+    options: tuple[Any, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)

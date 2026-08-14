@@ -72,8 +72,8 @@ class _QueryStub:
     def __init__(self, result: NaturalLanguageResult):
         self.result = result
 
-    def ask(self, question: str) -> NaturalLanguageResult:
-        del question
+    def ask(self, question: str, resolved: Any = None) -> NaturalLanguageResult:
+        del question, resolved
         return self.result
 
 
@@ -114,8 +114,9 @@ class _ChatStub:
         self.response = response
         self.questions: list[str] = []
 
-    def ask(self, question: str) -> ChatResponse:
+    def ask(self, question: str, resolved: Any = None) -> ChatResponse:
         self.questions.append(question)
+        self.resolved = resolved
         return self.response
 
 

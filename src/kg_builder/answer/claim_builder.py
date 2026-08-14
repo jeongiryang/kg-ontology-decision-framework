@@ -6,14 +6,18 @@ import hashlib
 from collections import defaultdict
 from typing import Any, Mapping, Sequence
 
-from kg_builder.query.fact_families import FAMILY_BY_FACT_LABEL
+from kg_builder.query.fact_families import EXTENDED_FACT_LABELS, family_for_result
 from kg_builder.query.query_plan import SelectionMode
 
 from .contracts import (
+    AggregateClaimItem,
+    AlignmentClaimItem,
     AllocationClaimItem,
     ClaimPolarity,
     ClaimSubject,
     ClaimType,
+    CompetencyAlignmentClaimItem,
+    CompetencyClaimItem,
     CourseClaimItem,
     FactEvidenceLink,
     GroundedClaim,
@@ -37,14 +41,57 @@ NARRATIVE_SOURCES: Mapping[str, tuple[str, str]] = {
     "TalentProfile": ("description_ko", "profile_order"),
     "CareerField": ("name_ko", "field_order"),
 }
-EXTENDED_CLAIM_KINDS: Mapping[str, tuple[ClaimType, str]] = {
-    "CreditAllocation": (ClaimType.ALLOCATION_LIST, "credit_allocations"),
-    "RoadmapEntry": (ClaimType.ROADMAP_LIST, "roadmap_entries"),
-    "EducationGoal": (ClaimType.NARRATIVE_LIST, "education_goals"),
-    "TalentProfile": (ClaimType.NARRATIVE_LIST, "talent_profiles"),
-    "CareerField": (ClaimType.NARRATIVE_LIST, "career_fields"),
-    "CourseRecommendation": (ClaimType.RECOMMENDATION_LIST, "course_recommendations"),
+# selection mode -> (Claim 종류, Claim 필드명). 같은 fact label 이 소유자별로 여러
+# 모드에 걸리므로(대학 교육목표 / 학과 교육목표) 모드를 키로 삼는다. 필드명이 그대로
+# 화면 머리말을 고르는 키가 되어, 대학 것과 학과 것이 섞여 보이지 않는다.
+EXTENDED_CLAIM_KINDS: Mapping[SelectionMode, tuple[ClaimType, str]] = {
+    SelectionMode.CREDIT_ALLOCATION_LIST: (ClaimType.ALLOCATION_LIST, "credit_allocations"),
+    SelectionMode.ROADMAP_LIST: (ClaimType.ROADMAP_LIST, "roadmap_entries"),
+    SelectionMode.EDUCATION_GOAL_LIST: (ClaimType.NARRATIVE_LIST, "education_goals"),
+    SelectionMode.TALENT_PROFILE_LIST: (ClaimType.NARRATIVE_LIST, "talent_profiles"),
+    SelectionMode.CAREER_FIELD_LIST: (ClaimType.NARRATIVE_LIST, "career_fields"),
+    SelectionMode.COURSE_RECOMMENDATION_LIST: (
+        ClaimType.RECOMMENDATION_LIST,
+        "course_recommendations",
+    ),
+    SelectionMode.UNIVERSITY_GOAL_LIST: (ClaimType.NARRATIVE_LIST, "university_goals"),
+    SelectionMode.MAJOR_COMPETENCY_LIST: (ClaimType.COMPETENCY_LIST, "major_competencies"),
+    SelectionMode.UNIVERSITY_COMPETENCY_LIST: (
+        ClaimType.COMPETENCY_LIST,
+        "university_competencies",
+    ),
+    SelectionMode.CURRICULUM_AGGREGATE_LIST: (
+        ClaimType.AGGREGATE_LIST,
+        "curriculum_aggregates",
+    ),
+    SelectionMode.COMPETENCY_AGGREGATE_LIST: (
+        ClaimType.AGGREGATE_LIST,
+        "competency_aggregates",
+    ),
+    SelectionMode.GOAL_COMPETENCY_ALIGNMENT_LIST: (
+        ClaimType.ALIGNMENT_LIST,
+        "goal_competency_alignments",
+    ),
+    SelectionMode.CORE_COMPETENCY_ALIGNMENT_LIST: (
+        ClaimType.ALIGNMENT_LIST,
+        "core_competency_alignments",
+    ),
+    SelectionMode.GOAL_ALIGNMENT_LIST: (ClaimType.ALIGNMENT_LIST, "goal_alignments"),
 }
+# 서술형 family 중 fact label 만으로는 원문 컬럼이 정해지지 않는 경우가 있어, 모드로
+# 다시 갈라 준다. 대학 교육목표와 학과 교육목표는 같은 라벨이지만 같은 컬럼을 쓴다.
+NARRATIVE_MODE_SOURCES: Mapping[SelectionMode, tuple[str, str]] = {
+    SelectionMode.EDUCATION_GOAL_LIST: NARRATIVE_SOURCES["EducationGoal"],
+    SelectionMode.UNIVERSITY_GOAL_LIST: NARRATIVE_SOURCES["EducationGoal"],
+    SelectionMode.TALENT_PROFILE_LIST: NARRATIVE_SOURCES["TalentProfile"],
+    SelectionMode.CAREER_FIELD_LIST: NARRATIVE_SOURCES["CareerField"],
+}
+
+
+def _stripped(value: Any) -> Any:
+    """Trim display whitespace only; every other value passes through untouched."""
+
+    return value.strip() if isinstance(value, str) else value
 
 
 def _freeze(value: Any) -> Any:
@@ -85,6 +132,15 @@ def _extended_sort_key(item: Any) -> tuple[Any, ...]:
             item.course_name_ko,
             item.fact_id,
         )
+    if isinstance(item, CompetencyClaimItem):
+        return (item.name_ko, item.fact_id)
+    if isinstance(item, AggregateClaimItem):
+        # 합계 행을 뒤로 보내 개별 항목을 먼저 읽게 한다. 값은 바꾸지 않는다.
+        return (item.is_total, item.aggregate_type, item.name_ko or "", item.fact_id)
+    if isinstance(item, AlignmentClaimItem):
+        return (item.source_text, item.name_ko, item.fact_id)
+    if isinstance(item, CompetencyAlignmentClaimItem):
+        return (item.normalized_name_ko, item.name_ko, item.fact_id)
     return (item.order if item.order is not None else _UNORDERED, item.fact_id)
 
 
@@ -129,7 +185,7 @@ class ClaimBuilder:
             claims = self._rules(grouped, requested)
         elif labels == {"CourseOffering"}:
             claims = self._offerings(grouped, requested, selection, query_plan)
-        elif len(labels) == 1 and next(iter(labels)) in FAMILY_BY_FACT_LABEL:
+        elif len(labels) == 1 and next(iter(labels)) in EXTENDED_FACT_LABELS:
             claims = self._extended_family(next(iter(labels)), grouped, requested, selection)
         else:
             raise GroundingError(
@@ -340,11 +396,11 @@ class ClaimBuilder:
         근거가 없는 값이 된다. 합계가 필요하면 그 합계 행 자체를 조회해야 한다.
         """
 
-        family = FAMILY_BY_FACT_LABEL[fact_label]
-        if selection is not family.selection_mode:
+        family = family_for_result(selection, fact_label)
+        if family is None:
             raise GroundingError(
                 "ANSWER_RENDERING_UNSUPPORTED",
-                f"{fact_label} requires {family.selection_mode.value}",
+                f"{fact_label} rows do not belong to {selection.value}",
             )
         unsupported = set(requested) - set(family.field_owners)
         if unsupported:
@@ -366,9 +422,9 @@ class ClaimBuilder:
             rows = grouped[fact_id]
             row = self._consistent_row(rows, fields)
             links.extend(self._provenance(rows))
-            items.append(self._extended_item(fact_label, fact_id, row))
+            items.append(self._extended_item(selection, fact_label, fact_id, row))
         items.sort(key=_extended_sort_key)
-        claim_type, field = EXTENDED_CLAIM_KINDS[fact_label]
+        claim_type, field = EXTENDED_CLAIM_KINDS[selection]
         return [
             GroundedClaim(
                 _claim_id("list", field, [item.fact_id for item in items]),
@@ -380,7 +436,42 @@ class ClaimBuilder:
         ]
 
     @staticmethod
-    def _extended_item(fact_label: str, fact_id: str, row: Mapping[str, Any]) -> Any:
+    def _extended_item(
+        selection: SelectionMode, fact_label: str, fact_id: str, row: Mapping[str, Any]
+    ) -> Any:
+        if fact_label == "Competency":
+            name = row.get("name_ko")
+            if not isinstance(name, str) or not name.strip():
+                raise GroundingError("ANSWER_CLAIM_INVALID", "competency lacks a name")
+            return CompetencyClaimItem(
+                fact_id,
+                name.strip(),
+                row.get("competency_type"),
+                _stripped(row.get("description_ko")),
+                _stripped(row.get("normalized_name_ko")),
+            )
+        if fact_label == "CurriculumAggregate":
+            aggregate_type, is_total = row.get("aggregate_type"), row.get("is_total")
+            if not isinstance(aggregate_type, str) or not aggregate_type:
+                raise GroundingError("ANSWER_CLAIM_INVALID", "aggregate lacks a type")
+            if not isinstance(is_total, bool):
+                raise GroundingError(
+                    "ANSWER_CLAIM_INVALID", "aggregate lacks the is_total flag"
+                )
+            return AggregateClaimItem(
+                fact_id,
+                aggregate_type,
+                is_total,
+                _stripped(row.get("name_ko")),
+                row.get("course_count"),
+                row.get("credit_value"),
+                row.get("lecture_hours"),
+                row.get("practice_hours"),
+                row.get("boolean_value"),
+                row.get("unit"),
+            )
+        if fact_label == "Alignment":
+            return ClaimBuilder._alignment_item(selection, fact_id, row)
         if fact_label == "CreditAllocation":
             category, credits = row.get("credit_category"), row.get("allocated_credits")
             if not isinstance(category, str) or not category.strip():
@@ -433,7 +524,7 @@ class ClaimBuilder:
                 row.get("recommended_semester"),
                 credits,
             )
-        text_field, order_field = NARRATIVE_SOURCES[fact_label]
+        text_field, order_field = NARRATIVE_MODE_SOURCES[selection]
         text = row.get(text_field)
         if not isinstance(text, str) or not text.strip():
             raise GroundingError(
@@ -443,6 +534,47 @@ class ClaimBuilder:
         if order is not None and (isinstance(order, bool) or not isinstance(order, int)):
             raise GroundingError("ANSWER_CLAIM_INVALID", f"{fact_label} order is invalid")
         return NarrativeClaimItem(fact_id, text.strip(), order)
+
+    @staticmethod
+    def _alignment_item(
+        selection: SelectionMode, fact_id: str, row: Mapping[str, Any]
+    ) -> Any:
+        alignment_type, strength = row.get("alignment_type"), row.get("strength")
+        if not isinstance(alignment_type, str) or not alignment_type:
+            raise GroundingError("ANSWER_CLAIM_INVALID", "alignment lacks a type")
+        if not isinstance(strength, str) or not strength:
+            raise GroundingError("ANSWER_CLAIM_INVALID", "alignment lacks a strength")
+        target = row.get("name_ko")
+        if not isinstance(target, str) or not target.strip():
+            raise GroundingError("ANSWER_CLAIM_INVALID", "alignment lacks a target name")
+        source_value = _stripped(row.get("source_value"))
+        if selection is SelectionMode.CORE_COMPETENCY_ALIGNMENT_LIST:
+            source = row.get("normalized_name_ko")
+            if not isinstance(source, str) or not source.strip():
+                raise GroundingError(
+                    "ANSWER_CLAIM_INVALID", "alignment lacks a source competency name"
+                )
+            return CompetencyAlignmentClaimItem(
+                fact_id,
+                alignment_type,
+                strength,
+                source.strip(),
+                target.strip(),
+                source_value,
+            )
+        source = row.get("description_ko")
+        if not isinstance(source, str) or not source.strip():
+            raise GroundingError(
+                "ANSWER_CLAIM_INVALID", "alignment lacks a source description"
+            )
+        return AlignmentClaimItem(
+            fact_id,
+            alignment_type,
+            strength,
+            source.strip(),
+            target.strip(),
+            source_value,
+        )
 
     @staticmethod
     def _course_subject(row: Mapping[str, Any], fact_id: str) -> ClaimSubject:
