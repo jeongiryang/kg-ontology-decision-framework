@@ -17,6 +17,7 @@ from .schema_catalog import (
     DEFAULT_SPEC_PATH,
     SchemaCatalog,
 )
+from .progress import ProgressCallback, ProgressPhase, ProgressState, emit_progress
 
 
 class Explainer(Protocol):
@@ -42,6 +43,7 @@ class PipelineOutcome:
     result: ValidatedResult
     selected_labels: tuple[str, ...]
     explain_operators: tuple[str, ...]
+    validated_cypher: str
     trace_path: Path
 
 
@@ -77,7 +79,16 @@ class SafetyPipeline:
             else trace_retention_days
         )
 
-    def run(self, payload: Mapping[str, Any], cypher: str) -> PipelineOutcome:
+    def run(
+        self,
+        payload: Mapping[str, Any],
+        cypher: str,
+        *,
+        progress_callback: ProgressCallback | None = None,
+        candidate_attempt: int = 1,
+    ) -> PipelineOutcome:
+        if candidate_attempt < 1:
+            raise ValueError("candidate_attempt must be positive")
         raw_filters = payload.get("filters", {}) if isinstance(payload, Mapping) else {}
         raw_question = payload.get("question", "") if isinstance(payload, Mapping) else ""
         trace = QueryTrace(
@@ -113,27 +124,102 @@ class SafetyPipeline:
             self._raise(trace, TraceStage.SCHEMA_SELECTION, started, exc)
 
         started = perf_counter()
+        emit_progress(
+            progress_callback,
+            ProgressPhase.STATIC_VALIDATION,
+            ProgressState.STARTED,
+            0,
+            candidate_attempt=candidate_attempt,
+        )
         try:
             validated = CypherValidator(catalog, max_rows=self.max_rows).validate(plan, cypher)
             self._pass(trace, TraceStage.CYPHER_VALIDATION, started)
+            emit_progress(
+                progress_callback,
+                ProgressPhase.STATIC_VALIDATION,
+                ProgressState.COMPLETED,
+                (perf_counter() - started) * 1000,
+                validated_cypher=validated.text,
+                parameters=dict(validated.parameters),
+                labels=list(validated.labels),
+                relationship_types=list(validated.relationship_types),
+                candidate_attempt=candidate_attempt,
+            )
         except Exception as exc:
+            emit_progress(
+                progress_callback,
+                ProgressPhase.STATIC_VALIDATION,
+                ProgressState.FAILED,
+                (perf_counter() - started) * 1000,
+                error_code=getattr(exc, "code", exc.__class__.__name__),
+                candidate_attempt=candidate_attempt,
+            )
             self._raise(trace, TraceStage.CYPHER_VALIDATION, started, exc)
 
         started = perf_counter()
+        emit_progress(
+            progress_callback,
+            ProgressPhase.NEO4J_EXPLAIN,
+            ProgressState.STARTED,
+            0,
+            candidate_attempt=candidate_attempt,
+        )
         try:
             explained = self.explainer.explain(validated)
             self._pass(trace, TraceStage.NEO4J_EXPLAIN, started)
+            emit_progress(
+                progress_callback,
+                ProgressPhase.NEO4J_EXPLAIN,
+                ProgressState.COMPLETED,
+                (perf_counter() - started) * 1000,
+                operators=list(explained.operators),
+                candidate_attempt=candidate_attempt,
+            )
         except Exception as exc:
+            emit_progress(
+                progress_callback,
+                ProgressPhase.NEO4J_EXPLAIN,
+                ProgressState.FAILED,
+                (perf_counter() - started) * 1000,
+                error_code=getattr(exc, "code", exc.__class__.__name__),
+                candidate_attempt=candidate_attempt,
+            )
             self._raise(trace, TraceStage.NEO4J_EXPLAIN, started, exc)
 
         started = perf_counter()
+        emit_progress(
+            progress_callback,
+            ProgressPhase.GRAPH_EXECUTION,
+            ProgressState.STARTED,
+            0,
+        )
         try:
             rows = self.executor.execute(explained)
             self._pass(trace, TraceStage.EXECUTION, started, row_count=len(rows))
+            emit_progress(
+                progress_callback,
+                ProgressPhase.GRAPH_EXECUTION,
+                ProgressState.COMPLETED,
+                (perf_counter() - started) * 1000,
+                row_count=len(rows),
+            )
         except Exception as exc:
+            emit_progress(
+                progress_callback,
+                ProgressPhase.GRAPH_EXECUTION,
+                ProgressState.FAILED,
+                (perf_counter() - started) * 1000,
+                error_code=getattr(exc, "code", exc.__class__.__name__),
+            )
             self._raise(trace, TraceStage.EXECUTION, started, exc)
 
         started = perf_counter()
+        emit_progress(
+            progress_callback,
+            ProgressPhase.RESULT_VALIDATION,
+            ProgressState.STARTED,
+            0,
+        )
         try:
             result = ResultValidator(max_rows=self.max_rows).validate(
                 plan, rows, validated.provenance
@@ -141,17 +227,43 @@ class SafetyPipeline:
             self._pass(
                 trace, TraceStage.RESULT_VALIDATION, started, row_count=result.row_count
             )
+            emit_progress(
+                progress_callback,
+                ProgressPhase.RESULT_VALIDATION,
+                ProgressState.COMPLETED,
+                (perf_counter() - started) * 1000,
+                row_count=result.row_count,
+                fact_count=len(
+                    {
+                        row.get("fact_id")
+                        for row in result.rows
+                        if isinstance(row.get("fact_id"), str)
+                    }
+                ),
+                evidence_count=result.evidence_count,
+                fact_status_verified=True,
+                evidence_status_verified=True,
+                direct_provenance_verified=True,
+            )
         except Exception as exc:
+            emit_progress(
+                progress_callback,
+                ProgressPhase.RESULT_VALIDATION,
+                ProgressState.FAILED,
+                (perf_counter() - started) * 1000,
+                error_code=getattr(exc, "code", exc.__class__.__name__),
+            )
             self._raise(trace, TraceStage.RESULT_VALIDATION, started, exc)
 
         trace_path = trace.write()
         return PipelineOutcome(
-            trace.request_id,
-            plan,
-            result,
-            selected_labels,
-            explained.operators,
-            trace_path,
+            request_id=trace.request_id,
+            plan=plan,
+            result=result,
+            selected_labels=selected_labels,
+            explain_operators=explained.operators,
+            validated_cypher=validated.text,
+            trace_path=trace_path,
         )
 
     @staticmethod

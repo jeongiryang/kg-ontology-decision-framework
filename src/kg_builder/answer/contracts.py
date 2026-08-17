@@ -122,9 +122,23 @@ SAFE_FAILURE_MESSAGES: dict[ChatErrorCode, str] = {
 NON_ANSWERABLE_MESSAGES: dict[ChatStatus, str] = {
     ChatStatus.CLARIFICATION_REQUIRED: "질문을 정확히 확인하려면 추가 정보가 필요합니다.",
     ChatStatus.OUT_OF_SCOPE: "현재 데이터 범위에서는 답변할 수 없습니다.",
-    ChatStatus.UNSUPPORTED: "현재 지원하지 않는 질문 유형입니다.",
+    ChatStatus.UNSUPPORTED: (
+        "현재는 개인 수강 이력을 이용한 졸업판정을 지원하지 않습니다. "
+        "2026학년도 컴퓨터공학과의 전공필수 과목과 이수학점 기준은 안내할 수 있습니다."
+    ),
     ChatStatus.UNRESOLVED: "원문 확인이나 정책 결정이 필요한 항목이므로 확정해서 답변할 수 없습니다.",
     ChatStatus.NOT_FOUND: "현재 검증된 데이터에서 일치하는 결과를 찾지 못했습니다.",
+}
+UNSUPPORTED_MESSAGES: dict[str, str] = {
+    "PERSONAL_HISTORY": NON_ANSWERABLE_MESSAGES[ChatStatus.UNSUPPORTED],
+    "SINGLE_CONDITION_COMPARISON": (
+        "현재는 사용자가 제시한 단일 점수·학점과 학사 규정의 자동 충족 비교를 "
+        "지원하지 않습니다. 검증된 일반 기준은 질문할 수 있습니다."
+    ),
+    "GENERAL_FEATURE": (
+        "현재 지원하지 않는 질문 유형입니다. 2026학년도 공통 교양과 "
+        "컴퓨터공학과 교육과정의 검증된 기준은 안내할 수 있습니다."
+    ),
 }
 _RESPONSE_SEAL = object()
 _RESPONSE_KEY = secrets.token_bytes(32)
@@ -296,6 +310,9 @@ class ChatResponse:
                 raise ValueError("SAFE_FAILURE requires the centrally managed safe message")
         elif self.error_code is not None:
             raise ValueError("error_code is exclusive to SAFE_FAILURE")
+        elif self.status is ChatStatus.UNSUPPORTED:
+            if self.answer_text not in UNSUPPORTED_MESSAGES.values():
+                raise ValueError("UNSUPPORTED requires an allowlisted safe message")
         elif self.status is not ChatStatus.CLARIFICATION_REQUIRED and (
             self.answer_text != NON_ANSWERABLE_MESSAGES[self.status]
         ):
@@ -342,8 +359,13 @@ class ChatResponse:
         return cls._non_answerable(request_id, ChatStatus.OUT_OF_SCOPE)
 
     @classmethod
-    def unsupported(cls, request_id: str) -> "ChatResponse":
-        return cls._non_answerable(request_id, ChatStatus.UNSUPPORTED)
+    def unsupported(cls, request_id: str, reason: str | None = None) -> "ChatResponse":
+        normalized = reason if reason in UNSUPPORTED_MESSAGES else "PERSONAL_HISTORY"
+        return cls._issue(
+            request_id=request_id,
+            status=ChatStatus.UNSUPPORTED,
+            answer_text=UNSUPPORTED_MESSAGES[normalized],
+        )
 
     @classmethod
     def unresolved(cls, request_id: str) -> "ChatResponse":

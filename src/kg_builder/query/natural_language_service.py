@@ -14,6 +14,12 @@ from kg_builder.llm.planner import LocalQueryPlanner
 
 from .safety_pipeline import PipelineOutcome, SafetyPipeline, SafetyPipelineError
 from .schema_selector import QuerySchemaSelector
+from .progress import (
+    ProgressCallback,
+    ProgressPhase,
+    ProgressState,
+    emit_progress,
+)
 
 
 class Planner(Protocol):
@@ -37,6 +43,7 @@ class NaturalLanguageResult:
     error_stage: str | None = None
     error_code: str | None = None
     message: str | None = None
+    unsupported_reason: str | None = None
 
     def to_dict(self) -> dict[str, Any]:
         payload: dict[str, Any] = {
@@ -80,18 +87,44 @@ class NaturalLanguageQueryService:
         self.model = model
         self.generator_retries = generator_retries
 
-    def ask(self, question: str) -> NaturalLanguageResult:
+    def ask(
+        self, question: str, progress_callback: ProgressCallback | None = None
+    ) -> NaturalLanguageResult:
         started = perf_counter()
         provisional_id = str(uuid.uuid4())
+        phase_started = perf_counter()
+        emit_progress(
+            progress_callback,
+            ProgressPhase.QUESTION_ANALYSIS,
+            ProgressState.STARTED,
+            0,
+        )
         try:
             planning = self.planner.plan(question)
         except Exception as exc:
+            emit_progress(
+                progress_callback,
+                ProgressPhase.QUESTION_ANALYSIS,
+                ProgressState.FAILED,
+                (perf_counter() - phase_started) * 1000,
+                error_code=getattr(exc, "code", exc.__class__.__name__),
+            )
             return self._failure(
                 provisional_id,
                 started,
                 "PLANNING",
                 getattr(exc, "code", exc.__class__.__name__),
             )
+        analysis_details: dict[str, Any] = {"planning_status": planning.status.value}
+        if planning.plan is not None:
+            analysis_details["query_plan"] = public_plan_payload(planning.plan)
+        emit_progress(
+            progress_callback,
+            ProgressPhase.QUESTION_ANALYSIS,
+            ProgressState.COMPLETED,
+            (perf_counter() - phase_started) * 1000,
+            **analysis_details,
+        )
         if planning.status is not PlanningStatus.READY or planning.plan is None:
             return NaturalLanguageResult(
                 request_id=provisional_id,
@@ -99,13 +132,32 @@ class NaturalLanguageQueryService:
                 model=self.model,
                 elapsed_seconds=perf_counter() - started,
                 message=planning.message,
+                unsupported_reason=(
+                    planning.unsupported_reason.value
+                    if planning.unsupported_reason is not None
+                    else None
+                ),
             )
 
         plan = planning.plan
         public_plan = public_plan_payload(plan)
+        phase_started = perf_counter()
+        emit_progress(
+            progress_callback,
+            ProgressPhase.SCHEMA_SELECTION,
+            ProgressState.STARTED,
+            0,
+        )
         try:
             schema_subset = self.selector.select(plan)
         except Exception as exc:
+            emit_progress(
+                progress_callback,
+                ProgressPhase.SCHEMA_SELECTION,
+                ProgressState.FAILED,
+                (perf_counter() - phase_started) * 1000,
+                error_code=getattr(exc, "code", exc.__class__.__name__),
+            )
             return self._failure(
                 provisional_id,
                 started,
@@ -113,9 +165,34 @@ class NaturalLanguageQueryService:
                 getattr(exc, "code", exc.__class__.__name__),
                 query_plan=public_plan,
             )
+        emit_progress(
+            progress_callback,
+            ProgressPhase.SCHEMA_SELECTION,
+            ProgressState.COMPLETED,
+            (perf_counter() - phase_started) * 1000,
+            labels=sorted(
+                item.get("label")
+                for item in schema_subset.get("nodes", ())
+                if isinstance(item, dict) and isinstance(item.get("label"), str)
+            ),
+            relationship_types=sorted(
+                item.get("type")
+                for item in schema_subset.get("relationships", ())
+                if isinstance(item, dict) and isinstance(item.get("type"), str)
+            ),
+        )
 
         previous_error: str | None = None
         for attempt in range(self.generator_retries + 1):
+            candidate_attempt = attempt + 1
+            phase_started = perf_counter()
+            emit_progress(
+                progress_callback,
+                ProgressPhase.CYPHER_GENERATION,
+                ProgressState.STARTED,
+                0,
+                candidate_attempt=candidate_attempt,
+            )
             try:
                 cypher = self.generator.generate(
                     plan,
@@ -123,6 +200,14 @@ class NaturalLanguageQueryService:
                     previous_error_code=previous_error,
                 )
             except LLMResponseError as exc:
+                emit_progress(
+                    progress_callback,
+                    ProgressPhase.CYPHER_GENERATION,
+                    ProgressState.FAILED,
+                    (perf_counter() - phase_started) * 1000,
+                    error_code=exc.code,
+                    candidate_attempt=candidate_attempt,
+                )
                 return self._failure(
                     provisional_id,
                     started,
@@ -131,6 +216,14 @@ class NaturalLanguageQueryService:
                     query_plan=public_plan,
                 )
             except Exception as exc:
+                emit_progress(
+                    progress_callback,
+                    ProgressPhase.CYPHER_GENERATION,
+                    ProgressState.FAILED,
+                    (perf_counter() - phase_started) * 1000,
+                    error_code=getattr(exc, "code", exc.__class__.__name__),
+                    candidate_attempt=candidate_attempt,
+                )
                 return self._failure(
                     provisional_id,
                     started,
@@ -138,6 +231,13 @@ class NaturalLanguageQueryService:
                     getattr(exc, "code", exc.__class__.__name__),
                     query_plan=public_plan,
                 )
+            emit_progress(
+                progress_callback,
+                ProgressPhase.CYPHER_GENERATION,
+                ProgressState.COMPLETED,
+                (perf_counter() - phase_started) * 1000,
+                candidate_attempt=candidate_attempt,
+            )
             try:
                 outcome: PipelineOutcome = self.pipeline.run(
                     {
@@ -145,6 +245,8 @@ class NaturalLanguageQueryService:
                         **public_plan,
                     },
                     cypher,
+                    progress_callback=progress_callback,
+                    candidate_attempt=candidate_attempt,
                 )
                 return NaturalLanguageResult(
                     request_id=outcome.request_id,
@@ -152,7 +254,7 @@ class NaturalLanguageQueryService:
                     model=self.model,
                     elapsed_seconds=perf_counter() - started,
                     query_plan=public_plan,
-                    cypher=cypher,
+                    cypher=outcome.validated_cypher,
                     rows=outcome.result.rows,
                     evidence_count=outcome.result.evidence_count,
                 )

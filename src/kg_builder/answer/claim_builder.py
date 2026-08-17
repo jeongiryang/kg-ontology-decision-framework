@@ -171,7 +171,7 @@ class ClaimBuilder:
         provenance = self._provenance(rows)
         claims: list[GroundedClaim] = []
         for field in requested:
-            if field in {"course_code", "name_ko"}:
+            if field == "name_ko":
                 continue
             claims.append(
                 GroundedClaim(

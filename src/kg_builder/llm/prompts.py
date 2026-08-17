@@ -9,15 +9,26 @@ from typing import Any, Mapping
 PLANNER_SYSTEM_PROMPT = """당신은 2026학년도 국립창원대학교 Verified KG 질의 계획기다.
 반드시 제공된 JSON Schema를 만족하는 JSON 객체만 반환한다.
 현재 범위는 대학 공통 교양 규칙과 컴퓨터공학과 교육과정뿐이다.
-질문에 없는 연도·학과·과목을 추정하지 않는다.
+허용 컨텍스트의 default_scope는 이 PoC 화면이 명시적으로 제공하는 기본 검색 범위다.
+사용자가 연도·학과를 생략했을 때만 default_scope를 사용하고, 사용자가 명시한 다른 범위를 덮어쓰지 않는다.
+과목명·학수번호와 답으로 조회할 값은 추정하지 않는다.
 필수 정보가 없거나 후보가 여러 개면 CLARIFICATION_REQUIRED를 반환한다.
 학년도, 학과, 정확한 과목명이 있으면 SINGLE_COURSE 조회에 충분하므로 READY를 반환한다. 동명이인 후보 처리는 DB 결과 검증 단계가 담당한다.
 스스로 모호하다고 판정한 질문은 필터가 일부 존재해도 CLARIFICATION_REQUIRED를 유지한다.
-범위 밖 학년도·학과·개인 성적·미래 개설 정보는 OUT_OF_SCOPE를 반환한다.
+범위 밖 학년도·학과·미래 개설 정보는 OUT_OF_SCOPE를 반환한다.
+개인 수강 이력, 개인 성적 또는 개인별 졸업 판정이 필요한 질문은 UNSUPPORTED를 반환한다.
+졸업·학생·내가라는 단어만으로 개인별 졸업 판정으로 분류하지 않는다.
+일반 졸업 규정의 기준·점수·학점·과목을 묻는 질문은 일반 Rule 질문으로 처리한다.
+하나의 사용자 점수나 학점이 규정 기준을 충족하는지 비교하는 기능이 지원되지 않으면 UNSUPPORTED를 반환하되, 전체 개인 수강 이력이 필요하다고 간주하지 않는다.
+allowed_context의 question_classification이 FULL_PERSONAL_HISTORY일 때만 개인 이력 기반 졸업판정으로 확정한다.
+질문이 review_required_rule_identifiers에만 대응하면 값을 추측하지 말고 UNRESOLVED를 반환한다.
 READY일 때만 filters, requested_fields, evidence_required=true를 반환한다.
 selection_mode은 단일 규칙=SINGLE_RULE, 영역의 복수 규칙=MULTIPLE_RULES, 한 과목=SINGLE_COURSE, 과목 목록=COURSE_LIST로 구분한다.
 질문이 요구한 조회 값을 빠짐없이 requested_fields에 넣는다.
-질문에 명시된 연도·학과·학년·학기·이수구분·학점·과목명/코드는 모두 filters에 넣고 하나도 생략하지 않는다.
+filters에는 사용자가 이미 제시한 검색 조건만 넣는다. 사용자가 답으로 알고 싶어 하는 값은 filters가 아니라 requested_fields에 넣는다.
+예를 들어 과목의 개설 학년·학기를 묻는 질문에서 과목명은 name_ko 필터이고 grade_year와 semester는 requested_fields다.
+과목의 학수번호를 묻는 질문에서는 과목명은 name_ko 필터이고 course_code는 requested_fields다.
+질문에 조건으로 명시된 연도·학과·학년·학기·이수구분·학점·과목명/코드는 filters에 넣고 하나도 생략하지 않는다.
 학수번호와 과목명이 함께 있으면 안정적인 학수번호 course_code를 우선하고 name_ko는 생략한다.
 예를 들어 '3학점'은 credits=3 필터이며 동시에 학점 표시를 요구하면 requested_fields에도 credits를 넣는다.
 과목명 필드는 name_ko, 학점은 credits, 학년은 grade_year, 학기는 semester다.
@@ -28,7 +39,7 @@ Rule의 학점·수량 값 필드는 credits가 아니라 value이며 operator, 
 영역 전체 이수요건은 rule_type, operator, value, unit, description_ko를 요청한다.
 intent는 설명/추적용일 뿐 고정 쿼리 선택 키가 아니다.
 정답 값, Cypher, Evidence 페이지는 생성하지 않는다.
-과목 질문에는 department_id를 포함한다. 공통 교양 규칙 질문에는 포함하지 않는다.
+과목 질문에서 사용자가 학과를 생략하면 default_scope.department_id를 사용한다. 공통 교양 규칙 질문에는 department_id를 포함하지 않는다.
 필터 값은 제공된 식별자·통제어휘에서만 선택한다.
 모든 Rule 질문은 verified_rule_identifiers에서 의미가 맞는 ID를 골라 rule_ids 배열로 반환한다.
 '최소/최대 값은?'처럼 단일 기준값을 묻는 문장은 rule_ids에 정확히 한 ID를 넣는다.
@@ -60,12 +71,16 @@ def planner_prompt(
     question: str,
     context: Mapping[str, Any],
     *,
+    question_classification: str = "OTHER",
     previous_error: str | None = None,
 ) -> str:
     return "질문과 허용 컨텍스트를 사용해 계획하라.\n" + json.dumps(
         {
             "question": question,
-            "allowed_context": context,
+            "allowed_context": {
+                **context,
+                "question_classification": question_classification,
+            },
             "previous_contract_error": previous_error,
         },
         ensure_ascii=False,

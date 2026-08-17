@@ -10,15 +10,16 @@ from tempfile import TemporaryDirectory
 from typing import Any
 from unittest import mock
 
-from starlette.testclient import TestClient
+import httpx2
 
 from evidence_chat import pdf_evidence
 from evidence_chat.chat_adapter import CHAT_RESPONSE_FIELDS, ChatResponseAdapter
-from evidence_chat.server import ChatState, create_app
+from evidence_chat.server import ChatState, InspectionCollector, create_app
 from kg_builder.answer.contracts import ChatErrorCode, ChatResponse, ChatStatus
 from kg_builder.answer.service import CurriculumChatService
 from kg_builder.query.natural_language_service import NaturalLanguageResult
 from kg_builder.query.query_plan import MAX_QUESTION_LENGTH
+from kg_builder.query.progress import ProgressEvent, ProgressPhase, ProgressState
 
 
 SAMPLE_RAW_TEXT = (
@@ -114,8 +115,105 @@ class _ChatStub:
         self.response = response
         self.questions: list[str] = []
 
-    def ask(self, question: str) -> ChatResponse:
+    def ask(self, question: str, progress_callback=None) -> ChatResponse:
         self.questions.append(question)
+        details = {
+            ProgressPhase.QUESTION_ANALYSIS: {
+                "query_plan": {
+                    "filters": {"academic_year": 2026},
+                    "requested_fields": ["completion_type"],
+                }
+            },
+            ProgressPhase.SCHEMA_SELECTION: {
+                "labels": ["CourseOffering", "Evidence"],
+                "relationship_types": ["SUPPORTED_BY"],
+            },
+            ProgressPhase.STATIC_VALIDATION: {
+                "validated_cypher": "MATCH (o:CourseOffering)-[:SUPPORTED_BY]->(e:Evidence) WHERE o.status = 'VERIFIED' RETURN o LIMIT 1",
+                "parameters": {"academic_year": 2026},
+            },
+            ProgressPhase.NEO4J_EXPLAIN: {"operators": ["NodeIndexSeek"]},
+            ProgressPhase.GRAPH_EXECUTION: {"row_count": 1},
+            ProgressPhase.RESULT_VALIDATION: {"row_count": 1, "evidence_count": 1},
+        }
+        if progress_callback:
+            for phase in ProgressPhase:
+                phase_details = dict(details.get(phase, {}))
+                if phase in {
+                    ProgressPhase.CYPHER_GENERATION,
+                    ProgressPhase.STATIC_VALIDATION,
+                    ProgressPhase.NEO4J_EXPLAIN,
+                }:
+                    phase_details["candidate_attempt"] = 1
+                if phase is not ProgressPhase.COMPLETED:
+                    progress_callback(
+                        ProgressEvent(
+                            phase, ProgressState.STARTED, 0, phase_details
+                        )
+                    )
+                progress_callback(
+                    ProgressEvent(
+                        phase,
+                        ProgressState.COMPLETED,
+                        1,
+                        phase_details,
+                    )
+                )
+        return self.response
+
+
+class _RetryChatStub(_ChatStub):
+    def ask(self, question: str, progress_callback=None) -> ChatResponse:
+        self.questions.append(question)
+        if progress_callback:
+            def emit(phase, state, attempt, **details):
+                progress_callback(
+                    ProgressEvent(
+                        phase,
+                        state,
+                        1,
+                        {"candidate_attempt": attempt, **details},
+                    )
+                )
+
+            emit(ProgressPhase.CYPHER_GENERATION, ProgressState.STARTED, 1)
+            emit(ProgressPhase.CYPHER_GENERATION, ProgressState.COMPLETED, 1)
+            emit(ProgressPhase.STATIC_VALIDATION, ProgressState.STARTED, 1)
+            emit(
+                ProgressPhase.STATIC_VALIDATION,
+                ProgressState.COMPLETED,
+                1,
+                validated_cypher="MATCH (first:Rule) RETURN first LIMIT 1",
+                parameters={"candidate": "first"},
+                labels=["Rule"],
+                relationship_types=[],
+            )
+            emit(ProgressPhase.NEO4J_EXPLAIN, ProgressState.STARTED, 1)
+            emit(
+                ProgressPhase.NEO4J_EXPLAIN,
+                ProgressState.FAILED,
+                1,
+                error_code="NEO4J_EXPLAIN_FAILED",
+            )
+            emit(ProgressPhase.CYPHER_GENERATION, ProgressState.STARTED, 2)
+            emit(ProgressPhase.CYPHER_GENERATION, ProgressState.COMPLETED, 2)
+            emit(ProgressPhase.STATIC_VALIDATION, ProgressState.STARTED, 2)
+            emit(
+                ProgressPhase.STATIC_VALIDATION,
+                ProgressState.COMPLETED,
+                2,
+                validated_cypher="MATCH (second:Rule) RETURN second LIMIT 1",
+                parameters={"candidate": "second"},
+                labels=["Rule"],
+                relationship_types=[],
+            )
+            emit(ProgressPhase.NEO4J_EXPLAIN, ProgressState.STARTED, 2)
+            emit(
+                ProgressPhase.NEO4J_EXPLAIN,
+                ProgressState.COMPLETED,
+                2,
+                operators=["NodeByLabelScan"],
+            )
         return self.response
 
 
@@ -172,6 +270,199 @@ class ChatResponseAdapterTests(unittest.TestCase):
         self.assertEqual(len(pages), 1)
         self.assertEqual(len(pages[0]["evidence"]), 9)
 
+    def test_unsupported_reason_uses_fixed_non_personal_comparison_message(self):
+        result = NaturalLanguageResult(
+            request_id="request-comparison",
+            status="UNSUPPORTED",
+            model="fake-model",
+            elapsed_seconds=0.01,
+            unsupported_reason="SINGLE_CONDITION_COMPARISON",
+        )
+        response = CurriculumChatService(_QueryStub(result)).ask("단일 조건 비교")
+        self.assertEqual(response.status, ChatStatus.UNSUPPORTED)
+        self.assertIn("단일 점수·학점", response.answer_text)
+        self.assertNotIn("개인 수강 이력", response.answer_text)
+
+
+class InspectionApprovalTests(unittest.TestCase):
+    @staticmethod
+    def _event(phase, state, attempt, **details):
+        return ProgressEvent(
+            phase,
+            state,
+            1,
+            {"candidate_attempt": attempt, **details},
+        )
+
+    def test_explain_failure_discards_statically_validated_candidate(self):
+        collector = InspectionCollector()
+        collector.record(self._event(ProgressPhase.CYPHER_GENERATION, ProgressState.STARTED, 1))
+        collector.record(
+            self._event(
+                ProgressPhase.STATIC_VALIDATION,
+                ProgressState.COMPLETED,
+                1,
+                validated_cypher="MATCH (first:Rule) RETURN first LIMIT 1",
+                parameters={"candidate": "first"},
+                labels=["Rule"],
+                relationship_types=["SUPPORTED_BY"],
+            )
+        )
+        failed = collector.record(
+            self._event(
+                ProgressPhase.NEO4J_EXPLAIN,
+                ProgressState.FAILED,
+                1,
+                error_code="NEO4J_EXPLAIN_FAILED",
+            )
+        )
+        self.assertEqual(failed["type"], "inspection_update")
+        self.assertEqual(failed["summary"], {"error_code": "NEO4J_EXPLAIN_FAILED"})
+        self.assertNotIn("cypher", json.dumps(failed).lower())
+
+    def test_retry_approves_only_second_candidate_without_mixing(self):
+        collector = InspectionCollector()
+        collector.record(self._event(ProgressPhase.CYPHER_GENERATION, ProgressState.STARTED, 1))
+        collector.record(
+            self._event(
+                ProgressPhase.STATIC_VALIDATION,
+                ProgressState.COMPLETED,
+                1,
+                validated_cypher="MATCH (first:Rule) RETURN first LIMIT 1",
+                parameters={"candidate": "first"},
+                labels=["Rule"],
+                relationship_types=["SUPPORTED_BY"],
+            )
+        )
+        collector.record(
+            self._event(ProgressPhase.NEO4J_EXPLAIN, ProgressState.FAILED, 1)
+        )
+        collector.record(self._event(ProgressPhase.CYPHER_GENERATION, ProgressState.STARTED, 2))
+        collector.record(
+            self._event(
+                ProgressPhase.STATIC_VALIDATION,
+                ProgressState.COMPLETED,
+                2,
+                validated_cypher="MATCH (second:Rule) RETURN second LIMIT 1",
+                parameters={"candidate": "second"},
+                labels=["Rule", "Evidence"],
+                relationship_types=["SUPPORTED_BY"],
+            )
+        )
+        approved = collector.record(
+            self._event(
+                ProgressPhase.NEO4J_EXPLAIN,
+                ProgressState.COMPLETED,
+                2,
+                operators=["NodeIndexSeek"],
+            )
+        )
+        self.assertEqual(approved["type"], "inspection_update")
+        summary = approved["summary"]
+        self.assertIn("second:Rule", summary["approved_cypher"])
+        self.assertNotIn("first:Rule", summary["approved_cypher"])
+        self.assertEqual(summary["parameters"], {"candidate": "second"})
+        self.assertEqual(summary["operators"], ["NodeIndexSeek"])
+        self.assertEqual(summary["labels"], ["Evidence", "Rule"])
+
+    def test_static_completion_never_exposes_candidate_text(self):
+        collector = InspectionCollector()
+        collector.record(self._event(ProgressPhase.CYPHER_GENERATION, ProgressState.STARTED, 1))
+        update = collector.record(
+            self._event(
+                ProgressPhase.STATIC_VALIDATION,
+                ProgressState.COMPLETED,
+                1,
+                validated_cypher="MATCH (hidden:Rule) RETURN hidden LIMIT 1",
+                parameters={"secret": "not-public-yet"},
+                labels=["Rule"],
+                relationship_types=[],
+            )
+        )
+        serialized = json.dumps(update, ensure_ascii=False)
+        self.assertNotIn("MATCH", serialized)
+        self.assertNotIn("not-public-yet", serialized)
+
+    def test_noncanonical_commented_candidate_is_not_approved_or_exposed(self):
+        marker = "synthetic-system-prompt-marker"
+        collector = InspectionCollector()
+        collector.record(self._event(ProgressPhase.CYPHER_GENERATION, ProgressState.STARTED, 1))
+        static = collector.record(
+            self._event(
+                ProgressPhase.STATIC_VALIDATION,
+                ProgressState.COMPLETED,
+                1,
+                validated_cypher=(
+                    f"// {marker}\nMATCH (hidden:Rule) RETURN hidden LIMIT 1"
+                ),
+                parameters={},
+                labels=["Rule"],
+                relationship_types=[],
+            )
+        )
+        explained = collector.record(
+            self._event(
+                ProgressPhase.NEO4J_EXPLAIN,
+                ProgressState.COMPLETED,
+                1,
+                operators=["NodeByLabelScan"],
+            )
+        )
+        self.assertNotIn(marker, json.dumps(static, ensure_ascii=False))
+        self.assertIsNone(explained)
+
+    def test_retry_start_retracts_a_previously_approved_candidate(self):
+        collector = InspectionCollector()
+        collector.record(self._event(ProgressPhase.CYPHER_GENERATION, ProgressState.STARTED, 1))
+        collector.record(
+            self._event(
+                ProgressPhase.STATIC_VALIDATION,
+                ProgressState.COMPLETED,
+                1,
+                validated_cypher="MATCH (old:Rule) RETURN old LIMIT 1",
+                parameters={},
+                labels=["Rule"],
+                relationship_types=[],
+            )
+        )
+        collector.record(
+            self._event(
+                ProgressPhase.NEO4J_EXPLAIN,
+                ProgressState.COMPLETED,
+                1,
+                operators=["NodeByLabelScan"],
+            )
+        )
+        reset = collector.record(
+            self._event(ProgressPhase.CYPHER_GENERATION, ProgressState.STARTED, 2)
+        )
+        self.assertEqual(
+            reset["summary"],
+            {"retry": True, "discard_previous_candidate": True},
+        )
+
+    def test_public_progress_reports_safe_retry_and_error_without_details(self):
+        retry = self._event(
+            ProgressPhase.CYPHER_GENERATION,
+            ProgressState.STARTED,
+            2,
+            system_prompt="never expose",
+        ).public_payload()
+        self.assertEqual(retry["attempt"], 2)
+        self.assertTrue(retry["retry"])
+        self.assertIn("다시 생성", retry["message"])
+        self.assertNotIn("system_prompt", retry)
+
+        failed = self._event(
+            ProgressPhase.STATIC_VALIDATION,
+            ProgressState.FAILED,
+            2,
+            error_code="CYPHER_UNKNOWN_RELATIONSHIP",
+            validated_cypher="MATCH (unsafe)",
+        ).public_payload()
+        self.assertEqual(failed["error_code"], "CYPHER_UNKNOWN_RELATIONSHIP")
+        self.assertNotIn("validated_cypher", failed)
+
 
 class NeedleExtractionTests(unittest.TestCase):
     def test_splits_and_drops_short_numeric_noise(self):
@@ -191,7 +482,7 @@ class PdfEvidenceTests(unittest.TestCase):
         cls._tmp = TemporaryDirectory()
         cls.pdf_path = Path(cls._tmp.name) / "synthetic.pdf"
         document = pymupdf.open()
-        for index in range(2):
+        for index in range(19):
             page = document.new_page(width=595, height=842)
             page.insert_text((72, 120), f"page {index + 1}", fontsize=14)
             page.insert_text((72, 160), "GEA8001", fontsize=12)
@@ -244,54 +535,163 @@ class PdfEvidenceTests(unittest.TestCase):
             pdf_evidence.render_page_png(99)
 
 
-class StarletteRouteTests(unittest.TestCase):
-    def setUp(self):
+class StarletteRouteTests(unittest.IsolatedAsyncioTestCase):
+    async def asyncSetUp(self):
         self.chat = _ChatStub(_answerable_response())
-        self.client = TestClient(create_app(lambda: ChatState(self.chat)))
-        self.client.__enter__()
+        self.app = create_app(lambda: ChatState(self.chat))
+        self.lifespan = self.app.router.lifespan_context(self.app)
+        await self.lifespan.__aenter__()
+        self.client = httpx2.AsyncClient(
+            transport=httpx2.ASGITransport(app=self.app),
+            base_url="http://testserver",
+        )
 
-    def tearDown(self):
-        self.client.__exit__(None, None, None)
+    async def asyncTearDown(self):
+        await self.client.aclose()
+        await self.lifespan.__aexit__(None, None, None)
 
-    def test_health_is_path_and_connection_secret_free(self):
-        payload = self.client.get("/api/health").json()
+    async def test_health_is_path_and_connection_secret_free(self):
+        payload = (await self.client.get("/api/health")).json()
         self.assertTrue(payload["service_ready"])
         self.assertNotIn("neo4j_endpoint", payload)
         self.assertNotIn("neo4j_database", payload)
-        self.assertNotIn("path", payload["pdf"])
+        self.assertIn("pdf_mounted", payload)
+        self.assertNotIn("pdf", payload)
         self.assertGreaterEqual(payload["client_timeout_seconds"], 60)
 
-    def test_ask_streams_generic_progress_and_approved_response(self):
-        response = self.client.post("/api/ask", json={"question": "자료구조 이수구분"})
+    async def test_ask_streams_generic_progress_and_approved_response(self):
+        response = await self.client.post("/api/ask", json={"question": "자료구조 이수구분"})
         self.assertEqual(response.status_code, 200)
         events = _events(response.text)
-        self.assertEqual(
-            [item["phase"] for item in events if item["type"] == "progress"],
-            ["SUBMITTED", "CHECKING", "COMPLETED"],
-        )
+        completed = [
+            item["phase"]
+            for item in events
+            if item["type"] == "progress" and item["state"] == "COMPLETED"
+        ]
+        self.assertEqual(completed, [item.value for item in ProgressPhase])
         result = next(item for item in events if item["type"] == "result")
         self.assertEqual(result["response"]["status"], "ANSWERABLE")
         serialized = json.dumps(events, ensure_ascii=False)
         self.assertNotIn("MATCH ", serialized)
         self.assertNotIn("QueryPlan", serialized)
+        self.assertFalse(any(item["type"] == "inspection_update" for item in events))
         self.assertEqual(self.chat.questions, ["자료구조 이수구분"])
 
-    def test_input_validation_rejects_empty_unknown_and_overlong(self):
-        self.assertEqual(self.client.post("/api/ask", json={"question": ""}).status_code, 400)
+    async def test_inspection_updates_stream_before_result_and_only_approved_cypher(self):
+        with mock.patch.dict("os.environ", {"KG_CHAT_SHOW_QUERY_DETAILS": "true"}):
+            app = create_app(lambda: ChatState(self.chat))
+            async with app.router.lifespan_context(app):
+                async with httpx2.AsyncClient(
+                    transport=httpx2.ASGITransport(app=app),
+                    base_url="http://testserver",
+                ) as client:
+                    events = _events(
+                        (await client.post(
+                            "/api/ask", json={"question": "자료구조 이수구분"}
+                        )).text
+                    )
+        updates = [item for item in events if item["type"] == "inspection_update"]
+        static = next(item for item in updates if item["stage"] == "STATIC_VALIDATION")
+        approved = next(item for item in updates if item["stage"] == "NEO4J_EXPLAIN")
+        self.assertNotIn("approved_cypher", static["summary"])
+        self.assertIn("MATCH (o:CourseOffering)", approved["summary"]["approved_cypher"])
+        self.assertEqual(approved["summary"]["operators"], ["NodeIndexSeek"])
+        result_index = next(index for index, item in enumerate(events) if item["type"] == "result")
+        approved_index = events.index(approved)
+        self.assertLess(approved_index, result_index)
+        allowed = {
+            "QUESTION_ANALYSIS": {"status", "query_plan"},
+            "SCHEMA_SELECTION": {
+                "labels",
+                "relationships",
+                "node_label_count",
+                "relationship_count",
+            },
+            "CYPHER_GENERATION": {"candidate_generated", "message"},
+            "STATIC_VALIDATION": {
+                "read_only_syntax_verified",
+                "ontology_schema_verified",
+            },
+            "NEO4J_EXPLAIN": {
+                "approved_cypher",
+                "parameters",
+                "operators",
+                "labels",
+                "relationships",
+                "limit",
+            },
+            "GRAPH_EXECUTION": {"row_count"},
+            "RESULT_VALIDATION": {
+                "row_count",
+                "fact_count",
+                "verified_evidence_count",
+                "fact_status_verified",
+                "evidence_status_verified",
+                "direct_provenance_verified",
+            },
+            "CLAIM_BUILDING": {"claim_count"},
+            "ANSWER_RENDERING": {"citation_count"},
+            "COMPLETED": {"total_elapsed_ms", "stage_timings_ms"},
+        }
+        for update in updates:
+            self.assertLessEqual(set(update["summary"]), allowed[update["stage"]])
+        serialized = json.dumps(updates, ensure_ascii=False)
+        for secret in ("system_prompt", "password", "bolt://", "traceback"):
+            self.assertNotIn(secret, serialized)
+
+    async def test_retry_stream_exposes_only_the_final_explain_approved_candidate(self):
+        retry_chat = _RetryChatStub(_answerable_response())
+        with mock.patch.dict("os.environ", {"KG_CHAT_SHOW_QUERY_DETAILS": "true"}):
+            app = create_app(lambda: ChatState(retry_chat))
+            async with app.router.lifespan_context(app):
+                async with httpx2.AsyncClient(
+                    transport=httpx2.ASGITransport(app=app),
+                    base_url="http://testserver",
+                ) as client:
+                    events = _events(
+                        (await client.post("/api/ask", json={"question": "재시도"})).text
+                    )
+        serialized = json.dumps(events, ensure_ascii=False)
+        self.assertNotIn("first:Rule", serialized)
+        self.assertIn("second:Rule", serialized)
+        retry = next(
+            item
+            for item in events
+            if item["type"] == "progress" and item.get("retry") is True
+        )
+        self.assertIn("다시 생성", retry["message"])
+        failed = next(
+            item
+            for item in events
+            if item["type"] == "progress" and item["state"] == "FAILED"
+        )
+        self.assertEqual(failed["error_code"], "NEO4J_EXPLAIN_FAILED")
+
+    async def test_input_validation_rejects_empty_unknown_and_overlong(self):
         self.assertEqual(
-            self.client.post("/api/ask", json={"question": "x", "extra": 1}).status_code,
+            (await self.client.post("/api/ask", json={"question": ""})).status_code,
             400,
         )
         self.assertEqual(
-            self.client.post(
+            (await self.client.post(
+                "/api/ask", json={"question": "x", "extra": 1}
+            )).status_code,
+            400,
+        )
+        self.assertEqual(
+            (await self.client.post(
                 "/api/ask", json={"question": "가" * (MAX_QUESTION_LENGTH + 1)}
-            ).status_code,
+            )).status_code,
             422,
         )
 
-    def test_non_integer_and_traversal_pdf_paths_are_not_routed(self):
-        self.assertEqual(self.client.get("/api/pdf/page/not-int.png").status_code, 404)
-        self.assertEqual(self.client.get("/api/pdf/page/%2e%2e/1.png").status_code, 404)
+    async def test_non_integer_and_traversal_pdf_paths_are_not_routed(self):
+        self.assertEqual(
+            (await self.client.get("/api/pdf/page/not-int.png")).status_code, 404
+        )
+        self.assertEqual(
+            (await self.client.get("/api/pdf/page/%2e%2e/1.png")).status_code, 404
+        )
 
     def test_xss_and_timeout_contract_use_safe_browser_apis(self):
         script = (Path(__file__).parents[1] / "src/evidence_chat/static/app.js").read_text()
@@ -301,6 +701,18 @@ class StarletteRouteTests(unittest.TestCase):
         self.assertIn("inFlight", script)
         self.assertIn("Math.max(60000", script)
         self.assertIn("페이지 이미지를 표시하지 못했습니다", script)
+        self.assertIn("openPdfModal", script)
+        self.assertIn("renderInspectionUpdate", script)
+        self.assertIn("navigator.clipboard.writeText", script)
+        self.assertIn("answerProgressSteps", script)
+        self.assertIn("markTimelineCancelled", script)
+        self.assertIn("markTimelineFailed", script)
+        self.assertIn("timelineEvents = [];", script)
+        self.assertNotIn("PIPELINE_PHASES.map", script)
+        self.assertNotIn('state: "WAITING"', script)
+        self.assertIn("started_at_ms: performance.now()", script)
+        self.assertIn("Number.isFinite(running.started_at_ms)", script)
+        self.assertIn("Number.isFinite(event.elapsed_ms)", script)
 
     def test_frontend_does_not_construct_backend_contracts(self):
         root = Path(__file__).parents[1] / "src/evidence_chat"

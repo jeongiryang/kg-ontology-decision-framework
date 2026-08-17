@@ -168,6 +168,10 @@ class KoreanAnswerRenderer:
         if len(by_field) != len(claims):
             raise GroundingError("ANSWER_CLAIM_DUPLICATE", "duplicate single-course field")
         parts: list[str] = []
+        if "course_code" in by_field:
+            parts.append(
+                f"{subject.display_name}의 학수번호는 {by_field['course_code'].value}입니다."
+            )
         if "grade_year" in by_field and "semester" in by_field:
             grades = by_field["grade_year"].value
             grades = grades if isinstance(grades, tuple) else (grades,)

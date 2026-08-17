@@ -95,7 +95,9 @@ uv run python -m kg_builder.query.schema_exporter check
 
 ## 5. 정적 Cypher 검증
 
-검증기는 주석과 문자열 리터럴을 구분해 토큰을 검사하고, 다음 최소 문법만 허용한다.
+검증기는 주석·문자열 리터럴·backtick 구간을 lexer로 구분한다. 실제 line/block comment는 같은 길이의 안전한 공백 또는 줄바꿈으로 치환한 comment-free canonical Cypher를 만들며, 정적 검증 이후 `ValidatedCypher`, Neo4j EXPLAIN, executor와 공개 inspection에는 이 canonical 문자열만 전달한다. 원본 LLM Cypher는 승인 객체나 응답에 보관하지 않는다. 문자열 안의 `//`, `/* */`, `https://`는 그대로 보존된다. backtick 구간도 주석으로 오인하지 않고 보존해 인식하지만, 현재 제한 문법 정책상 backtick 식별자 자체는 계속 거부한다. 닫히지 않은 block comment·문자열·backtick, 주석 제거 후 비어 있는 쿼리는 거부하고, 주석 자리는 공백으로 유지해 양쪽 토큰이 결합되지 않게 한다.
+
+canonicalization 뒤에는 다음 최소 문법만 허용한다.
 
 ```text
 MATCH | OPTIONAL MATCH
