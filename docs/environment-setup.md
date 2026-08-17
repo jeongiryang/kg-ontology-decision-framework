@@ -356,7 +356,66 @@ gh auth status
 
 Neo4j Browser에 접속하여 로컬에서 설정한 계정으로 로그인한 뒤 서버 연결 상태를 확인한다. 실제 비밀번호는 검증 로그에 복사하지 않는다.
 
-## 12. 팀 공통 운영 규칙
+## 12. 재부팅·재시작 후 다시 올리기
+
+설치가 끝난 환경에서 매번 하는 일이다. Windows나 Docker Desktop을 재시작하면 아래 세 가지가
+함께 내려간다. **셋 다 켜야 하고 순서가 있다.** 2026-08-15 황대겸 환경에서 실측했다.
+
+| 순서 | 대상 | 명령 | 확인 |
+|---|---|---|---|
+| 1 | Neo4j | `docker start neo4j-db` | `uv run python -m kg_builder.neo4j_ingest check-connection` |
+| 2 | Ollama | `nohup ~/.local/bin/ollama serve > ~/ollama-serve.log 2>&1 &` | `curl -s http://127.0.0.1:11434/api/tags` |
+| 3 | 웹 서버 | `uv run python -m evidence_chat.server` | `curl -s http://127.0.0.1:8501/api/health` |
+
+Neo4j 컨테이너는 이미 존재하므로 8절의 `docker run`을 다시 하지 않는다. `docker start`만으로
+데이터가 그대로 올라온다. 2026-08-15 실측에서 Docker Desktop 재시작 뒤 컨테이너가
+`Exited (255)` 상태였고, `docker start neo4j-db` 후 `nodes=1518, relationships=3260,
+evidence=511`이 그대로 확인됐다.
+
+### 12.1 웹 서버를 마지막에 띄우는 이유
+
+`ChatState.open()`은 애플리케이션 시작 시 **한 번만** 실행되고 재시도하지 않는다
+(`src/evidence_chat/server.py`). Neo4j가 없는 상태로 웹 서버를 띄우면 다음이 남고, 그 뒤
+Neo4j를 켜도 웹 서버는 스스로 다시 붙지 않는다. 웹 서버를 재시작해야 한다.
+
+```text
+[evidence-chat] 서비스 준비 실패
+Unable to retrieve routing information
+```
+
+```jsonc
+// GET /api/health
+{"service_ready": false, "error": "로컬 질의 서비스에 연결할 수 없습니다."}
+// POST /api/ask → 503 Service Unavailable
+```
+
+### 12.2 `/api/health`는 Ollama를 확인하지 않는다
+
+시작 시 `verify_connectivity()`로 확인하는 것은 Neo4j뿐이다. LLM 클라이언트는 객체만 만들고
+실제 호출은 질문이 들어올 때 한다. 따라서 **Ollama가 꺼져 있어도 `service_ready`는 `true`로
+나온다.** 증상은 화면에서만 드러난다.
+
+| 무엇이 내려갔나 | `/api/health` | 질문했을 때 |
+|---|---|---|
+| Neo4j | `service_ready: false` | `503 Service Unavailable` |
+| Ollama | `service_ready: true` | `SAFE_FAILURE` · `QUERY_PLANNING_FAILED` |
+
+2026-08-15에 Ollama만 내려간 상태를 이 조합으로 판별했다. 질문이 `QUERY_PLANNING_FAILED`로
+끝나는데 `/api/health`가 정상이면 먼저 `curl http://127.0.0.1:11434/api/tags`를 확인한다.
+
+적재된 사실과 표기가 겹치지 않는 입력(뜻 없는 문자열)은 LLM을 부르기 전에 범위 밖으로
+끝나므로, Ollama가 꺼져 있어도 그 입력만은 정상 응답한다. 이것으로 "웹은 되는데 질문만
+안 되는" 상태를 오해하지 않도록 주의한다.
+
+### 12.3 Ollama는 WSL 세션마다 다시 띄운다
+
+9.1절에 적힌 대로 서비스로 등록돼 있지 않다. `pgrep -a ollama`로 확인하고 없으면 다시 띄운다.
+
+```bash
+pgrep -a ollama || nohup ~/.local/bin/ollama serve > ~/ollama-serve.log 2>&1 &
+```
+
+## 13. 팀 공통 운영 규칙
 
 - `.venv/`, `.env`, 원본 PDF, 로컬 DB 데이터는 Git에 커밋하지 않는다.
 - `pyproject.toml`과 `uv.lock`을 공통 의존성 기준으로 사용한다.
