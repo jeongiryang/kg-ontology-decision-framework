@@ -7,7 +7,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from .cypher_validator import ProvenanceContract
-from .query_plan import QueryPlan, SelectionMode
+from .query_plan import QueryPlan, SelectionMode, resolve_filter_bindings
 
 
 class ResultValidationError(ValueError):
@@ -144,11 +144,21 @@ class ResultValidator:
             )
 
     def _validate_scope(self, index: int, plan: QueryPlan, row: dict[str, Any]) -> None:
+        """Re-check every scope filter against the value the row actually carries.
+
+        어느 쪽이 목록인지는 필터 **이름**이 아니라 그 필터가 선언한 연산자가 정한다.
+        이름으로 분기하면 같은 연산자를 쓰는 새 필터가 생길 때마다 조용히 빠진다.
+        """
+
+        bindings = resolve_filter_bindings(plan.selection_mode)
         for name, expected in plan.filters.items():
             actual = row.get(name)
-            if name == "grade_year" and isinstance(actual, list):
+            operator = bindings[name].operator if name in bindings else "EQUALS"
+            if operator == "PARAMETER_IN_PROPERTY" and isinstance(actual, list):
+                # 행이 배열 속성을 그대로 돌려준다. 계획 값이 그 안에 있어야 한다.
                 matches = expected in actual
-            elif name == "rule_ids" and isinstance(expected, list):
+            elif operator == "PROPERTY_IN_PARAMETER" and isinstance(expected, list):
+                # 계획이 허용 목록을 준다. 행의 값이 그 목록 안에 있어야 한다.
                 matches = actual in expected
             else:
                 matches = actual == expected

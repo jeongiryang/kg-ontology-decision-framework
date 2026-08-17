@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from time import perf_counter
-from typing import Protocol
+from typing import Any, Mapping, Protocol
 
 from kg_builder.query.natural_language_service import NaturalLanguageResult
 from kg_builder.query.progress import (
@@ -15,14 +15,26 @@ from kg_builder.query.progress import (
 
 from .claim_builder import ClaimBuilder
 from .claim_validator import ClaimValidator
-from .contracts import ChatErrorCode, ChatResponse, ChatStatus, GroundingError
+from .contracts import (
+    QUERY_STAGE_ERROR_CODES,
+    ChatErrorCode,
+    ChatResponse,
+    ChatStatus,
+    ClarificationOption,
+    GroundingError,
+    clarification_message,
+)
 from .korean_renderer import KoreanAnswerRenderer
 from .renderer import CitationRenderer
 
 
 class QueryService(Protocol):
     def ask(
-        self, question: str, progress_callback: ProgressCallback | None = None
+        self,
+        question: str,
+        *,
+        resolved: Mapping[str, Any] | None = None,
+        progress_callback: ProgressCallback | None = None,
     ) -> NaturalLanguageResult: ...
 
 
@@ -40,13 +52,17 @@ class CurriculumChatService:
         self._citation_renderer = CitationRenderer()
 
     def ask(
-        self, question: str, progress_callback: ProgressCallback | None = None
+        self,
+        question: str,
+        *,
+        resolved: Mapping[str, Any] | None = None,
+        progress_callback: ProgressCallback | None = None,
     ) -> ChatResponse:
         total_started = perf_counter()
-        query_result = (
-            self.query_service.ask(question)
-            if progress_callback is None
-            else self.query_service.ask(question, progress_callback)
+        query_result = self.query_service.ask(
+            question,
+            resolved=resolved,
+            progress_callback=progress_callback,
         )
         if query_result.status != ChatStatus.ANSWERABLE.value:
             started = perf_counter()
@@ -183,13 +199,26 @@ class CurriculumChatService:
         if status is ChatStatus.ANSWERABLE:
             raise AssertionError("ANSWERABLE must use the deterministic Claim path")
         if status is ChatStatus.SAFE_FAILURE:
+            # 어느 관문에서 멈췄는지 코드로 남긴다. 사용자 문구도 단계에 맞게 달라지지만
+            # 어느 경우에도 조회하지 못한 내용을 지어내지 않는다.
             return ChatResponse.safe_failure(
-                result.request_id, ChatErrorCode.QUERY_SAFE_FAILURE
+                result.request_id,
+                QUERY_STAGE_ERROR_CODES.get(
+                    result.error_stage or "", ChatErrorCode.QUERY_SAFE_FAILURE
+                ),
             )
         if status is ChatStatus.CLARIFICATION_REQUIRED:
-            clarification = result.message or "학년도, 학과 또는 학수번호를 추가로 알려 주세요."
+            # 계획 모델이 쓴 문장을 그대로 내보내지 않는다. 무엇이 부족한지에 대한
+            # 통제 코드만 받아 한국어 안내를 여기서 만든다.
+            options = tuple(
+                ClarificationOption(
+                    choice.filter_name, choice.value, choice.label, choice.detail
+                )
+                for choice in getattr(result, "options", ())
+            )
             return ChatResponse.clarification_required(
-                result.request_id, clarification
+                result.request_id,
+                clarification_message(result.missing, options),
             )
         if status is ChatStatus.UNSUPPORTED:
             return ChatResponse.unsupported(

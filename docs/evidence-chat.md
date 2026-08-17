@@ -96,6 +96,29 @@ used_fact_ids, used_evidence_ids, clarification, error_code
 
 `ANSWER_VALIDATION_FAILED`는 status가 아니라 `SAFE_FAILURE`의 내부 오류 코드다.
 
+되묻기 선택지는 sealed `ChatResponse`에 필드를 추가하지 않는다. 질문 분석이 실제로
+`CLARIFICATION_REQUIRED`로 끝났을 때만 별도 versioned SSE envelope를 보낸다.
+
+```text
+type=clarification_options, version=1, missing, options
+```
+
+각 option은 안정적인 `choice_id`, 적재 데이터에서 가져온 한국어 `label`, 서버가 다시
+검증할 `filter`와 `value`를 분리한다. 브라우저는 선택한 `filter`·`value`를 다음
+`POST /api/ask`의 `resolved` 객체로 보내며, planner는 같은 질문의 선택지를 적재
+데이터에서 다시 만들어 allowlist 대조를 통과한 값만 사용한다. 일반 질문에는 이
+envelope가 없고, `result.response`는 계속 위의 8개 필드만 갖는다.
+
+백엔드 공식 호출 계약은 다음 keyword-only 형태다.
+
+```python
+ask(question, *, resolved=None, progress_callback=None)
+```
+
+따라서 되묻기 선택과 progress callback을 함께 사용할 수 있지만 두 번째 위치 인자로
+서로 오바인딩할 수는 없다. 선택값은 Cypher 문자열에 직접 삽입되지 않고 QueryPlan의
+검증된 parameter 경로로만 전달된다.
+
 ## SSE와 진행 표시
 
 백엔드는 실제 서비스 경계에서 다음 단계의 시작·완료·실패 이벤트만 전송한다.
@@ -108,7 +131,7 @@ QUESTION_ANALYSIS → SCHEMA_SELECTION → CYPHER_GENERATION
 
 실행하지 않은 단계를 완료로 만들지 않으며 가짜 퍼센트, hidden chain-of-thought, system prompt와 모델 원문은 보내지 않는다. 화면은 callback이 실제 도착한 단계 행만 그때 생성해 진행 중·완료·실패로 누적하고, 아직 발생하지 않은 미래 단계를 `WAITING`으로 선생성하지 않는다. 완료된 행과 서버가 보낸 실제 소요시간은 답변 화면의 `처리 과정 보기`에도 유지한다. 연결을 취소하면 이미 완료된 행은 유지하고 당시 진행 중이던 행만 취소 상태로 표시한다. 브라우저에 해당 단계의 신뢰 가능한 시작 시각이 있으면 취소 시점까지 계산하고, 없으면 가짜 `0ms` 대신 시간을 생략한다. 안전 파이프라인이 후보를 재생성할 때는 실패 오류 코드와 `안전한 질의를 다시 생성하는 중` 이벤트를 남기되 실패 후보 원문은 보내지 않는다.
 
-`POST /api/ask`는 `progress`, 선택적 `inspection_update`, `result`, `error`, `end` SSE 이벤트를 보낸다. `result.response`는 승인된 8개 wire 필드이고 `result.presentation`은 상태 라벨, PDF page group, 공개 PDF 상태와 선택적 debug metadata다. `inspection_update`는 단계별 allowlist 요약만 담으며 실제 확정 시점에 `result`보다 먼저 전송될 수 있다.
+`POST /api/ask`는 `progress`, 선택적 `clarification_options`, 선택적 `inspection_update`, `result`, `error`, `end` SSE 이벤트를 보낸다. `result.response`는 승인된 8개 wire 필드이고 `result.presentation`은 상태 라벨, PDF page group, 공개 PDF 상태와 선택적 debug metadata다. `inspection_update`는 단계별 allowlist 요약만 담으며 실제 확정 시점에 `result`보다 먼저 전송될 수 있다.
 
 `KG_CHAT_SHOW_QUERY_DETAILS=true`일 때만 처리 중·결과 화면의 `Cypher 및 지식그래프 탐색 정보 보기`에 정제된 QueryPlan, 선택 스키마, 승인된 읽기 전용 Cypher, 정제된 파라미터, EXPLAIN 연산자, 행·Fact·VERIFIED Evidence·Claim·Citation 수와 단계 시간을 누적한다. 공개 Cypher는 lexer가 실제 주석을 제거한 comment-free canonical 문자열이다. Cypher는 동일 생성 attempt의 `STATIC_VALIDATION`과 `NEO4J_EXPLAIN`이 모두 완료된 뒤에만 `inspection_update`로 승인한다. 정적 검증 직후에는 후보 생성·검증 중이라는 고정 문구만 표시한다. EXPLAIN 실패 후보는 공개하지 않고, 후속 단계 실패로 재생성을 시작하면 이전 승인 후보도 UI에서 철회한다. 재시도 성공 시 최종 승인 후보만 남으며 모든 후보가 실패하면 Cypher 영역을 표시하지 않는다.
 

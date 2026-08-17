@@ -12,6 +12,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import contextlib
+import hashlib
 import json
 import os
 import re
@@ -59,6 +60,8 @@ DEFAULT_PORT = 8501
 DEFAULT_CLIENT_TIMEOUT_SECONDS = 180
 DEFAULT_MAX_CONCURRENT = 1
 MAX_BODY_BYTES = 16 * 1024
+# 되묻기로 채울 수 있는 항목 수 상한. 이 이상은 정상 흐름이 아니다.
+MAX_RESOLVED_ENTRIES = 8
 
 EXAMPLE_QUESTIONS = (
     "2026학년도 교양 최소 이수학점은?",
@@ -72,7 +75,11 @@ EXAMPLE_QUESTIONS = (
 
 class ChatService(Protocol):
     def ask(
-        self, question: str, progress_callback: ProgressCallback | None = None
+        self,
+        question: str,
+        *,
+        resolved: dict[str, Any] | None = None,
+        progress_callback: ProgressCallback | None = None,
     ) -> ChatResponse: ...
 
 
@@ -460,9 +467,29 @@ def _state(request: Request) -> ChatState:
     return request.app.state.chat
 
 
+class _FreshStaticFiles(StaticFiles):
+    """Serve the screen assets without letting the browser keep an old copy.
+
+    ``index.html`` 만 캐시를 막아 두면 새 문서가 예전 ``app.js`` 를 부른다. 화면이 멈춘
+    이유가 코드에 없어 찾기 어렵다(2026-08-14 실측). 로컬 개발 서버라 매번 내려받아도
+    비용이 없다.
+    """
+
+    def file_response(self, *args: Any, **kwargs: Any) -> Response:
+        response = super().file_response(*args, **kwargs)
+        response.headers["Cache-Control"] = "no-store"
+        return response
+
+
 async def index(request: Request) -> Response:
     del request
-    return FileResponse(STATIC_DIR / "index.html")
+    # 화면 문서는 캐시하지 않는다. 브라우저가 예전 index.html 을 들고 있으면 새
+    # app.js 가 없는 요소를 찾다가 답변 렌더링이 통째로 멈춘다. 로컬 개발 서버라
+    # 매번 내려받아도 비용이 없다.
+    return FileResponse(
+        STATIC_DIR / "index.html",
+        headers={"Cache-Control": "no-store"},
+    )
 
 
 async def health(request: Request) -> Response:
@@ -487,6 +514,63 @@ def _sse(payload: dict[str, Any]) -> bytes:
     return f"data: {json.dumps(payload, ensure_ascii=False)}\n\n".encode("utf-8")
 
 
+def _clarification_options_event(event: ProgressEvent) -> dict[str, Any] | None:
+    """Build the versioned presentation envelope outside sealed ChatResponse."""
+
+    if (
+        event.phase is not ProgressPhase.QUESTION_ANALYSIS
+        or event.state is not ProgressState.COMPLETED
+        or event.details.get("planning_status") != "CLARIFICATION_REQUIRED"
+    ):
+        return None
+    raw_missing = event.details.get("missing")
+    missing = [
+        item
+        for item in raw_missing if isinstance(item, str) and re.fullmatch(r"[A-Z_]{1,80}", item)
+    ] if isinstance(raw_missing, (list, tuple)) else []
+    raw_options = event.details.get("clarification_options")
+    options: list[dict[str, Any]] = []
+    if isinstance(raw_options, (list, tuple)):
+        for option in raw_options[:100]:
+            filter_name = getattr(option, "filter_name", None)
+            value = getattr(option, "value", None)
+            label = getattr(option, "label", None)
+            detail = getattr(option, "detail", None)
+            if (
+                not isinstance(filter_name, str)
+                or not re.fullmatch(r"[a-z_]{1,80}", filter_name)
+                or not isinstance(label, str)
+                or not label.strip()
+            ):
+                continue
+            try:
+                canonical_value = json.dumps(
+                    value, ensure_ascii=False, sort_keys=True, separators=(",", ":")
+                )
+            except (TypeError, ValueError):
+                continue
+            choice_id = hashlib.sha256(
+                f"{filter_name}:{canonical_value}".encode("utf-8")
+            ).hexdigest()[:24]
+            options.append(
+                {
+                    "choice_id": f"choice:{choice_id}",
+                    "filter": filter_name,
+                    "value": value,
+                    "label": label.strip()[:160],
+                    "detail": detail.strip()[:256]
+                    if isinstance(detail, str) and detail.strip()
+                    else None,
+                }
+            )
+    return {
+        "type": "clarification_options",
+        "version": 1,
+        "missing": missing,
+        "options": options,
+    }
+
+
 async def ask(request: Request) -> Response:
     raw = await request.body()
     if len(raw) > MAX_BODY_BYTES:
@@ -495,8 +579,17 @@ async def ask(request: Request) -> Response:
         payload = json.loads(raw or b"{}")
     except json.JSONDecodeError:
         return JSONResponse({"error": "JSON 본문을 해석할 수 없습니다."}, status_code=400)
-    if not isinstance(payload, dict) or set(payload) != {"question"}:
-        return JSONResponse({"error": "question 필드만 전송할 수 있습니다."}, status_code=400)
+    if not isinstance(payload, dict) or not set(payload) <= {"question", "resolved"}:
+        return JSONResponse(
+            {"error": "question 과 resolved 필드만 전송할 수 있습니다."}, status_code=400
+        )
+    # 되묻기에서 사용자가 고른 값. 서버는 대화 상태를 들지 않으므로 매 요청에 함께
+    # 온다. 값이 실제로 제시된 선택지였는지는 계획 계층이 다시 만들어 대조한다.
+    resolved = payload.get("resolved") or {}
+    if not isinstance(resolved, dict) or len(resolved) > MAX_RESOLVED_ENTRIES:
+        return JSONResponse(
+            {"error": "resolved 는 항목 수가 제한된 객체여야 합니다."}, status_code=400
+        )
     question = payload.get("question")
     if not isinstance(question, str) or not question.strip():
         return JSONResponse({"error": "question 필드가 필요합니다."}, status_code=400)
@@ -528,12 +621,19 @@ async def ask(request: Request) -> Response:
             def on_progress(event: ProgressEvent) -> None:
                 inspection_update = collector.record(event)
                 loop.call_soon_threadsafe(queue.put_nowait, event.public_payload())
+                clarification_update = _clarification_options_event(event)
+                if clarification_update is not None:
+                    loop.call_soon_threadsafe(queue.put_nowait, clarification_update)
                 if state.show_query_details and inspection_update is not None:
                     loop.call_soon_threadsafe(queue.put_nowait, inspection_update)
 
             def worker() -> None:
                 try:
-                    response = service.ask(question, on_progress)
+                    response = service.ask(
+                        question,
+                        resolved=resolved or None,
+                        progress_callback=on_progress,
+                    )
                     result = adapter.adapt(response)
                     loop.call_soon_threadsafe(queue.put_nowait, result)
                 except Exception:
@@ -615,7 +715,7 @@ def create_app(state_factory: Callable[[], ChatState] = ChatState) -> Starlette:
             Route("/api/health", health),
             Route("/api/ask", ask, methods=["POST"]),
             Route("/api/pdf/page/{page:int}.png", pdf_page),
-            Mount("/static", app=StaticFiles(directory=STATIC_DIR), name="static"),
+            Mount("/static", app=_FreshStaticFiles(directory=STATIC_DIR), name="static"),
         ],
         lifespan=lifespan,
     )

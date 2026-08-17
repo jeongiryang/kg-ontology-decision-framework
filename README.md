@@ -125,6 +125,7 @@ kg-ontology-decision-framework/
 - [Text-to-Cypher 스키마·검증·실행 안전 기반](docs/text-to-cypher-safety.md)
 - [RTX 4070 Ti 로컬 LLM Text-to-Cypher PoC](docs/local-llm-query-pipeline.md)
 - [VERIFIED Evidence 기반 한국어 답변 계층](docs/evidence-answer-renderer.md)
+- [확장 fact family 기반 답변 커버리지](docs/extended-fact-families.md)
 
 Verified bundle 검증과 로컬 Neo4j 적재는 다음 순서로 실행합니다. 각 팀원은 자신의 빈 로컬 Neo4j 데이터베이스에서 독립적으로 수행합니다.
 
@@ -157,6 +158,11 @@ uv run python -m evidence_chat.server
 
 기본 주소는 `http://127.0.0.1:8501`입니다. `NEO4J_QUERY_*`와 `KG_LLM_*` 설정이 필요하며, 근거 페이지 이미지와 실제 텍스트 검색 강조를 보려면 Git 제외된 19쪽 발췌 PDF를 `KG_CHAT_PDF_PATH`로 지정합니다. PDF가 없어도 근거 원문과 세 종류 페이지 번호는 표시됩니다. 실제 pipeline 단계의 누적 타임라인, EXPLAIN 승인 후에만 공개되는 선택적 Cypher inspection, 상태별 화면과 Citation 정책은 [학사규정 근거 챗봇 가이드](docs/evidence-chat.md)를 참고합니다.
 
+되묻기 선택지는 `ChatResponse`에 필드를 추가하지 않고 별도 versioned
+`clarification_options` SSE event로 전달됩니다. 선택 후 재질의는 `resolved`를,
+실시간 단계 표시는 `progress_callback`을 각각 keyword-only 인자로 사용하므로 기존
+8필드 응답 계약과 승인 경계는 유지됩니다.
+
 현재 실제 구현은 `src/kg_builder/`의 `config.py`, `graph_bundle.py`, `neo4j_schema.py`, `neo4j_ingest.py`, `query_*.py`와 `src/evidence_chat/`에 있습니다. 위쪽 초기 디렉터리 설명의 0바이트 골격 모듈은 향후 구조 예시이며 구현 완료 상태를 뜻하지 않습니다.
 
 동적 Text-to-Cypher는 명세-derived LLM 스키마, 제한 문법 후보 검증, Neo4j `EXPLAIN`, Evidence provenance에 더해 provider-neutral 로컬 LLM planner·Cypher generator까지 연결되어 있습니다. 현재 실측 provider는 Ollama이고 OpenAI-compatible adapter로 SSH 터널 뒤 연구실 vLLM을 연결할 수 있습니다. 실행 시 명시적인 `NEO4J_QUERY_*`와 로컬 `KG_LLM_*` 설정이 필요합니다.
@@ -176,6 +182,15 @@ uv run python -m kg_builder.answer.cli \
 ```
 
 응답 상태, Claim 유형, Citation 필드와 안전 실패 정책은 [Evidence 기반 한국어 답변 계층 문서](docs/evidence-answer-renderer.md)를 참고합니다.
+
+답변 가능한 사실의 범위는 확장 fact family로 넓혔습니다. 학년·학기별 교양 학점 배분, 권장 이수 로드맵, 학과 교육목표, 진출 분야, 인재상, 권장 교양 과목을 Evidence와 함께 답변합니다. 근거 규칙은 그대로이며, Evidence 직접 경로가 있는 사실만 등록됩니다. QueryPlan을 직접 지정해 로컬 LLM 없이 이 경로를 확인하려면 다음 CLI를 사용합니다. 안전 관문과 근거 검증은 모두 실제로 실행됩니다.
+
+```bash
+uv run python -m kg_builder.answer.plan_cli --print-examples
+uv run python -m kg_builder.answer.plan_cli --all-examples
+```
+
+등록된 fact family, 범위 밖으로 남긴 항목, family 추가 절차는 [확장 fact family 문서](docs/extended-fact-families.md)를 참고합니다.
 
 ### AI 시뮬레이션 로그
 

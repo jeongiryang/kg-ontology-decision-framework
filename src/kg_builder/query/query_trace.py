@@ -25,6 +25,7 @@ STUDENT_ID_PATTERN = re.compile(r"(?<!\d)\d{8,10}(?!\d)")
 
 
 class TraceStage(StrEnum):
+    PLANNING = "PLANNING"
     PLAN_VALIDATION = "PLAN_VALIDATION"
     SCHEMA_SELECTION = "SCHEMA_SELECTION"
     CYPHER_VALIDATION = "CYPHER_VALIDATION"
@@ -117,6 +118,21 @@ class QueryTrace:
         self.retention_days = retention_days
         self.ontology_version: str | None = None
         self.events: list[TraceEvent] = []
+        # 계획 단계에서 모델이 무엇을 냈고 어느 계약에 걸렸는지. 이 구간이 비어 있으면
+        # 계획 실패의 원인을 사후에 좁힐 수 없어 추정으로 고치게 된다.
+        self.planning_attempts: list[dict[str, Any]] = []
+
+    def record_planning(self, attempts: Any) -> None:
+        """Keep the schema-level shape of each planning attempt.
+
+        질문에서 온 값은 담지 않는다. 어느 모드를 골랐는지, 어떤 필터 이름을 채웠는지,
+        어느 계약 문구에 걸렸는지만 남긴다. 값 자체는 원문 질문과 같은 성격이라
+        ``store_raw_question`` 정책을 따르는 raw_question 쪽에만 노출된다.
+        """
+
+        for attempt in attempts or ():
+            payload = attempt if isinstance(attempt, Mapping) else asdict(attempt)
+            self.planning_attempts.append(dict(payload))
 
     def record(
         self,
@@ -150,6 +166,8 @@ class QueryTrace:
             "access_policy": "application-operator-only",
             "events": [asdict(event) for event in self.events],
         }
+        if self.planning_attempts:
+            payload["planning_attempts"] = self.planning_attempts
         if self.raw_question is not None:
             payload["raw_question"] = self.raw_question
         if self.question_fingerprint is not None:

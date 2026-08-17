@@ -32,6 +32,18 @@ RENDER_DPI = 144
 MIN_NEEDLE_LENGTH = 2
 MAX_NEEDLES_PER_EVIDENCE = 12
 MAX_RECTS_PER_EVIDENCE = 40
+# 문장형 원문을 부분 구절로 나눌 때의 한계. 너무 짧은 구절은 페이지 곳곳에 흔해
+# 엉뚱한 위치를 강조하므로 하한을 둔다.
+MIN_PHRASE_LENGTH = 6
+MAX_PHRASE_WINDOWS = 40
+PHRASE_WINDOW_SIZES = (32, 24, 18, 14, 10, 8)
+# 한 검색어가 페이지에서 이보다 많이 나오면 그 구절은 특정 위치를 가리키지 못한다.
+MAX_HITS_PER_NEEDLE = 3
+# 행 높이 대비 위아래 여유. 같은 행의 글자가 조판으로 살짝 어긋나도 같은 행으로 본다.
+ROW_BAND_MARGIN = 0.6
+# 행을 근거로 채택할 최소 겹침 점수. 이 아래는 우연한 글자 겹침으로 본다.
+MIN_ROW_OVERLAP = 0.12
+_WORD_RUN = re.compile(r"[0-9A-Za-z가-힣]+")
 _LABEL_PREFIX = re.compile(r"^(?:이론|실기|개설학기|핵심역량|관련학과|학점)\s*")
 
 
@@ -164,11 +176,41 @@ def inspect_pdf(path: Path | None = None) -> PdfSource:
     return _inspect_existing(str(target), stat.st_mtime_ns, stat.st_size)
 
 
+def _phrase_windows(chunk: str) -> list[str]:
+    """Break one sentence into progressively shorter word windows.
+
+    한글 조판 PDF는 문장이 텍스트 레이어에서 여러 조각으로 흩어진다. 예를 들어 원문이
+    한 문장이어도 추출하면 `가학과별 교양과목 이수학점` 처럼 번호가 붙거나 뒷부분이
+    다른 조각으로 떨어져, 문장 전체로는 절대 검색되지 않는다. 그래서 어절을 묶은
+    부분 구절도 후보로 만들어 둔다.
+    """
+
+    length = len(chunk)
+    if length <= MIN_PHRASE_LENGTH:
+        return []
+    windows: list[str] = []
+    # 어절 경계로 자르면 조사 하나 때문에 어긋난다. 원문이 "이수학점은"이어도 PDF
+    # 텍스트는 "이수학점"에서 끊기는 식이므로 글자 단위로 겹쳐 가며 자른다.
+    # 긴 구절부터 만들어야 우연한 짧은 일치보다 정확한 위치를 먼저 잡는다.
+    for size in PHRASE_WINDOW_SIZES:
+        if size >= length or size < MIN_PHRASE_LENGTH:
+            continue
+        step = max(2, size // 3)
+        for start in range(0, length - size + 1, step):
+            phrase = chunk[start : start + size].strip()
+            if len(phrase) >= MIN_PHRASE_LENGTH:
+                windows.append(phrase)
+        if len(windows) >= MAX_PHRASE_WINDOWS:
+            break
+    return list(dict.fromkeys(windows))[:MAX_PHRASE_WINDOWS]
+
+
 def needles_from_raw_text(raw_text: str) -> list[str]:
     """Evidence 원문을 페이지에서 찾을 만한 검색어로 쪼갠다.
 
-    원문은 `기초교양 | 미래설계 | GEA8001 | 대학생활의설계(CDP-C) | ...` 형태이므로
-    구분자로 나눈 뒤 라벨 접두어를 떼고 긴 조각을 우선한다.
+    원문은 `기초교양 | 미래설계 | GEA8001 | 대학생활의설계(CDP-C) | ...` 형태이거나 한
+    문장일 수 있다. 구분자로 나눈 뒤 라벨 접두어를 떼고, 문장형 조각은 부분 구절까지
+    후보로 넓혀 긴 것부터 시도한다.
     """
     if not raw_text:
         return []
@@ -181,6 +223,7 @@ def needles_from_raw_text(raw_text: str) -> list[str]:
             # '1', '3' 같은 값은 페이지 전체에 흔해서 강조 대상이 될 수 없다.
             continue
         parts.append(cleaned)
+        parts.extend(_phrase_windows(cleaned))
     unique = list(dict.fromkeys(parts))
     unique.sort(key=len, reverse=True)
     return unique[:MAX_NEEDLES_PER_EVIDENCE]
@@ -206,19 +249,239 @@ def _merge_rects(rects: Sequence[Any], tolerance: float = 2.0) -> list[Any]:
     return merged
 
 
-def _highlights_on_page(page: Any, raw_text: str) -> list[Highlight]:
-    """이미 열려 있는 페이지에서 원문 조각을 찾아 정규화한다."""
+def needle_groups(raw_text: str) -> list[list[str]]:
+    """Group each source fragment with its fallback phrases, longest first.
+
+    한 그룹은 원문의 조각 하나를 가리킨다. 그룹 안에서는 처음 찾은 검색어만 쓰므로,
+    같은 조각이 부분 구절 때문에 여러 번 강조되지 않는다.
+    """
+
+    if not raw_text:
+        return []
+    groups: list[list[str]] = []
+    for chunk in re.split(r"\s*[|·/]\s*|\s{2,}", raw_text):
+        cleaned = _LABEL_PREFIX.sub("", chunk).strip(" .,()[]")
+        if len(cleaned) < MIN_NEEDLE_LENGTH:
+            continue
+        if cleaned.isdigit() and len(cleaned) <= 2:
+            continue
+        # 그룹 안에서는 첫 성공 하나만 채택하므로 후보를 넉넉히 둬도 강조가
+        # 늘어나지 않는다. 짧은 구절까지 시도해야 조판으로 끊긴 문장을 찾는다.
+        candidates = [cleaned, *_phrase_windows(cleaned)]
+        groups.append(candidates[: MAX_PHRASE_WINDOWS + 1])
+    return groups
+
+
+def _row_band(rects: Sequence[Any]) -> tuple[float, float] | None:
+    """Vertical band of a single source row, taken from an unambiguous hit."""
+
+    if not rects:
+        return None
+    top = min(rect.y0 for rect in rects)
+    bottom = max(rect.y1 for rect in rects)
+    margin = max((bottom - top) * ROW_BAND_MARGIN, 1.0)
+    return top - margin, bottom + margin
+
+
+def _voted_band(groups: Sequence[Sequence[Any]]) -> tuple[float, float] | None:
+    """Pick the row that the most source fragments agree on.
+
+    페이지에 한 번만 나오는 조각이 하나도 없는 Evidence 가 있다. 그때도 조각들이 모두
+    같은 행에서 만난다면 그 행이 이 Evidence 의 자리다. 각 후보 행마다 **서로 다른
+    조각이 몇 개나 걸리는지** 세어 가장 많이 겹치는 행을 고른다.
+
+    두 조각 이상이 모이지 않으면 고르지 않는다. 한 조각만으로는 어느 행인지 정해지지
+    않아, 고르면 근거가 아닌 행을 가리킬 수 있다.
+    """
+
+    best: tuple[int, float, tuple[float, float]] | None = None
+    for index, hits in enumerate(groups):
+        for hit in hits:
+            band = _row_band([hit])
+            if band is None:
+                continue
+            top, bottom = band
+            agreeing = sum(
+                1
+                for other, other_hits in enumerate(groups)
+                if other != index
+                and any(top <= (h.y0 + h.y1) / 2.0 <= bottom for h in other_hits)
+            )
+            # 같은 표를 두 행이 비슷하게 채우면 위쪽 행을 고정적으로 고른다.
+            score = (agreeing, -top, band)
+            if agreeing >= 1 and (best is None or score[:2] > best[:2]):
+                best = score
+    return best[2] if best is not None else None
+
+
+def _bigrams(text: str) -> set[str]:
+    """Character bigrams of the Korean/alphanumeric runs in the text.
+
+    계획 계층의 검색과 같은 방식이다. 조사·어미가 붙거나 표기가 조금 달라도 같은
+    글자쌍을 공유하므로, Evidence 원문이 PDF 문장을 그대로 옮긴 것이 아니어도 겹침을
+    잴 수 있다.
+    """
+
+    grams: set[str] = set()
+    for word in _WORD_RUN.findall(text):
+        lowered = word.lower()
+        if len(lowered) == 1:
+            grams.add(lowered)
+        grams.update(lowered[i : i + 2] for i in range(len(lowered) - 1))
+    return grams
+
+
+def _page_rows(page: Any) -> list[tuple[Any, str]]:
+    """Group the page's text lines into visual rows with their bounding box.
+
+    표의 한 행은 칸마다 따로 그려져 여러 line 으로 쪼개져 있다. 세로로 겹치는 line 을
+    한 행으로 묶어야 "이 근거는 이 행이다"라고 말할 수 있는 단위가 된다.
+    """
+
+    import pymupdf
+
+    try:
+        content = page.get_text("dict")
+    except Exception:  # 텍스트 레이어가 없으면 행을 만들 수 없다.
+        return []
+    lines: list[tuple[Any, str]] = []
+    for block in content.get("blocks", ()):
+        if block.get("type") != 0:
+            continue
+        for line in block.get("lines", ()):
+            text = "".join(span.get("text", "") for span in line.get("spans", ()))
+            if not text.strip():
+                continue
+            x0, y0, x1, y1 = line["bbox"]
+            lines.append((pymupdf.Rect(x0, y0, x1, y1), text))
+    lines.sort(key=lambda item: (item[0].y0, item[0].x0))
+    rows: list[tuple[Any, list[str]]] = []
+    for rect, text in lines:
+        centre = (rect.y0 + rect.y1) / 2.0
+        for index, (bounds, texts) in enumerate(rows):
+            if bounds.y0 <= centre <= bounds.y1:
+                merged = pymupdf.Rect(bounds)
+                merged.include_rect(rect)
+                rows[index] = (merged, texts + [text])
+                break
+        else:
+            rows.append((pymupdf.Rect(rect), [text]))
+    return [(bounds, " ".join(texts)) for bounds, texts in rows]
+
+
+def _best_row(page: Any, raw_text: str) -> Any | None:
+    """Pick the page row whose wording overlaps the evidence most.
+
+    ``search_for`` 는 글자가 똑같아야 찾는다. 그런데 Evidence 원문은 표의 칸을 사람이
+    읽을 수 있게 정규화한 문장이라 PDF 글자열과 다른 경우가 많다(``미래설계:
+    대학생활의설계, 필수 1학점``). 그래서 글자쌍 겹침으로 어느 행인지 고른다.
+
+    겹침 비율이 낮으면 고르지 않는다. 근거가 아닌 행을 가리키느니 표시하지 않는 편이
+    낫다는 원칙은 그대로다.
+    """
+
+    wanted = _bigrams(raw_text)
+    if not wanted:
+        return None
+    best: tuple[float, Any] | None = None
+    for bounds, text in _page_rows(page):
+        grams = _bigrams(text)
+        if not grams:
+            continue
+        shared = len(wanted & grams)
+        if not shared:
+            continue
+        # 근거 문장이 이 행에 얼마나 담겼는지를 본다. 행이 길다고 유리해지지 않도록
+        # 행 쪽 겹침 비율을 함께 곱한다.
+        score = (shared / len(wanted)) * (shared / len(grams)) ** 0.5
+        if best is None or score > best[0]:
+            best = (score, bounds)
+    if best is None or best[0] < MIN_ROW_OVERLAP:
+        return None
+    return best[1]
+
+
+@lru_cache(maxsize=1)
+def _section_hints() -> dict[str, str]:
+    """Map each Evidence id to the table or section heading it points at.
+
+    Evidence 중에는 원문 인용이 아니라 큐레이터가 쓴 주석이 있다. 그 문장은 PDF 어디에도
+    없어 글자로는 절대 찾을 수 없다. 다만 ``table_name``·``section_title`` 이 어느
+    표·절을 가리키는지 적어 두었으므로, 마지막 수단으로 그 제목을 찾는다.
+    """
+
+    hints: dict[str, str] = {}
+    for node in bundle.load_bundle().get("nodes", ()):
+        if "Evidence" not in node.get("labels", ()):
+            continue
+        properties = node.get("properties", {})
+        heading = properties.get("table_name") or properties.get("section_title")
+        evidence_id = properties.get("evidence_id")
+        if isinstance(evidence_id, str) and isinstance(heading, str) and heading:
+            hints[evidence_id] = heading
+    return hints
+
+
+def _highlights_on_page(
+    page: Any, raw_text: str, section_hint: str | None = None
+) -> list[Highlight]:
+    """이미 열려 있는 페이지에서 원문 조각을 찾아 정규화한다.
+
+    조각마다 긴 검색어부터 시도하고, 위치를 특정할 수 있는 첫 결과만 채택한다.
+    페이지 곳곳에 흔한 구절은 건너뛴다.
+
+    한 Evidence 는 원문 표의 **한 행**이다. 그런데 조각 중에는 다른 행에도 그대로
+    나오는 것이 있다. 예를 들어 `자료구조` 행의 영문명 `Data Structure` 는 같은 표의
+    `고급자료구조(Advanced Data Structure)` 행에도 들어 있다. 그 두 곳을 모두 칠하면
+    근거가 아닌 행을 근거라고 가리키게 되므로, 답이 틀린 것과 같은 무게의 결함이다.
+
+    그래서 먼저 페이지에서 **한 번만** 나온 조각으로 이 Evidence 의 행 위치를 잡고,
+    여러 곳에서 나온 조각은 그 행 안에 있는 것만 남긴다. 행을 잡지 못했으면 애매한
+    조각은 아예 칠하지 않는다. 덜 칠하는 것은 근거를 덜 보여 줄 뿐이지만, 잘못 칠하는
+    것은 없는 근거를 만들어 낸다.
+    """
     width = page.rect.width or 1.0
     height = page.rect.height or 1.0
-    found: list[Any] = []
-    for needle in needles_from_raw_text(raw_text):
-        try:
-            hits = page.search_for(needle, quads=False)
-        except Exception:  # 검색 실패는 강조 없음으로 처리한다.
-            continue
-        found.extend(hits)
-        if len(found) >= MAX_RECTS_PER_EVIDENCE:
+    unique: list[Any] = []
+    ambiguous: list[list[Any]] = []
+    for candidates in needle_groups(raw_text):
+        for needle in candidates:
+            try:
+                hits = page.search_for(needle, quads=False)
+            except Exception:  # 검색 실패는 강조 없음으로 처리한다.
+                continue
+            if not hits or len(hits) > MAX_HITS_PER_NEEDLE:
+                continue
+            if len(hits) == 1:
+                unique.extend(hits)
+            else:
+                ambiguous.append(list(hits))
             break
+        if len(unique) >= MAX_RECTS_PER_EVIDENCE:
+            break
+    found = list(unique)
+    band = _row_band(unique) or _voted_band(ambiguous)
+    if band is not None:
+        top, bottom = band
+        for hits in ambiguous:
+            found.extend(
+                hit for hit in hits if top <= (hit.y0 + hit.y1) / 2.0 <= bottom
+            )
+    if not found:
+        # 조각을 글자 그대로 찾지 못했다. Evidence 원문이 표의 칸을 정규화한 문장이라
+        # PDF 글자열과 다른 경우가 대부분이다. 이때는 글자쌍 겹침으로 행을 고르고 그
+        # 행 전체를 근거로 표시한다. 칸 단위보다 거칠지만 가리키는 행은 정확하다.
+        row = _best_row(page, raw_text)
+        if row is not None:
+            found = [row]
+    if not found and section_hint:
+        # 원문이 아니라 큐레이터 주석인 Evidence 가 있다. 그 문장은 PDF 어디에도 없다.
+        # 다만 어느 표·절을 가리키는지는 Evidence 가 알고 있으므로, 그 제목을 찾아
+        # 절 단위로 표시한다. 제목마저 이 페이지에서 찾지 못하면 표시하지 않는다.
+        # 위치를 만들어 내느니 없다고 말하는 편이 낫다.
+        heading = _best_row(page, section_hint)
+        if heading is not None:
+            found = [heading]
     return [
         Highlight(
             x=max(rect.x0, 0.0) / width,
@@ -324,7 +587,11 @@ def build_evidence_pages(
                 continue
             page = document[page_index]
             for entry in bucket["evidence"]:
-                highlights = _highlights_on_page(page, entry["source_text"])
+                highlights = _highlights_on_page(
+                    page,
+                    entry["source_text"],
+                    _section_hints().get(entry.get("evidence_id", "")),
+                )
                 entry["highlights"] = [item.to_dict() for item in highlights]
                 entry["highlight_found"] = bool(highlights)
     return pages

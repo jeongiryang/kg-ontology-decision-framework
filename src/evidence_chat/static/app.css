@@ -375,3 +375,76 @@ kbd {
   background: rgba(154, 103, 0, 0.1); color: var(--warn);
 }
 .notice.error { background: rgba(198, 43, 43, 0.1); color: var(--danger); }
+
+/* 되묻기 선택지. 값과 표기 모두 서버가 적재 데이터에서 만든 것만 쓴다. */
+.choices {
+  margin-top: 0.9rem;
+  padding: 0.9rem 1rem;
+  border: 1px solid var(--line, #3a4252);
+  border-radius: 10px;
+  background: var(--surface-2, rgba(255, 255, 255, 0.03));
+}
+.choice-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+.choice {
+  padding: 0.5rem 0.85rem;
+  border: 1px solid var(--accent, #5b8cff);
+  border-radius: 999px;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  font-size: 0.92rem;
+  cursor: pointer;
+  text-align: left;
+  max-width: 100%;
+}
+.choice:hover:not(:disabled) { background: rgba(91, 140, 255, 0.14); }
+.choice:focus-visible { outline: 2px solid var(--accent, #5b8cff); outline-offset: 2px; }
+.choice-hint {
+  margin: 0.7rem 0 0;
+  font-size: 0.82rem;
+  opacity: 0.72;
+}
+/* 어떤 질문에서 무엇을 골라 이 답에 닿았는지. 질문 바로 아래에 두어 답변보다 먼저
+   눈에 들어오게 한다. */
+.trail {
+  margin: 0.75rem 0 0;
+  padding: 0;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+}
+
+.trail-step {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0.4rem;
+  font-size: 0.85rem;
+  padding-left: 1.1rem;
+  position: relative;
+}
+
+.trail-step::before {
+  content: "↳";
+  position: absolute;
+  left: 0;
+  opacity: 0.5;
+}
+
+.trail-asked {
+  opacity: 0.7;
+}
+
+.trail-asked::after {
+  content: " →";
+  opacity: 0.6;
+}
+
+.trail-picked {
+  font-weight: 600;
+}

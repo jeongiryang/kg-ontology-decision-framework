@@ -29,6 +29,9 @@ const el = {
   answerBadge: $("answer-badge"),
   answerTitle: $("answer-title"),
   clarification: $("clarification"),
+  choices: $("choices"),
+  choiceList: $("choice-list"),
+  trail: $("answer-trail"),
   scopeNotice: $("scope-notice"),
   debugMeta: $("debug-meta"),
   progressInspectionSection: $("progress-inspection-section"),
@@ -69,6 +72,7 @@ let timelineEvents = [];
 let inspectionUpdates = new Map();
 let approvedInspection = null;
 let lastResult = null;
+let clarificationPresentation = null;
 
 const span = (className, text) => {
   const node = document.createElement("span");
@@ -76,6 +80,48 @@ const span = (className, text) => {
   node.textContent = text;
   return node;
 };
+
+// 되묻기로 확정된 값. 서버는 대화 상태를 들지 않으므로 브라우저가 들고 매 요청에
+// 함께 보낸다. 값이 실제로 제시된 선택지였는지는 서버가 다시 만들어 대조한다.
+//
+// `trail` 은 화면에만 쓰는 기록이다. 서버로 보내지 않으며 조회에도 관여하지 않는다.
+// 무엇을 물었고 무엇을 골라 여기까지 왔는지 사용자가 되짚을 수 있게 하는 용도다.
+const CLARIFY_KEY = "evidence-chat-clarify";
+
+function emptyClarify(question = "") {
+  return { question, resolved: {}, trail: [] };
+}
+
+function loadClarify() {
+  try {
+    const saved = JSON.parse(sessionStorage.getItem(CLARIFY_KEY) || "null");
+    if (saved && typeof saved.question === "string" && saved.resolved) {
+      return { ...saved, trail: Array.isArray(saved.trail) ? saved.trail : [] };
+    }
+  } catch (error) {
+    /* 저장된 값이 깨졌으면 그냥 새로 시작한다. */
+  }
+  return emptyClarify();
+}
+
+function saveClarify(state) {
+  try {
+    sessionStorage.setItem(CLARIFY_KEY, JSON.stringify(state));
+  } catch (error) {
+    /* 저장에 실패해도 이번 요청은 그대로 진행한다. */
+  }
+}
+
+function clearClarify() {
+  clarify = emptyClarify();
+  try {
+    sessionStorage.removeItem(CLARIFY_KEY);
+  } catch (error) {
+    /* 지우지 못해도 다음 질문에서 덮어쓴다. */
+  }
+}
+
+let clarify = loadClarify();
 
 function showScreen(name) {
   Object.entries(el.screens).forEach(([key, node]) =>
@@ -158,7 +204,13 @@ el.question.addEventListener("keydown", (event) => {
 el.form.addEventListener("submit", (event) => {
   event.preventDefault();
   const question = el.question.value.trim();
-  if (question && !inFlight) ask(question);
+  if (question && !inFlight) {
+    // 새로 입력한 질문은 앞서 채운 조건과 무관하다. 확정값을 버리고 시작한다.
+    clearClarify();
+    clarify = emptyClarify(question);
+    saveClarify(clarify);
+    ask(question);
+  }
 });
 el.progressBack.addEventListener("click", () => {
   if (activeController) {
@@ -200,6 +252,7 @@ async function ask(question) {
   inspectionUpdates = new Map();
   approvedInspection = null;
   lastResult = null;
+  clarificationPresentation = null;
   renderTimelines();
   el.timelineSection.hidden = true;
   el.progressInspectionSection.hidden = true;
@@ -219,7 +272,11 @@ async function ask(question) {
     const response = await fetch("/api/ask", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ question }),
+      body: JSON.stringify(
+        Object.keys(clarify.resolved).length
+          ? { question, resolved: clarify.resolved }
+          : { question }
+      ),
       signal: activeController.signal,
     });
     if (!response.ok || !response.body) {
@@ -243,6 +300,8 @@ async function ask(question) {
         if (payload.type === "progress") {
           el.progressNow.textContent = payload.message;
           renderProgress(payload);
+        } else if (payload.type === "clarification_options") {
+          clarificationPresentation = payload;
         } else if (payload.type === "inspection_update") {
           renderInspectionUpdate(payload);
         } else if (payload.type === "result") {
@@ -281,9 +340,20 @@ async function ask(question) {
   }
 
   if (result) {
-    renderAnswer(result);
-    renderTimelines();
-    renderInspectionPanels();
+    // 렌더링에서 예외가 나도 화면은 넘어가야 한다. 종전에는 여기서 던지면
+    // 사용자가 '답변 완료' 상태의 진행 화면에 갇혔고, 무엇이 잘못됐는지도
+    // 알 수 없었다.
+    try {
+      renderAnswer(result);
+      renderTimelines();
+      renderInspectionPanels();
+    } catch (error) {
+      showNotice(
+        el.progressError,
+        "답변을 화면에 그리지 못했습니다. 새로고침 후 다시 시도해 주세요.",
+        true
+      );
+    }
     showScreen("answer");
   }
 }
@@ -554,6 +624,8 @@ function renderAnswer(result) {
 
   el.clarification.hidden = !response.clarification;
   el.clarification.textContent = response.clarification || "";
+  renderTrail();
+  renderChoices(response, clarificationPresentation);
   el.scopeNotice.hidden = !presentation.scope_notice;
   el.scopeNotice.textContent = presentation.scope_notice || "";
   el.debugMeta.hidden = !presentation.debug;
@@ -561,6 +633,63 @@ function renderAnswer(result) {
     ? `request_id=${presentation.debug.request_id} · error_code=${presentation.debug.error_code || "없음"}`
     : "";
   renderEvidence(presentation);
+}
+
+// 어떤 질문에서 무엇을 골라 이 답에 닿았는지 그대로 남긴다. 선택지를 여러 번 타고
+// 들어가면 처음 물은 것이 무엇이었는지 잊게 되고, 그러면 답이 맞는지도 판단할 수 없다.
+// 화면 표시일 뿐이며 조회 조건은 `clarify.resolved` 가 그대로 들고 있다.
+function renderTrail() {
+  if (!el.trail) return;
+  const steps = clarify.trail || [];
+  el.trail.textContent = "";
+  el.trail.hidden = steps.length === 0;
+  if (!steps.length) return;
+  for (const step of steps) {
+    const item = document.createElement("li");
+    item.className = "trail-step";
+    const asked = document.createElement("span");
+    asked.className = "trail-asked";
+    asked.textContent = step.prompt || "되물음";
+    const picked = document.createElement("span");
+    picked.className = "trail-picked";
+    picked.textContent = step.label;
+    item.append(asked, picked);
+    el.trail.append(item);
+  }
+}
+
+function renderChoices(response, envelope) {
+  // 화면 문서가 오래됐을 수 있다. 요소가 없으면 선택지만 못 보여 줄 뿐,
+  // 답변과 근거는 그대로 나와야 한다.
+  if (!el.choices || !el.choiceList) return;
+  const options = envelope && envelope.version === 1 && Array.isArray(envelope.options)
+    ? envelope.options
+    : [];
+  el.choiceList.textContent = "";
+  el.choices.hidden = options.length === 0;
+  if (!options.length) return;
+  // 지금 화면에 떠 있는 되묻기 문구. 고른 뒤에는 사라지므로 여기서 기록해 둔다.
+  const prompt = response.clarification || "";
+  for (const option of options) {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "choice";
+    button.dataset.choiceId = option.choice_id || "";
+    button.textContent = option.label;
+    if (option.detail && option.detail !== option.label) button.title = option.detail;
+    button.addEventListener("click", () => {
+      if (inFlight) return;
+      // 값은 서버가 준 것을 그대로 되돌려 보낸다. 화면이 값을 만들지 않는다.
+      clarify = {
+        question: clarify.question,
+        resolved: { ...clarify.resolved, [option.filter]: option.value },
+        trail: [...(clarify.trail || []), { prompt, label: option.label }],
+      };
+      saveClarify(clarify);
+      ask(clarify.question);
+    });
+    el.choiceList.append(button);
+  }
 }
 
 function renderEvidence(presentation) {

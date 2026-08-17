@@ -115,7 +115,8 @@ class StubQueryService:
         self.result = result
         self.calls = 0
 
-    def ask(self, question):
+    def ask(self, question, *, resolved=None, progress_callback=None):
+        del question, resolved, progress_callback
         self.calls += 1
         return self.result
 
@@ -504,7 +505,8 @@ class CitationAndResponseContractTests(unittest.TestCase):
             tuple(normal.to_dict()),
             (
                 "request_id", "status", "answer_text", "citations",
-                "used_fact_ids", "used_evidence_ids", "clarification", "error_code",
+                "used_fact_ids", "used_evidence_ids", "clarification",
+                "error_code",
             ),
         )
 

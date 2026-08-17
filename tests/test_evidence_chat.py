@@ -73,8 +73,14 @@ class _QueryStub:
     def __init__(self, result: NaturalLanguageResult):
         self.result = result
 
-    def ask(self, question: str) -> NaturalLanguageResult:
-        del question
+    def ask(
+        self,
+        question: str,
+        *,
+        resolved: Any = None,
+        progress_callback=None,
+    ) -> NaturalLanguageResult:
+        del question, resolved, progress_callback
         return self.result
 
 
@@ -115,8 +121,15 @@ class _ChatStub:
         self.response = response
         self.questions: list[str] = []
 
-    def ask(self, question: str, progress_callback=None) -> ChatResponse:
+    def ask(
+        self,
+        question: str,
+        *,
+        resolved: Any = None,
+        progress_callback=None,
+    ) -> ChatResponse:
         self.questions.append(question)
+        self.resolved = resolved
         details = {
             ProgressPhase.QUESTION_ANALYSIS: {
                 "query_plan": {
@@ -163,8 +176,15 @@ class _ChatStub:
 
 
 class _RetryChatStub(_ChatStub):
-    def ask(self, question: str, progress_callback=None) -> ChatResponse:
+    def ask(
+        self,
+        question: str,
+        *,
+        resolved: Any = None,
+        progress_callback=None,
+    ) -> ChatResponse:
         self.questions.append(question)
+        self.resolved = resolved
         if progress_callback:
             def emit(phase, state, attempt, **details):
                 progress_callback(
@@ -213,6 +233,51 @@ class _RetryChatStub(_ChatStub):
                 ProgressState.COMPLETED,
                 2,
                 operators=["NodeByLabelScan"],
+            )
+        return self.response
+
+
+class _ClarificationChatStub(_ChatStub):
+    def ask(
+        self,
+        question: str,
+        *,
+        resolved: Any = None,
+        progress_callback=None,
+    ) -> ChatResponse:
+        self.questions.append(question)
+        self.resolved = resolved
+        if progress_callback:
+            progress_callback(
+                ProgressEvent(
+                    ProgressPhase.QUESTION_ANALYSIS,
+                    ProgressState.STARTED,
+                    0,
+                    {},
+                )
+            )
+            progress_callback(
+                ProgressEvent(
+                    ProgressPhase.QUESTION_ANALYSIS,
+                    ProgressState.COMPLETED,
+                    1,
+                    {
+                        "planning_status": "CLARIFICATION_REQUIRED",
+                        "missing": ["DEPARTMENT"],
+                        "clarification_options": [
+                            type(
+                                "Choice",
+                                (),
+                                {
+                                    "filter_name": "department_id",
+                                    "value": "department:cwnu:cse",
+                                    "label": "컴퓨터공학과",
+                                    "detail": None,
+                                },
+                            )()
+                        ],
+                    },
+                )
             )
         return self.response
 
@@ -575,7 +640,54 @@ class StarletteRouteTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn("MATCH ", serialized)
         self.assertNotIn("QueryPlan", serialized)
         self.assertFalse(any(item["type"] == "inspection_update" for item in events))
+        self.assertFalse(any(item["type"] == "clarification_options" for item in events))
         self.assertEqual(self.chat.questions, ["자료구조 이수구분"])
+
+    async def test_clarification_choices_use_separate_versioned_envelope(self):
+        chat = _ClarificationChatStub(
+            ChatResponse.clarification_required("request-clarify", "어느 학과를 말씀하시나요?")
+        )
+        app = create_app(lambda: ChatState(chat))
+        async with app.router.lifespan_context(app):
+            async with httpx2.AsyncClient(
+                transport=httpx2.ASGITransport(app=app),
+                base_url="http://testserver",
+            ) as client:
+                events = _events(
+                    (await client.post(
+                        "/api/ask",
+                        json={
+                            "question": "전공 과목",
+                            "resolved": {"department_id": "department:cwnu:cse"},
+                        },
+                    )).text
+                )
+        envelope = next(item for item in events if item["type"] == "clarification_options")
+        result = next(item for item in events if item["type"] == "result")
+        self.assertEqual(envelope["version"], 1)
+        self.assertEqual(envelope["missing"], ["DEPARTMENT"])
+        self.assertEqual(envelope["options"][0]["filter"], "department_id")
+        self.assertEqual(envelope["options"][0]["label"], "컴퓨터공학과")
+        self.assertRegex(envelope["options"][0]["choice_id"], r"^choice:[0-9a-f]{24}$")
+        self.assertEqual(
+            set(result["response"]),
+            {
+                "request_id",
+                "status",
+                "answer_text",
+                "citations",
+                "used_fact_ids",
+                "used_evidence_ids",
+                "clarification",
+                "error_code",
+            },
+        )
+        self.assertNotIn("options", result["response"])
+        self.assertNotIn("missing", result["response"])
+        self.assertEqual(
+            chat.resolved,
+            {"department_id": "department:cwnu:cse"},
+        )
 
     async def test_inspection_updates_stream_before_result_and_only_approved_cypher(self):
         with mock.patch.dict("os.environ", {"KG_CHAT_SHOW_QUERY_DETAILS": "true"}):

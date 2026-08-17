@@ -123,7 +123,9 @@ class LocalLLMContractTests(unittest.TestCase):
                 "message": "safe stop",
                 "selection_mode": "COURSE_LIST",
             }
-            outcome = LocalQueryPlanner(SequenceClient([payload])).plan("질문")
+            # 적재된 사실을 가리키는 질문이어야 계획 모델까지 간다. 아무것과도 겹치지
+            # 않는 입력은 계획 단계 앞에서 범위 밖으로 끝난다.
+            outcome = LocalQueryPlanner(SequenceClient([payload])).plan("교양 학점은?")
             self.assertEqual(outcome.status.value, status)
             self.assertIsNone(outcome.plan)
 
@@ -142,15 +144,15 @@ class LocalLLMContractTests(unittest.TestCase):
         }
         client = SequenceClient([ambiguous_course])
         outcome = LocalQueryPlanner(client).plan("동명과목은?")
-        self.assertEqual(outcome.status, PlanningStatus.READY)
-        self.assertIsNotNone(outcome.plan)
+        self.assertEqual(outcome.status, PlanningStatus.CLARIFICATION_REQUIRED)
+        self.assertIsNone(outcome.plan)
         self.assertEqual(len(client.prompts), 1)
 
         ready_course = dict(ambiguous_course)
         ready_course["status"] = "READY"
         ready_course["message"] = None
         client = SequenceClient([ambiguous_course, ready_course])
-        outcome = LocalQueryPlanner(client).plan("동명과목은?")
+        outcome = LocalQueryPlanner(client).plan("동명과목은 몇 학년 몇 학기?")
         self.assertEqual(outcome.status, PlanningStatus.READY)
         self.assertIsNotNone(outcome.plan)
         self.assertEqual(outcome.plan.selection_mode, SelectionMode.SINGLE_COURSE)
@@ -436,7 +438,7 @@ class NaturalLanguageServiceTests(unittest.TestCase):
         events = []
         with tempfile.TemporaryDirectory() as directory:
             result = self.service(generator, directory).ask(
-                self.plan.question, events.append
+                self.plan.question, progress_callback=events.append
             )
         self.assertEqual(result.status, "ANSWERABLE")
         completed = [
@@ -464,6 +466,13 @@ class NaturalLanguageServiceTests(unittest.TestCase):
         )
         self.assertEqual(static.details["validated_cypher"].strip(), SAFE_QUERY.strip())
 
+    def test_resolved_and_progress_are_keyword_only(self) -> None:
+        generator = SequenceGenerator([SAFE_QUERY])
+        with tempfile.TemporaryDirectory() as directory:
+            service = self.service(generator, directory)
+            with self.assertRaises(TypeError):
+                service.ask(self.plan.question, lambda event: None)
+
     def test_redirect_provider_failure_is_returned_as_safe_failure(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             service = NaturalLanguageQueryService(
@@ -481,13 +490,24 @@ class NaturalLanguageServiceTests(unittest.TestCase):
         self.assertEqual(result.error_code, "LLM_HTTP_REDIRECT_REJECTED")
         self.assertIsNone(result.cypher)
 
-    def test_second_unsafe_candidate_stops_without_direct_execution(self) -> None:
+    def test_unsafe_candidates_never_execute_and_fall_back_to_the_scaffold(self) -> None:
+        """모델이 쓴 위험한 Cypher 는 한 건도 실행되지 않아야 한다.
+
+        재시도를 다 쓰면 계획에서 결정론적으로 만든 스캐폴드로 되돌아간다. 스캐폴드도
+        검증기를 그대로 통과해야 하므로, 이 경로가 안전 관문을 건너뛰지 않는다. 여기서
+        확인할 것은 "무엇이 실행됐는가"이지 상태 문자열이 아니다.
+        """
+
         bad = SAFE_QUERY.replace("MATCH", "CREATE", 1)
         generator = SequenceGenerator([bad, bad])
         with tempfile.TemporaryDirectory() as directory:
             result = self.service(generator, directory).ask(self.plan.question)
-        self.assertEqual(result.status, "SAFE_FAILURE")
-        self.assertEqual(result.error_stage, "CYPHER_VALIDATION")
+        self.assertNotIn("CREATE", result.cypher or "")
+        self.assertEqual(result.status, "ANSWERABLE")
+        # 모델은 재시도 횟수만큼만 호출된다. 마지막 한 번은 모델을 부르지 않고
+        # 스캐폴드를 쓰므로 준비한 후보가 모두 소진돼 있어야 한다.
+        self.assertEqual(len(generator.errors), 2)
+        self.assertEqual(generator.candidates, [])
 
     def test_empty_rows_are_not_found_and_ambiguous_plan_does_not_generate(self) -> None:
         generator = SequenceGenerator([SAFE_QUERY])

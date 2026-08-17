@@ -5,7 +5,8 @@ from __future__ import annotations
 from typing import Any, Mapping
 
 from kg_builder.query.query_plan import QueryPlan, SelectionMode
-from kg_builder.query.query_plan import FILTER_BINDINGS
+from kg_builder.query.query_plan import resolve_filter_bindings
+from kg_builder.query.fact_families import family_for_result
 
 from .client import LLMResponseError, StructuredLLMClient
 from .prompts import CYPHER_SYSTEM_PROMPT, cypher_prompt
@@ -45,6 +46,9 @@ def build_syntax_scaffold(plan: QueryPlan, schema_subset: Mapping[str, Any]) -> 
     """Build a plan-specific grammar rail; it contains no answer values or question branches."""
 
     family = schema_subset.get("selected_fact_family")
+    # 모드를 키로 찾고 라벨이 일치할 때만 채택한다. 같은 라벨이 소유자별로 여러
+    # 모드에 걸리므로 라벨만으로는 어떤 MATCH 경로를 써야 하는지 정해지지 않는다.
+    extended = family_for_result(plan.selection_mode, family) if isinstance(family, str) else None
     if family == "CourseOffering":
         aliases = {
             "CurriculumVersion": "cv",
@@ -74,15 +78,25 @@ def build_syntax_scaffold(plan: QueryPlan, schema_subset: Mapping[str, Any]) -> 
             matches.append("MATCH (r)-[:APPLIES_TO]->(s:ApplicabilityScope)")
         matches.append("MATCH (r)-[:SUPPORTED_BY]->(e:Evidence)")
         fact_alias, fact_id = "r", "rule_id"
+    elif extended is not None:
+        # 선언형 확장 family. MATCH 경로와 필드 소유 alias 는 fact_families 에만
+        # 존재하므로, family 를 추가할 때 이 함수를 다시 고칠 필요가 없다.
+        aliases = dict(extended.aliases)
+        matches = list(extended.base_matches)
+        for filter_name, extra_match in extended.conditional_matches.items():
+            if filter_name in plan.filters:
+                matches.append(extra_match)
+        fact_alias, fact_id = extended.fact_alias, extended.fact_id_property
     else:
         raise LLMResponseError(
             "LLM_FACT_FAMILY_UNSUPPORTED", f"unsupported fact family: {family}"
         )
 
+    bindings = resolve_filter_bindings(plan.selection_mode)
     predicates: list[str] = []
     scope_returns: list[str] = []
     for name in plan.filters:
-        binding = FILTER_BINDINGS[name]
+        binding = bindings[name]
         alias = aliases.get(binding.label)
         if alias is None:
             raise LLMResponseError(
@@ -94,7 +108,11 @@ def build_syntax_scaffold(plan: QueryPlan, schema_subset: Mapping[str, Any]) -> 
             predicates.append(f"{alias}.{binding.property_name} IN ${name}")
         else:
             predicates.append(f"{alias}.{binding.property_name} = ${name}")
-        scope_returns.append(f"{alias}.{binding.property_name} AS {name}")
+        # 같은 속성이 범위 필터이면서 요청 필드일 수 있다(예: credit_category).
+        # RETURN 계약은 별칭 하나만 허용하고 검증기가 그 별칭이 필터가 바인딩한
+        # 그래프 속성과 같은지 확인하므로, 여기서 중복 별칭만 걷어낸다.
+        if name not in plan.requested_fields:
+            scope_returns.append(f"{alias}.{binding.property_name} AS {name}")
     predicates.extend([f"{fact_alias}.status = 'VERIFIED'", "e.verification_status = 'VERIFIED'"])
 
     requested_returns: list[str] = []
@@ -121,6 +139,8 @@ def build_syntax_scaffold(plan: QueryPlan, schema_subset: Mapping[str, Any]) -> 
             "description_ko",
         }:
             owner = "r"
+        elif extended is not None:
+            owner = extended.field_owners.get(field)
         if owner is None:
             raise LLMResponseError(
                 "LLM_REQUEST_FIELD_PATH_UNSUPPORTED", f"no fact path for requested field {field}"

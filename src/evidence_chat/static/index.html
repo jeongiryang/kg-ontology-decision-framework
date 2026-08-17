@@ -85,12 +85,25 @@
       <div class="answer-wrap">
         <blockquote class="asked" id="answer-question"></blockquote>
 
+        <!-- 되묻기를 여러 번 타고 들어가면 처음 무엇을 물었고 무엇을 골라 여기까지
+             왔는지 잊게 된다. 고른 순서를 그대로 남긴다. -->
+        <ol class="trail" id="answer-trail" hidden></ol>
+
         <article class="answer-card" id="answer-card">
           <div class="answer-meta">
             <span class="badge" id="answer-badge"></span>
           </div>
           <h2 id="answer-title">답변</h2>
           <p class="clarification" id="clarification" hidden></p>
+          <!-- 선택지는 서버가 적재 데이터에서 만든 것만 온다. 사용자가 직접 값을
+               적어 넣는 입력란을 두지 않는 이유가 이것이다. -->
+          <div class="choices" id="choices" hidden>
+            <div class="choice-list" id="choice-list"></div>
+            <p class="choice-hint">
+              고르시면 같은 질문에 이 조건을 더해 다시 확인합니다.
+              해당하는 것이 없으면 질문을 다시 입력해 주세요.
+            </p>
+          </div>
           <p class="scope-notice" id="scope-notice" hidden></p>
           <p class="debug-meta" id="debug-meta" hidden></p>
         </article>
