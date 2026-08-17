@@ -43,6 +43,7 @@ class PipelineOutcome:
     result: ValidatedResult
     selected_labels: tuple[str, ...]
     explain_operators: tuple[str, ...]
+    validated_cypher: str
     trace_path: Path
 
 
@@ -256,12 +257,13 @@ class SafetyPipeline:
 
         trace_path = trace.write()
         return PipelineOutcome(
-            trace.request_id,
-            plan,
-            result,
-            selected_labels,
-            explained.operators,
-            trace_path,
+            request_id=trace.request_id,
+            plan=plan,
+            result=result,
+            selected_labels=selected_labels,
+            explain_operators=explained.operators,
+            validated_cypher=validated.text,
+            trace_path=trace_path,
         )
 
     @staticmethod

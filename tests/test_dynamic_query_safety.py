@@ -15,6 +15,7 @@ from kg_builder.query.cypher_validator import (
     CypherValidator,
     ProvenanceContract,
     ValidatedCypher,
+    lex_cypher,
 )
 from kg_builder.query.query_explainer import ExplainedCypher, unsafe_plan_operators
 from kg_builder.query.query_executor import DynamicQueryExecutor, QueryExecutionError
@@ -196,6 +197,59 @@ class CypherValidatorTests(unittest.TestCase):
         ).replace("LIMIT 100", "ORDER BY course_code ASC\nSKIP 0\nLIMIT 100")
         self.assertEqual(self.validator.validate(self.plan, extended).limit, 100)
 
+    def test_comments_are_removed_from_approved_canonical_cypher(self) -> None:
+        markers = (
+            "synthetic-system-prompt-marker",
+            "synthetic-api-key-marker",
+            "synthetic-password-marker",
+            "/home/synthetic/private/path",
+        )
+        query = (
+            "// " + " ".join(markers) + "\n"
+            + SAFE_QUERY.replace(
+                "MATCH (o)-[:SUPPORTED_BY]->(e:Evidence)",
+                "MATCH (o)-[:SUPPORTED_BY]->(e:Evidence) /* "
+                + " ".join(markers)
+                + " */",
+            )
+        )
+        validated = self.validator.validate(self.plan, query)
+        for marker in markers:
+            self.assertNotIn(marker, validated.text)
+        self.assertNotIn("//", validated.text)
+        self.assertNotIn("/*", validated.text)
+        self.assertIn("MATCH (o)-[:SUPPORTED_BY]->(e:Evidence)", validated.text)
+
+    def test_comment_like_text_in_strings_and_backticks_is_preserved_by_lexer(self) -> None:
+        source = (
+            "RETURN 'https://example.test/path', '문자열 // 내용', "
+            "'문자열 /* 내용 */', `identifier///*value` // actual-comment"
+        )
+        lexed = lex_cypher(source)
+        self.assertIn("'https://example.test/path'", lexed.canonical)
+        self.assertIn("'문자열 // 내용'", lexed.canonical)
+        self.assertIn("'문자열 /* 내용 */'", lexed.canonical)
+        self.assertIn("`identifier///*value`", lexed.canonical)
+        self.assertNotIn("actual-comment", lexed.canonical)
+        self.assertEqual(lexed.backtick_identifiers[0].value, "identifier///*value")
+
+    def test_unterminated_comment_empty_canonical_and_token_join_are_rejected(self) -> None:
+        with self.assertRaises(CypherValidationError) as raised:
+            self.validator.validate(self.plan, SAFE_QUERY + "/* not closed")
+        self.assertEqual(raised.exception.code, "CYPHER_UNTERMINATED_TOKEN")
+
+        with self.assertRaises(CypherValidationError) as raised:
+            self.validator.validate(
+                self.plan, "/* synthetic-api-key-marker comments only */"
+            )
+        self.assertEqual(raised.exception.code, "CYPHER_EMPTY")
+        self.assertNotIn("synthetic-api-key-marker", str(raised.exception))
+
+        joined = SAFE_QUERY.replace("RETURN", "IN/* split */SERT (:Course) RETURN", 1)
+        with self.assertRaises(CypherValidationError):
+            self.validator.validate(self.plan, joined)
+        self.assertRegex(lex_cypher(joined).canonical, r"IN\s+SERT")
+
     def test_all_write_and_unsupported_clauses_are_rejected(self) -> None:
         fragments = (
             "CREATE (:Course)",
@@ -236,7 +290,9 @@ class CypherValidatorTests(unittest.TestCase):
         self.assert_rejected(
             SAFE_QUERY.replace("RETURN", "IN/* split */SERT (:Course) RETURN", 1)
         )
-        self.assertEqual(self.validator.validate(self.plan, "// CREATE DELETE\n" + SAFE_QUERY).limit, 100)
+        commented = self.validator.validate(self.plan, "// CREATE DELETE\n" + SAFE_QUERY)
+        self.assertEqual(commented.limit, 100)
+        self.assertNotIn("CREATE DELETE", commented.text)
         self.assert_rejected(SAFE_QUERY + ";", "CYPHER_SEMICOLON")
         self.assert_rejected(
             SAFE_QUERY + "; MATCH (n:Course) RETURN n LIMIT 1", "CYPHER_SEMICOLON"
@@ -360,6 +416,24 @@ class ExecutorDefenseTests(unittest.TestCase):
             executor.execute(forged_explain)
         self.assertEqual(raised.exception.code, "EXECUTOR_SAFETY_REJECTED")
 
+        forged_comment = ValidatedCypher._issue(
+            text=(
+                "// synthetic-password-marker\n"
+                "MATCH (n:Course) RETURN n.course_id AS fact_id LIMIT 1"
+            ),
+            parameters={},
+            limit=1,
+            labels=("Course",),
+            relationship_types=(),
+            provenance=provenance(),
+        )
+        with self.assertRaises(QueryExecutionError) as raised:
+            executor.execute(
+                ExplainedCypher._issue(forged_comment, ("NodeIndexSeek",), ())
+            )
+        self.assertEqual(raised.exception.code, "EXECUTOR_SAFETY_REJECTED")
+        self.assertNotIn("synthetic-password-marker", str(raised.exception))
+
 
 class QueryCredentialContractTests(unittest.TestCase):
     def test_query_credentials_do_not_fall_back_to_ingestion_credentials(self) -> None:
@@ -447,19 +521,62 @@ class ResultValidatorTests(unittest.TestCase):
 
 
 class FakeExplainer:
+    def __init__(self) -> None:
+        self.validated: ValidatedCypher | None = None
+
     def explain(self, validated: ValidatedCypher) -> ExplainedCypher:
+        self.validated = validated
         return ExplainedCypher._issue(validated, ("NodeIndexSeek",), ())
 
 
 class FakeExecutor:
     def __init__(self, rows: list[dict[str, Any]]):
         self.rows = rows
+        self.explained: ExplainedCypher | None = None
 
     def execute(self, explained: ExplainedCypher) -> list[dict[str, Any]]:
+        self.explained = explained
         return self.rows
 
 
 class PipelineTraceTests(unittest.TestCase):
+    def test_canonical_cypher_reaches_explain_executor_progress_and_outcome(self) -> None:
+        markers = (
+            "synthetic-system-prompt-marker",
+            "synthetic-api-key-marker",
+            "synthetic-password-marker",
+            "/home/synthetic/private/path",
+        )
+        query = "// " + " ".join(markers) + "\n" + SAFE_QUERY
+        events = []
+        explainer = FakeExplainer()
+        executor = FakeExecutor([valid_row()])
+        with tempfile.TemporaryDirectory() as directory:
+            outcome = SafetyPipeline(
+                explainer, executor, trace_dir=Path(directory)
+            ).run(plan_payload(), query, progress_callback=events.append)
+            trace_text = outcome.trace_path.read_text(encoding="utf-8")
+
+        static_event = next(
+            event
+            for event in events
+            if event.phase.value == "STATIC_VALIDATION"
+            and event.state.value == "COMPLETED"
+        )
+        public_values = (
+            outcome.validated_cypher,
+            explainer.validated.text if explainer.validated else "",
+            executor.explained.validated.text if executor.explained else "",
+            static_event.details["validated_cypher"],
+            trace_text,
+        )
+        for marker in markers:
+            self.assertTrue(all(marker not in value for value in public_values))
+        self.assertIsNotNone(explainer.validated)
+        self.assertIsNotNone(executor.explained)
+        self.assertEqual(outcome.validated_cypher, explainer.validated.text)
+        self.assertEqual(outcome.validated_cypher, executor.explained.validated.text)
+
     def test_success_failure_and_default_question_privacy(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             pipeline = SafetyPipeline(

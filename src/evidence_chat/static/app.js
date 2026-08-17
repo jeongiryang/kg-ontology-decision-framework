@@ -4,24 +4,6 @@
 
 const $ = (id) => document.getElementById(id);
 const SCREEN_ORDER = ["ask", "progress", "answer"];
-const PIPELINE_PHASES = [
-  ["QUESTION_ANALYSIS", "질문 분석 대기"],
-  ["SCHEMA_SELECTION", "스키마 선택 대기"],
-  ["CYPHER_GENERATION", "Cypher 생성 대기"],
-  ["STATIC_VALIDATION", "정적 안전 검증 대기"],
-  ["NEO4J_EXPLAIN", "Neo4j 실행계획 검증 대기"],
-  ["GRAPH_EXECUTION", "지식그래프 조회 대기"],
-  ["RESULT_VALIDATION", "결과·Evidence 검증 대기"],
-  ["CLAIM_BUILDING", "Claim 구성 대기"],
-  ["ANSWER_RENDERING", "답변 구성 대기"],
-  ["COMPLETED", "전체 처리 완료 대기"],
-];
-const ATTEMPT_PHASES = new Set([
-  "CYPHER_GENERATION",
-  "STATIC_VALIDATION",
-  "NEO4J_EXPLAIN",
-]);
-
 const el = {
   status: $("status"),
   stages: document.querySelectorAll(".stages li"),
@@ -214,14 +196,7 @@ async function ask(question) {
   el.spinner.classList.remove("is-done");
   el.progressTitle.textContent = "답변을 확인하고 있습니다";
   el.progressNow.textContent = "질문 전송됨";
-  timelineEvents = PIPELINE_PHASES.map(([phase, message]) => ({
-    phase,
-    attempt: ATTEMPT_PHASES.has(phase) ? 1 : 0,
-    state: "WAITING",
-    message,
-    elapsed_ms: 0,
-    error_code: null,
-  }));
+  timelineEvents = [];
   inspectionUpdates = new Map();
   approvedInspection = null;
   lastResult = null;
@@ -321,38 +296,40 @@ function renderProgress(payload) {
       (item) =>
         item.phase === payload.phase &&
         item.attempt === attempt &&
-        (item.state === "STARTED" || item.state === "WAITING")
+        item.state === "STARTED"
     );
-  if (!entry || payload.state === "STARTED") {
-    if (payload.state === "STARTED" && entry && entry.state === "WAITING") {
-      entry.state = "STARTED";
-      entry.message = payload.message;
-    } else if (payload.state === "STARTED" && entry) {
+  if (payload.state === "STARTED") {
+    if (entry) {
       entry.message = payload.message;
     } else {
       entry = {
         phase: payload.phase,
         attempt,
-        state: payload.state,
+        state: "STARTED",
         message: payload.message,
-        elapsed_ms: payload.elapsed_ms,
-        error_code: payload.error_code || null,
+        elapsed_ms: null,
+        error_code: null,
+        started_at_ms: performance.now(),
       };
-      const firstWaiting = timelineEvents.findIndex((item) => item.state === "WAITING");
-      if (payload.state === "STARTED" && firstWaiting >= 0) {
-        timelineEvents.splice(firstWaiting, 0, entry);
-      } else {
-        timelineEvents.push(entry);
-      }
+      timelineEvents.push(entry);
     }
   } else {
+    if (!entry) {
+      entry = {
+        phase: payload.phase,
+        attempt,
+        state: payload.state,
+        message: payload.message,
+        elapsed_ms: null,
+        error_code: null,
+        started_at_ms: null,
+      };
+      timelineEvents.push(entry);
+    }
     entry.state = payload.state;
     entry.message = payload.message;
-    entry.elapsed_ms = payload.elapsed_ms;
+    entry.elapsed_ms = Number.isFinite(payload.elapsed_ms) ? payload.elapsed_ms : null;
     entry.error_code = payload.error_code || null;
-  }
-  if (payload.phase === "COMPLETED" && payload.state === "COMPLETED") {
-    timelineEvents = timelineEvents.filter((item) => item.state !== "WAITING");
   }
   renderTimelines();
 }
@@ -371,7 +348,6 @@ function renderTimelineInto(container) {
     item.dataset.phase = event.phase;
     item.dataset.attempt = String(event.attempt);
     const stateClass = {
-      WAITING: "is-waiting",
       STARTED: "is-running",
       COMPLETED: "is-done",
       FAILED: "is-failed",
@@ -388,7 +364,7 @@ function renderTimelineInto(container) {
     row.append(
       span(
         "step-time",
-        event.state !== "STARTED" && event.state !== "WAITING"
+        event.state !== "STARTED" && Number.isFinite(event.elapsed_ms)
           ? `${event.elapsed_ms}ms`
           : ""
       )
@@ -403,6 +379,9 @@ function markTimelineCancelled(message) {
   if (running) {
     running.state = "CANCELLED";
     running.message = message;
+    running.elapsed_ms = Number.isFinite(running.started_at_ms)
+      ? Math.max(0, Math.round(performance.now() - running.started_at_ms))
+      : null;
   }
   renderTimelines();
 }

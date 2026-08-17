@@ -254,7 +254,7 @@ class NaturalLanguageQueryService:
                     model=self.model,
                     elapsed_seconds=perf_counter() - started,
                     query_plan=public_plan,
-                    cypher=cypher,
+                    cypher=outcome.validated_cypher,
                     rows=outcome.result.rows,
                     evidence_count=outcome.result.evidence_count,
                 )

@@ -34,6 +34,7 @@ from kg_builder.config import ConfigurationError, Neo4jQuerySettings
 from kg_builder.llm.client import LLMConfigurationError, LLMSettings, create_llm_client
 from kg_builder.llm.cypher_generator import LocalCypherGenerator
 from kg_builder.llm.planner import LocalQueryPlanner
+from kg_builder.query.cypher_validator import CypherValidationError, lex_cypher
 from kg_builder.query.natural_language_service import NaturalLanguageQueryService
 from kg_builder.query.progress import (
     ProgressCallback,
@@ -100,6 +101,19 @@ class InspectionCollector:
         self._pending_query = {}
         self._pending_attempt = None
         self._approved_query = {}
+
+    @staticmethod
+    def _canonical_cypher(value: Any) -> str | None:
+        if not isinstance(value, str):
+            return None
+        try:
+            lexed = lex_cypher(value)
+        except CypherValidationError:
+            return None
+        canonical = lexed.canonical
+        if not canonical or canonical != value.strip() or lexed.backtick_identifiers:
+            return None
+        return canonical
 
     @classmethod
     def _mask_text(cls, value: str) -> str:
@@ -220,7 +234,9 @@ class InspectionCollector:
                     for key in self._STATIC_DETAIL_KEYS
                     if key in event.details
                 }
-                if "validated_cypher" in candidate and "parameters" in candidate:
+                canonical = self._canonical_cypher(candidate.get("validated_cypher"))
+                if canonical is not None and "parameters" in candidate:
+                    candidate["validated_cypher"] = canonical
                     self._pending_query = candidate
                     self._pending_attempt = attempt
                 else:

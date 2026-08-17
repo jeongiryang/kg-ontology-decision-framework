@@ -188,7 +188,6 @@ kbd {
   border-radius: 12px; padding: 12px 14px;
 }
 .step.is-running { border-color: var(--accent); background: var(--accent-soft); }
-.step.is-waiting { opacity: 0.72; }
 .step.is-failed { border-color: var(--danger); }
 .step.is-cancelled { border-color: var(--warn); background: rgba(154, 103, 0, 0.08); }
 .step-row { display: flex; align-items: center; gap: 10px; }
@@ -202,7 +201,6 @@ kbd {
   animation: spin 0.85s linear infinite;
 }
 .step.is-done .step-icon { background: var(--ok); color: #fff; }
-.step.is-waiting .step-icon { background: var(--panel-2); color: var(--skip); }
 .step.is-skipped .step-icon { background: var(--panel-2); color: var(--skip); }
 .step.is-failed .step-icon { background: var(--danger); color: #fff; }
 .step.is-cancelled .step-icon { background: var(--warn); color: #fff; }

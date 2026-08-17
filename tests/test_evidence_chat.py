@@ -383,6 +383,34 @@ class InspectionApprovalTests(unittest.TestCase):
         self.assertNotIn("MATCH", serialized)
         self.assertNotIn("not-public-yet", serialized)
 
+    def test_noncanonical_commented_candidate_is_not_approved_or_exposed(self):
+        marker = "synthetic-system-prompt-marker"
+        collector = InspectionCollector()
+        collector.record(self._event(ProgressPhase.CYPHER_GENERATION, ProgressState.STARTED, 1))
+        static = collector.record(
+            self._event(
+                ProgressPhase.STATIC_VALIDATION,
+                ProgressState.COMPLETED,
+                1,
+                validated_cypher=(
+                    f"// {marker}\nMATCH (hidden:Rule) RETURN hidden LIMIT 1"
+                ),
+                parameters={},
+                labels=["Rule"],
+                relationship_types=[],
+            )
+        )
+        explained = collector.record(
+            self._event(
+                ProgressPhase.NEO4J_EXPLAIN,
+                ProgressState.COMPLETED,
+                1,
+                operators=["NodeByLabelScan"],
+            )
+        )
+        self.assertNotIn(marker, json.dumps(static, ensure_ascii=False))
+        self.assertIsNone(explained)
+
     def test_retry_start_retracts_a_previously_approved_candidate(self):
         collector = InspectionCollector()
         collector.record(self._event(ProgressPhase.CYPHER_GENERATION, ProgressState.STARTED, 1))
@@ -679,6 +707,12 @@ class StarletteRouteTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("answerProgressSteps", script)
         self.assertIn("markTimelineCancelled", script)
         self.assertIn("markTimelineFailed", script)
+        self.assertIn("timelineEvents = [];", script)
+        self.assertNotIn("PIPELINE_PHASES.map", script)
+        self.assertNotIn('state: "WAITING"', script)
+        self.assertIn("started_at_ms: performance.now()", script)
+        self.assertIn("Number.isFinite(running.started_at_ms)", script)
+        self.assertIn("Number.isFinite(event.elapsed_ms)", script)
 
     def test_frontend_does_not_construct_backend_contracts(self):
         root = Path(__file__).parents[1] / "src/evidence_chat"
