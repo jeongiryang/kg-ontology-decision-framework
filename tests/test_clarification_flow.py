@@ -264,19 +264,30 @@ class ResolvedValueTests(unittest.TestCase):
 class ClarificationResponseTests(unittest.TestCase):
     """되묻기 응답은 답변 응답과 섞이지 않아야 한다."""
 
-    def test_options_ride_only_on_clarification(self) -> None:
+    def test_chat_response_keeps_the_sealed_eight_field_contract(self) -> None:
         response = ChatResponse.clarification_required(
             "req-1",
             "어느 학과를 말씀하시나요?",
-            ["DEPARTMENT"],
-            [ClarificationOption("department_id", "department:cwnu:cse", "컴퓨터공학과")],
         )
         self.assertIs(response.status, ChatStatus.CLARIFICATION_REQUIRED)
         wire = response.to_dict()
-        self.assertEqual(wire["missing"], ["DEPARTMENT"])
-        self.assertEqual(wire["options"][0]["value"], "department:cwnu:cse")
+        self.assertEqual(
+            set(wire),
+            {
+                "request_id",
+                "status",
+                "answer_text",
+                "citations",
+                "used_fact_ids",
+                "used_evidence_ids",
+                "clarification",
+                "error_code",
+            },
+        )
+        self.assertNotIn("missing", wire)
+        self.assertNotIn("options", wire)
 
-    def test_other_statuses_carry_no_options(self) -> None:
+    def test_no_status_adds_clarification_presentation_fields(self) -> None:
         for factory in (
             ChatResponse.out_of_scope,
             ChatResponse.not_found,
@@ -284,8 +295,8 @@ class ClarificationResponseTests(unittest.TestCase):
         ):
             with self.subTest(factory=factory.__name__):
                 wire = factory("req-2").to_dict()
-                self.assertEqual(wire["options"], [])
-                self.assertEqual(wire["missing"], [])
+                self.assertNotIn("options", wire)
+                self.assertNotIn("missing", wire)
 
     def test_question_wording_follows_the_offered_choices(self) -> None:
         """문구는 부족 코드가 아니라 실제로 제시하는 선택지를 따라간다.

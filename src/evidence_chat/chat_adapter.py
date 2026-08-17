@@ -23,10 +23,6 @@ CHAT_RESPONSE_FIELDS = frozenset(
         "used_fact_ids",
         "used_evidence_ids",
         "clarification",
-        # 되묻기에서 사용자가 고를 수 있는 데이터 유래 선택지. 자유 입력을 계획에
-        # 넣지 않기 위한 계약이므로 화면 계약에도 함께 둔다.
-        "missing",
-        "options",
         "error_code",
     }
 )

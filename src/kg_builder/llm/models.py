@@ -14,6 +14,22 @@ class PlanningStatus(StrEnum):
     CLARIFICATION_REQUIRED = "CLARIFICATION_REQUIRED"
     OUT_OF_SCOPE = "OUT_OF_SCOPE"
     UNSUPPORTED = "UNSUPPORTED"
+    UNRESOLVED = "UNRESOLVED"
+
+
+class GraduationQuestionClass(StrEnum):
+    """Scope classification only; it never supplies an academic answer value."""
+
+    GENERAL_RULE = "GENERAL_RULE"
+    SINGLE_CONDITION_COMPARISON = "SINGLE_CONDITION_COMPARISON"
+    FULL_PERSONAL_HISTORY = "FULL_PERSONAL_HISTORY"
+    OTHER = "OTHER"
+
+
+class UnsupportedReason(StrEnum):
+    PERSONAL_HISTORY = "PERSONAL_HISTORY"
+    SINGLE_CONDITION_COMPARISON = "SINGLE_CONDITION_COMPARISON"
+    GENERAL_FEATURE = "GENERAL_FEATURE"
 
 
 class MissingScope(StrEnum):
@@ -72,6 +88,7 @@ class PlanningOutcome:
     attempts: tuple[PlanningAttempt, ...] = ()
     # 되묻기에서 사용자가 고를 수 있는 선택지. 값·표기 모두 적재 데이터에서 나온다.
     options: tuple[Any, ...] = ()
+    unsupported_reason: UnsupportedReason | None = None
 
 
 @dataclass(frozen=True, slots=True)

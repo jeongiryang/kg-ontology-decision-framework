@@ -14,13 +14,19 @@ from kg_builder.llm.client import (
 )
 from kg_builder.llm.cypher_generator import LocalCypherGenerator, build_syntax_scaffold
 from kg_builder.query.cypher_validator import CypherValidator
-from kg_builder.llm.models import PlanningOutcome, PlanningStatus
-from kg_builder.llm.planner import LocalQueryPlanner
+from kg_builder.llm.models import (
+    GraduationQuestionClass,
+    PlanningOutcome,
+    PlanningStatus,
+    UnsupportedReason,
+)
+from kg_builder.llm.planner import LocalQueryPlanner, classify_graduation_question
 from kg_builder.query.natural_language_service import NaturalLanguageQueryService
 from kg_builder.query.query_plan import QueryPlan, SelectionMode
 from kg_builder.query.safety_pipeline import SafetyPipeline
 from kg_builder.query.schema_catalog import SchemaCatalog
 from kg_builder.query.schema_selector import QuerySchemaSelector
+from kg_builder.query.progress import ProgressPhase, ProgressState
 
 from tests.test_dynamic_query_safety import (
     SAFE_QUERY,
@@ -136,11 +142,11 @@ class LocalLLMContractTests(unittest.TestCase):
             "message": "학수번호를 지정하세요",
             "selection_mode": "SINGLE_COURSE",
         }
-        client = SequenceClient([ambiguous_course, ambiguous_course])
-        outcome = LocalQueryPlanner(client).plan("동명과목은 몇 학년 몇 학기?")
+        client = SequenceClient([ambiguous_course])
+        outcome = LocalQueryPlanner(client).plan("동명과목은?")
         self.assertEqual(outcome.status, PlanningStatus.CLARIFICATION_REQUIRED)
         self.assertIsNone(outcome.plan)
-        self.assertEqual(len(client.prompts), 2)
+        self.assertEqual(len(client.prompts), 1)
 
         ready_course = dict(ambiguous_course)
         ready_course["status"] = "READY"
@@ -150,6 +156,179 @@ class LocalLLMContractTests(unittest.TestCase):
         self.assertEqual(outcome.status, PlanningStatus.READY)
         self.assertIsNotNone(outcome.plan)
         self.assertEqual(outcome.plan.selection_mode, SelectionMode.SINGLE_COURSE)
+
+    def test_poc_defaults_fill_only_omitted_course_scope_and_keep_requested_fields(self):
+        payload = {
+            "status": "READY",
+            "intent": "course offering",
+            "filters": {"name_ko": "자료구조"},
+            "requested_fields": ["grade_year", "semester"],
+            "evidence_required": True,
+            "message": None,
+            "selection_mode": "SINGLE_COURSE",
+        }
+        outcome = LocalQueryPlanner(SequenceClient([payload])).plan("개설 학년과 학기")
+        self.assertEqual(outcome.plan.filters["academic_year"], 2026)
+        self.assertEqual(
+            outcome.plan.filters["department_id"], "department:cwnu:cse"
+        )
+        self.assertNotIn("grade_year", outcome.plan.filters)
+        self.assertNotIn("semester", outcome.plan.filters)
+        self.assertEqual(outcome.plan.requested_fields, ("grade_year", "semester"))
+
+    def test_interrogative_course_fields_are_outputs_not_search_filters(self):
+        payload = {
+            "status": "READY",
+            "intent": "course offering",
+            "filters": {
+                "name_ko": "자료구조",
+                "grade_year": 2,
+                "semester": "FIRST",
+            },
+            "requested_fields": ["grade_year", "semester"],
+            "evidence_required": True,
+            "message": None,
+            "selection_mode": "SINGLE_COURSE",
+        }
+        outcome = LocalQueryPlanner(SequenceClient([payload])).plan(
+            "자료구조는 몇 학년 몇 학기에 개설되나?"
+        )
+        self.assertNotIn("grade_year", outcome.plan.filters)
+        self.assertNotIn("semester", outcome.plan.filters)
+        self.assertEqual(outcome.plan.requested_fields, ("grade_year", "semester"))
+
+    def test_course_code_question_uses_requested_field_not_filter(self):
+        payload = {
+            "status": "READY",
+            "intent": "course identity",
+            "filters": {"name_ko": "이산수학", "course_code": "UNKNOWN"},
+            "requested_fields": ["name_ko"],
+            "evidence_required": True,
+            "message": None,
+            "selection_mode": "SINGLE_COURSE",
+        }
+        outcome = LocalQueryPlanner(SequenceClient([payload])).plan(
+            "이산수학의 과목코드가 뭐야"
+        )
+        self.assertEqual(outcome.plan.filters["name_ko"], "이산수학")
+        self.assertNotIn("course_code", outcome.plan.filters)
+        self.assertIn("course_code", outcome.plan.requested_fields)
+
+    def test_ready_course_plan_enforces_evidence_when_model_flag_is_false(self):
+        payload = {
+            "status": "CLARIFICATION_REQUIRED",
+            "intent": "course identity",
+            "filters": {"name_ko": "이산수학"},
+            "requested_fields": ["course_code"],
+            "evidence_required": False,
+            "message": "Please provide more information.",
+            "selection_mode": "SINGLE_COURSE",
+        }
+        outcome = LocalQueryPlanner(SequenceClient([payload])).plan(
+            "이산수학의 과목코드가 뭐야"
+        )
+        self.assertEqual(outcome.status, PlanningStatus.READY)
+        self.assertTrue(outcome.plan.evidence_required)
+        self.assertEqual(outcome.plan.filters["name_ko"], "이산수학")
+        self.assertEqual(outcome.plan.requested_fields, ("course_code",))
+
+    def test_model_english_clarification_is_replaced_with_safe_korean_template(self):
+        payload = {
+            "status": "CLARIFICATION_REQUIRED",
+            "intent": "course",
+            "filters": {},
+            "requested_fields": ["semester"],
+            "evidence_required": True,
+            "message": "Please provide more information.",
+            "selection_mode": "SINGLE_COURSE",
+        }
+        outcome = LocalQueryPlanner(SequenceClient([payload])).plan("어느 과목인가요?")
+        self.assertEqual(outcome.status, PlanningStatus.CLARIFICATION_REQUIRED)
+        self.assertEqual(outcome.message, "과목명 또는 학수번호를 입력해 주세요.")
+        self.assertNotIn("Please", outcome.message)
+
+    def test_explicit_unsupported_scope_is_not_overwritten_by_defaults(self):
+        payload = {
+            "status": "READY",
+            "intent": "course offering",
+            "filters": {
+                "academic_year": 2025,
+                "department_id": "department:other",
+                "name_ko": "자료구조",
+            },
+            "requested_fields": ["semester"],
+            "evidence_required": True,
+            "message": None,
+            "selection_mode": "SINGLE_COURSE",
+        }
+        outcome = LocalQueryPlanner(SequenceClient([payload])).plan("다른 범위 질문")
+        self.assertEqual(outcome.status, PlanningStatus.OUT_OF_SCOPE)
+        self.assertIsNone(outcome.plan)
+
+    def test_personal_history_graduation_judgment_is_deterministically_unsupported(self):
+        client = SequenceClient([])
+        outcome = LocalQueryPlanner(client).plan(
+            "데이터베이스개론을 들었는데 뭘 해야 졸업하려면?"
+        )
+        self.assertEqual(outcome.status, PlanningStatus.UNSUPPORTED)
+        self.assertEqual(
+            outcome.unsupported_reason, UnsupportedReason.PERSONAL_HISTORY
+        )
+        self.assertFalse(client.prompts)
+
+    def test_general_graduation_rule_with_pronouns_is_not_personal_history(self):
+        question = (
+            "컴공과 학생인데 내가 졸업하고 싶은데 졸업하기 위해서 영어 대체로 "
+            "토익 점수를 얼마나 받아야 할까? 최소 기준점이 있어?"
+        )
+        client = SequenceClient([])
+        outcome = LocalQueryPlanner(client).plan(question)
+        self.assertEqual(
+            classify_graduation_question(question),
+            GraduationQuestionClass.GENERAL_RULE,
+        )
+        self.assertEqual(outcome.status, PlanningStatus.UNRESOLVED)
+        self.assertFalse(client.prompts)
+        context = LocalQueryPlanner(SequenceClient([])).context
+        serialized_review = str(context["review_required_rule_identifiers"])
+        self.assertIn("TOEIC.score", serialized_review)
+        self.assertNotIn("700", serialized_review)
+
+    def test_single_condition_comparison_has_distinct_unsupported_reason(self):
+        question = "토익 700점이면 영어 대체 기준을 충족해?"
+        payload = {
+            "status": "UNSUPPORTED",
+            "intent": None,
+            "filters": {},
+            "requested_fields": [],
+            "evidence_required": True,
+            "message": None,
+            "selection_mode": "SINGLE_RULE",
+        }
+        outcome = LocalQueryPlanner(SequenceClient([payload])).plan(question)
+        self.assertEqual(
+            classify_graduation_question(question),
+            GraduationQuestionClass.SINGLE_CONDITION_COMPARISON,
+        )
+        self.assertEqual(outcome.status, PlanningStatus.UNSUPPORTED)
+        self.assertEqual(
+            outcome.unsupported_reason,
+            UnsupportedReason.SINGLE_CONDITION_COMPARISON,
+        )
+
+    def test_full_personal_history_remains_unsupported_without_llm(self):
+        question = "내가 지금까지 들은 과목과 학점으로 졸업할 수 있어?"
+        client = SequenceClient([])
+        outcome = LocalQueryPlanner(client).plan(question)
+        self.assertEqual(
+            classify_graduation_question(question),
+            GraduationQuestionClass.FULL_PERSONAL_HISTORY,
+        )
+        self.assertEqual(outcome.status, PlanningStatus.UNSUPPORTED)
+        self.assertEqual(
+            outcome.unsupported_reason, UnsupportedReason.PERSONAL_HISTORY
+        )
+        self.assertFalse(client.prompts)
 
     def test_generator_returns_only_candidate_cypher(self) -> None:
         plan = QueryPlan.from_dict(plan_payload(), SchemaCatalog.from_generated())
@@ -253,6 +432,46 @@ class NaturalLanguageServiceTests(unittest.TestCase):
         self.assertEqual(generator.errors[0], None)
         self.assertIsNotNone(generator.errors[1])
         self.assertNotIn("question", result.query_plan)
+
+    def test_progress_reports_only_actual_pipeline_milestones(self) -> None:
+        generator = SequenceGenerator([SAFE_QUERY])
+        events = []
+        with tempfile.TemporaryDirectory() as directory:
+            result = self.service(generator, directory).ask(
+                self.plan.question, progress_callback=events.append
+            )
+        self.assertEqual(result.status, "ANSWERABLE")
+        completed = [
+            event.phase
+            for event in events
+            if event.state is ProgressState.COMPLETED
+        ]
+        self.assertEqual(
+            completed,
+            [
+                ProgressPhase.QUESTION_ANALYSIS,
+                ProgressPhase.SCHEMA_SELECTION,
+                ProgressPhase.CYPHER_GENERATION,
+                ProgressPhase.STATIC_VALIDATION,
+                ProgressPhase.NEO4J_EXPLAIN,
+                ProgressPhase.GRAPH_EXECUTION,
+                ProgressPhase.RESULT_VALIDATION,
+            ],
+        )
+        static = next(
+            event
+            for event in events
+            if event.phase is ProgressPhase.STATIC_VALIDATION
+            and event.state is ProgressState.COMPLETED
+        )
+        self.assertEqual(static.details["validated_cypher"].strip(), SAFE_QUERY.strip())
+
+    def test_resolved_and_progress_are_keyword_only(self) -> None:
+        generator = SequenceGenerator([SAFE_QUERY])
+        with tempfile.TemporaryDirectory() as directory:
+            service = self.service(generator, directory)
+            with self.assertRaises(TypeError):
+                service.ask(self.plan.question, lambda event: None)
 
     def test_redirect_provider_failure_is_returned_as_safe_failure(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

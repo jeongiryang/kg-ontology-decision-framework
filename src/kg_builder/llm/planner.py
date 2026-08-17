@@ -40,10 +40,12 @@ from kg_builder.query.schema_catalog import DEFAULT_SPEC_PATH, ROOT, SchemaCatal
 from .client import LLMResponseError, StructuredLLMClient
 from .models import (
     AttemptOutcome,
+    GraduationQuestionClass,
     MissingScope,
     PlanningAttempt,
     PlanningOutcome,
     PlanningStatus,
+    UnsupportedReason,
 )
 from .prompts import (
     DETAIL_SYSTEM_PROMPT,
@@ -150,6 +152,46 @@ RULE_SELECTION_MODES = frozenset(
     {SelectionMode.SINGLE_RULE.value, SelectionMode.MULTIPLE_RULES.value}
 )
 _WORD = re.compile(r"[가-힣A-Za-z]{2,}")
+COURSE_REQUEST_FIELDS = frozenset(
+    {"course_code", "name_ko", "grade_year", "semester", "credits", "completion_type"}
+)
+_GRADUATION_CONTEXT = re.compile(
+    r"(?:졸업|영어\s*대체|대학영어|공인\s*시험|TOEIC|토익)", re.IGNORECASE
+)
+_PERSONAL_RECORD = re.compile(
+    r"(?:지금까지|현재까지).{0,12}(?:들|수강|이수)|"
+    r"(?:수강|이수)\s*(?:내역|과목)|성적표|내\s*성적|취득\s*학점|"
+    r"(?:들었|수강했|이수했)(?:는데|지만|고)"
+)
+_HOLISTIC_JUDGMENT = re.compile(
+    r"(?:졸업(?:할\s*수|\s*가능)|남은\s*(?:과목|학점|요건)|"
+    r"(?:뭘|무엇을)\s*해야\s*졸업|졸업(?:하려면|하기\s*위해))"
+)
+_SINGLE_CONDITION = re.compile(
+    r"(?:\d+(?:\.\d+)?\s*(?:점|학점).{0,24}(?:충족|가능|되|면제)|"
+    r"(?:토익|TOEIC|점수|학점).{0,24}\d+(?:\.\d+)?)",
+    re.IGNORECASE,
+)
+_GENERAL_RULE_CRITERION = re.compile(
+    r"(?:기준|최소|최대|요건|규정|점수|학점|필수\s*과목|면제)"
+)
+_SUBJECT_FIELD_QUESTION_ALIASES: Mapping[str, re.Pattern[str]] = {
+    "TOEIC": re.compile(r"(?:TOEIC|토익)", re.IGNORECASE),
+    "TOEIC_SPEAKING": re.compile(r"(?:TOEIC\s*SPEAKING|토익\s*스피킹)", re.IGNORECASE),
+    "TOEFL_IBT": re.compile(r"(?:TOEFL|토플)", re.IGNORECASE),
+    "TEPS": re.compile(r"(?:TEPS|텝스)", re.IGNORECASE),
+    "NEW_TEPS": re.compile(r"(?:NEW\s*TEPS|뉴\s*텝스)", re.IGNORECASE),
+    "OPIC": re.compile(r"(?:OPIC|오픽)", re.IGNORECASE),
+    "GTELP": re.compile(r"(?:G-?TELP|지텔프)", re.IGNORECASE),
+    "FLEX": re.compile(r"FLEX", re.IGNORECASE),
+}
+_REQUESTED_FIELD_PATTERNS: Mapping[str, re.Pattern[str]] = {
+    "grade_year": re.compile(r"(?:몇|어느)\s*학년"),
+    "semester": re.compile(r"(?:몇|어느)\s*학기"),
+    "course_code": re.compile(
+        r"(?:과목\s*코드|학수번호).*(?:뭐|무엇|알려|인가|어떤)"
+    ),
+}
 
 def planner_response_schema(catalog: SchemaCatalog) -> dict[str, Any]:
     requested_fields = sorted(LLM_REQUESTED_FIELDS.intersection(catalog.all_node_properties))
@@ -203,7 +245,7 @@ def planner_response_schema(catalog: SchemaCatalog) -> dict[str, Any]:
             "requested_fields": {
                 "type": "array",
                 "items": {"type": "string", "enum": requested_fields},
-                "minItems": 1,
+                "minItems": 0,
                 "uniqueItems": True,
             },
             "evidence_required": {"type": "boolean"},
@@ -298,6 +340,8 @@ def build_planner_context(
     rule_ids = []
     rule_field_presence: dict[str, tuple[str, ...]] = {}
     rule_match_text: dict[str, str] = {}
+    review_required_rules: dict[str, dict[str, Any]] = {}
+    nodes_by_id = {node["id"]: node for node in data["nodes"]}
     academic_years: set[int] = set()
     for node in data["nodes"]:
         labels = set(node["labels"])
@@ -308,7 +352,7 @@ def build_planner_context(
             departments.append(
                 {"department_id": props["department_id"], "name_ko": props["name_ko"]}
             )
-        if "Rule" in labels and props.get("status") == "VERIFIED":
+        if "Rule" in labels:
             # 설명을 통째로 실으면 계획 컨텍스트의 대부분을 Rule 목록이 차지한다.
             # 8K 창에서는 그만큼 질문에 쓸 자리가 줄고, 과목 질문까지 이수요건으로
             # 오인된다. 어느 규칙인지 고를 수 있을 만큼만 남긴다.
@@ -319,13 +363,18 @@ def build_planner_context(
             )
             if len(hint) > RULE_HINT_MAX_CHARS:
                 hint = hint[:RULE_HINT_MAX_CHARS].rstrip() + "…"
-            rule_ids.append(
-                {
-                    "rule_id": props["rule_id"],
-                    "rule_type": props.get("rule_type"),
-                    "semantic_hint_without_values": hint,
-                }
-            )
+            item = {
+                "rule_id": props["rule_id"],
+                "rule_type": props.get("rule_type"),
+                "semantic_hint_without_values": hint,
+            }
+            if props.get("status") == "VERIFIED":
+                rule_ids.append(item)
+            elif props.get("status") == "REVIEW_REQUIRED":
+                review_required_rules[node["id"]] = item
+                continue
+            else:
+                continue
             # 어떤 규칙이 어떤 필드를 실제로 갖고 있는지. 수치가 아닌 규칙은 value·
             # unit·operator 가 비어 있고, 원문의 빈 값을 0 으로 바꾸지 않는 것이 이
             # 저장소의 계약이라 한 건만 비어도 결과 검증이 전체 조회를 막는다. 없는
@@ -375,6 +424,36 @@ def build_planner_context(
         code = props.get("course_code")
         if isinstance(name, str) and name and isinstance(code, str) and code:
             course_codes_by_name.setdefault(name, []).append(code)
+    group_to_rule: dict[str, str] = {}
+    condition_fields_by_rule: dict[str, set[str]] = {
+        rule_id: set() for rule_id in review_required_rules
+    }
+    for relationship in data["relationships"]:
+        if (
+            relationship["type"] == "HAS_CONDITION_GROUP"
+            and relationship["from_id"] in review_required_rules
+        ):
+            group_to_rule[relationship["to_id"]] = relationship["from_id"]
+    for relationship in data["relationships"]:
+        if relationship["type"] != "HAS_CONDITION":
+            continue
+        rule_id = group_to_rule.get(relationship["from_id"])
+        condition = nodes_by_id.get(relationship["to_id"])
+        if rule_id is None or condition is None:
+            continue
+        subject_field = condition.get("properties", {}).get("subject_field")
+        if isinstance(subject_field, str) and subject_field:
+            condition_fields_by_rule[rule_id].add(subject_field)
+    review_items = []
+    for rule_id, item in review_required_rules.items():
+        review_item = dict(item)
+        review_item["condition_fields"] = sorted(condition_fields_by_rule[rule_id])
+        review_items.append(review_item)
+    default_scope: dict[str, Any] = {}
+    if len(academic_years) == 1:
+        default_scope["academic_year"] = next(iter(academic_years))
+    if len(departments) == 1:
+        default_scope["department_id"] = departments[0]["department_id"]
     return {
         "academic_years": sorted(academic_years),
         "question_matchable_values": question_matchable_values,
@@ -384,6 +463,9 @@ def build_planner_context(
         "verified_rule_identifiers": sorted(rule_ids, key=lambda item: item["rule_id"]),
         "rule_field_presence": rule_field_presence,
         "rule_match_text": rule_match_text,
+        "review_required_rule_identifiers": sorted(
+            review_items, key=lambda item: item["rule_id"]
+        ),
         "supported_filters": sorted(FILTER_BINDINGS),
         # 필터로 실제 쓰이는 어휘만 싣는다. 나머지는 계획에 필요 없고 자리만 차지한다.
         "controlled_vocabularies": {
@@ -394,8 +476,8 @@ def build_planner_context(
         "supported_requested_fields": sorted(
             LLM_REQUESTED_FIELDS.intersection(catalog.all_node_properties)
         ),
+        "default_scope": default_scope,
     }
-
 
 
 def _relevant_rules(question: str, rules: list[Any], limit: int) -> list[Any]:
@@ -435,6 +517,44 @@ def _default_fact_index() -> FactIndex:
     bundle = json.loads(DEFAULT_VERIFIED_DATA.read_text(encoding="utf-8"))
     spec = json.loads(DEFAULT_SPEC_PATH.read_text(encoding="utf-8"))
     return FactIndex.from_bundle(bundle, vocabulary_labels(spec))
+
+
+def classify_graduation_question(question: str) -> GraduationQuestionClass:
+    """Classify required data scope without inferring any academic rule value."""
+
+    if not _GRADUATION_CONTEXT.search(question):
+        return GraduationQuestionClass.OTHER
+    if _PERSONAL_RECORD.search(question) and _HOLISTIC_JUDGMENT.search(question):
+        return GraduationQuestionClass.FULL_PERSONAL_HISTORY
+    if _SINGLE_CONDITION.search(question):
+        return GraduationQuestionClass.SINGLE_CONDITION_COMPARISON
+    if _GENERAL_RULE_CRITERION.search(question):
+        return GraduationQuestionClass.GENERAL_RULE
+    return GraduationQuestionClass.GENERAL_RULE
+
+
+def _matches_review_required_rule(
+    question: str, context: Mapping[str, Any]
+) -> bool:
+    """Detect a known unresolved rule family without reading or returning its values."""
+
+    items = context.get("review_required_rule_identifiers")
+    if not isinstance(items, list):
+        return False
+    for item in items:
+        if not isinstance(item, Mapping):
+            continue
+        fields = item.get("condition_fields")
+        if not isinstance(fields, list):
+            continue
+        for field in fields:
+            if not isinstance(field, str):
+                continue
+            family = field.split(".", 1)[0].upper()
+            matcher = _SUBJECT_FIELD_QUESTION_ALIASES.get(family)
+            if matcher is not None and matcher.search(question):
+                return True
+    return False
 
 
 class LocalQueryPlanner:
@@ -949,6 +1069,11 @@ class LocalQueryPlanner:
                 # 사용자가 무엇을 물을지 골랐으면 그것만 답한다. 개설 정보를 통째로
                 # 답하면 고른 것이 무의미해진다. 과목명은 답의 주어라 함께 남긴다.
                 requested_fields = list(dict.fromkeys(["name_ko", *picked]))
+            elif self._question_names_course_aspect(question):
+                # 질문이 이미 원하는 출력 필드를 말했으면 그 필드만 유지한다.
+                # 학년·학기·학수번호를 검색 조건으로 되묻거나, 묻지 않은 개설
+                # 정보를 통째로 덧붙이지 않는다.
+                requested_fields = list(dict.fromkeys(requested_fields))
             else:
                 requested_fields = list(
                     dict.fromkeys(list(requested_fields) + list(COURSE_DETAIL_FIELDS))
@@ -1174,12 +1299,25 @@ class LocalQueryPlanner:
             return None
         if REQUESTED_FIELDS in self._resolved:
             return None
+        # 질문 자체에서 요청 필드로 판별해 필터에서 분리한 항목도 이미 확정된
+        # 조회 대상이다. 일부 항목(예: Course 노드의 식별 속성)은 CourseOffering
+        # 속성 설명으로 만든 aspect label 집합에 없으므로, 그 집합만 보면 불필요한
+        # 되묻기가 생긴다. 값은 만들지 않고 위의 일반 필드 패턴과 같은 판정만 공유한다.
+        if self._question_names_course_aspect(question):
+            return None
         if self.choices.names_an_aspect(question):
             return None
         offered = self.choices.for_missing(
             question, [MissingScope.COURSE_ASPECT.value], self._resolved
         )
         return offered or None
+
+    def _question_names_course_aspect(self, question: str) -> bool:
+        """Whether the question already identifies an output field generically."""
+
+        if any(pattern.search(question) for pattern in _REQUESTED_FIELD_PATTERNS.values()):
+            return True
+        return self.choices is not None and self.choices.names_an_aspect(question)
 
     def _named_course_error(self, question: str) -> str:
         """The contract reason fed back to the planner when it lost the named course.
@@ -1416,7 +1554,7 @@ class LocalQueryPlanner:
         return [name for name in RULE_FIELDS if name in common]
 
     def plan(
-        self, question: str, resolved: Mapping[str, Any] | None = None
+        self, question: str, *, resolved: Mapping[str, Any] | None = None
     ) -> PlanningOutcome:
         """Plan one question, optionally with values the user already picked.
 
@@ -1433,10 +1571,21 @@ class LocalQueryPlanner:
         if not isinstance(question, str) or not question.strip():
             raise QueryPlanError("question must be a non-empty string")
         question = question.strip()
+        question_classification = classify_graduation_question(question)
+        if question_classification is GraduationQuestionClass.FULL_PERSONAL_HISTORY:
+            return PlanningOutcome(
+                status=PlanningStatus.UNSUPPORTED,
+                unsupported_reason=UnsupportedReason.PERSONAL_HISTORY,
+            )
+        if (
+            question_classification is GraduationQuestionClass.GENERAL_RULE
+            and _matches_review_required_rule(question, self.context)
+        ):
+            return PlanningOutcome(status=PlanningStatus.UNRESOLVED)
         self._resolved = self._reconciled(self._accepted_resolved(question, resolved))
         if self._points_at_nothing(question):
             return PlanningOutcome(status=PlanningStatus.OUT_OF_SCOPE)
-        outcome = self._plan_once(question)
+        outcome = self._plan_once(question, question_classification)
         for _ in range(MAX_AUTO_ADOPTED_CHOICES):
             if outcome.status is not PlanningStatus.CLARIFICATION_REQUIRED:
                 return outcome
@@ -1448,7 +1597,7 @@ class LocalQueryPlanner:
             if not self._safe_to_adopt(question, only):
                 return outcome
             self._resolved[only.filter_name] = only.value
-            outcome = self._plan_once(question)
+            outcome = self._plan_once(question, question_classification)
         return outcome
 
     def _points_at_nothing(self, question: str) -> bool:
@@ -1533,7 +1682,11 @@ class LocalQueryPlanner:
             return True
         return choice.filter_name in COURSE_IDENTIFYING_FILTERS
 
-    def _plan_once(self, question: str) -> PlanningOutcome:
+    def _plan_once(
+        self,
+        question: str,
+        question_classification: GraduationQuestionClass,
+    ) -> PlanningOutcome:
         """Run one planning pass with the values settled so far."""
 
         attempts: list[PlanningAttempt] = []
@@ -1546,6 +1699,7 @@ class LocalQueryPlanner:
                 user_prompt=planner_prompt(
                     question,
                     self._context_for(question),
+                    question_classification=question_classification.value,
                     previous_error=previous_error,
                     settled_choices=self._resolved,
                 ),
@@ -1560,6 +1714,64 @@ class LocalQueryPlanner:
                     raise LLMResponseError(
                         "LLM_PLAN_MESSAGE_INVALID", "planner message must be text"
                     )
+                payload = dict(payload)
+                selection_mode = payload.get("selection_mode")
+                filters = payload.get("filters")
+                requested_fields = payload.get("requested_fields")
+                if isinstance(requested_fields, list):
+                    requested_fields = list(requested_fields)
+                    for field, pattern in _REQUESTED_FIELD_PATTERNS.items():
+                        if pattern.search(question):
+                            if field not in requested_fields:
+                                requested_fields.append(field)
+                            if isinstance(filters, dict):
+                                filters.pop(field, None)
+                if isinstance(filters, Mapping):
+                    filters = {
+                        key: value for key, value in dict(filters).items() if value is not None
+                    }
+                payload["filters"] = filters
+                payload["requested_fields"] = requested_fields
+                if self._outside_supported_scope(filters):
+                    return PlanningOutcome(status=PlanningStatus.OUT_OF_SCOPE)
+                if status is PlanningStatus.CLARIFICATION_REQUIRED:
+                    # 모델의 자유문구가 아니라 QueryPlan 계약과 실제 결과의 stable
+                    # identity 검증으로 모호성을 판정한다. 이미 완전한 계획이면 DB
+                    # 조회 뒤 후보 수가 0/1/복수인지 판정할 수 있으므로 영문 되묻기를
+                    # 사용자에게 내보내거나 같은 계획을 다시 생성하지 않는다.
+                    try:
+                        settled = self._normalise(question, payload)
+                    except (ValueError, QueryPlanError):
+                        settled = None
+                    missing_now = self._missing_scope(payload)
+                    scope_is_settled = not missing_now or (
+                        settled is not None
+                        and self._scope_settled(missing_now, settled)
+                    )
+                    if (
+                        settled is not None
+                        and scope_is_settled
+                        and not self._ignores_named_course(question, settled)
+                    ):
+                        aspect = self._aspect_clarification(question, settled)
+                        if aspect is not None:
+                            attempts.append(
+                                self._record(index, AttemptOutcome.CLARIFICATION, payload)
+                            )
+                            return PlanningOutcome(
+                                status=PlanningStatus.CLARIFICATION_REQUIRED,
+                                missing=(MissingScope.COURSE_ASPECT,),
+                                attempts=tuple(attempts),
+                                options=aspect,
+                            )
+                        attempts.append(
+                            self._record(index, AttemptOutcome.BROADENED, payload)
+                        )
+                        return PlanningOutcome(
+                            status=PlanningStatus.READY,
+                            plan=QueryPlan.from_dict(settled, self.catalog),
+                            attempts=tuple(attempts),
+                        )
                 if status is not PlanningStatus.READY:
                     missing = self._missing_scope(payload)
                     # 되물으려는 범위를 적재된 데이터가 이미 하나로 정해 두었고 나머지
@@ -1627,12 +1839,25 @@ class LocalQueryPlanner:
                     )
                     return PlanningOutcome(
                         status=status,
-                        message=message,
+                        message=self._safe_status_message(
+                            status, selection_mode, filters
+                        ),
                         missing=missing,
                         attempts=tuple(attempts),
                         options=self._options_for(question, missing, status),
+                        unsupported_reason=(
+                            UnsupportedReason.SINGLE_CONDITION_COMPARISON
+                            if status is PlanningStatus.UNSUPPORTED
+                            and question_classification
+                            is GraduationQuestionClass.SINGLE_CONDITION_COMPARISON
+                            else UnsupportedReason.GENERAL_FEATURE
+                            if status is PlanningStatus.UNSUPPORTED
+                            else None
+                        ),
                     )
                 plan_payload = self._normalise(question, payload)
+                if self._outside_supported_scope(plan_payload.get("filters")):
+                    return PlanningOutcome(status=PlanningStatus.OUT_OF_SCOPE)
                 # 질문이 적재된 과목을 이름으로 지목했는데 계획이 그 과목을 가리키지
                 # 않으면, 근거가 붙은 다른 사실로 엉뚱한 답을 하게 된다. 종전에는
                 # 되묻기를 READY 로 바꿀 때만 이 검사를 했고 계획 모델이 곧바로 READY 를
@@ -1693,3 +1918,30 @@ class LocalQueryPlanner:
                 error.attempts = tuple(attempts)
                 raise error from exc
         raise AssertionError("unreachable planner retry state")
+
+    def _outside_supported_scope(self, filters: object) -> bool:
+        if not isinstance(filters, Mapping):
+            return False
+        years = set(self.context.get("academic_years") or ())
+        if years and "academic_year" in filters and filters["academic_year"] not in years:
+            return True
+        departments = {
+            item.get("department_id")
+            for item in self.context.get("departments", ())
+            if isinstance(item, Mapping)
+        }
+        return bool(departments) and (
+            "department_id" in filters
+            and filters["department_id"] not in departments
+        )
+
+    @staticmethod
+    def _safe_status_message(
+        status: PlanningStatus, selection_mode: object, filters: object
+    ) -> str | None:
+        if status is not PlanningStatus.CLARIFICATION_REQUIRED:
+            return None
+        if selection_mode == SelectionMode.SINGLE_COURSE.value and isinstance(filters, Mapping):
+            if not {"name_ko", "course_code"}.intersection(filters):
+                return "과목명 또는 학수번호를 입력해 주세요."
+        return "질문에서 확인하려는 과목이나 기준을 조금 더 구체적으로 입력해 주세요."

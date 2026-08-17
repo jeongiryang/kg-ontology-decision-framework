@@ -10,12 +10,15 @@ It never accepts Cypher, exposes a query plan, or constructs a ChatResponse itse
 from __future__ import annotations
 
 import argparse
+import asyncio
 import contextlib
+import hashlib
 import json
 import os
+import re
 from collections.abc import AsyncIterator, Callable
 from pathlib import Path
-from time import perf_counter
+from threading import Thread
 from typing import Any, Protocol
 
 import anyio
@@ -32,10 +35,18 @@ from kg_builder.config import ConfigurationError, Neo4jQuerySettings
 from kg_builder.llm.client import LLMConfigurationError, LLMSettings, create_llm_client
 from kg_builder.llm.cypher_generator import LocalCypherGenerator
 from kg_builder.llm.planner import LocalQueryPlanner
+from kg_builder.query.cypher_validator import CypherValidationError, lex_cypher
 from kg_builder.query.natural_language_service import NaturalLanguageQueryService
+from kg_builder.query.progress import (
+    ProgressCallback,
+    ProgressEvent,
+    ProgressPhase,
+    ProgressState,
+)
 from kg_builder.query.query_executor import DynamicQueryExecutor
 from kg_builder.query.query_explainer import QueryExplainer
 from kg_builder.query.query_plan import MAX_QUESTION_LENGTH
+from kg_builder.query.query_trace import EMAIL_PATTERN, PHONE_PATTERN, STUDENT_ID_PATTERN
 from kg_builder.query.safety_pipeline import SafetyPipeline
 from kg_builder.query.schema_selector import QuerySchemaSelector
 
@@ -63,7 +74,291 @@ EXAMPLE_QUESTIONS = (
 
 
 class ChatService(Protocol):
-    def ask(self, question: str) -> ChatResponse: ...
+    def ask(
+        self,
+        question: str,
+        *,
+        resolved: dict[str, Any] | None = None,
+        progress_callback: ProgressCallback | None = None,
+    ) -> ChatResponse: ...
+
+
+class InspectionCollector:
+    """Build stage-scoped inspection updates from approved pipeline facts only."""
+
+    _STATIC_DETAIL_KEYS = frozenset(
+        {"validated_cypher", "parameters", "labels", "relationship_types"}
+    )
+    _SECRET_KEY_MARKERS = ("password", "token", "secret", "api_key", "uri")
+    _LIMIT = re.compile(r"\bLIMIT\s+(\d+)\s*\Z", re.IGNORECASE)
+
+    def __init__(self) -> None:
+        self.stage_timings_ms: dict[str, int] = {}
+        self._active_attempt: int | None = None
+        self._pending_query: dict[str, Any] = {}
+        self._pending_attempt: int | None = None
+        self._approved_query: dict[str, Any] = {}
+
+    @staticmethod
+    def _candidate_attempt(event: ProgressEvent) -> int | None:
+        value = event.details.get("candidate_attempt")
+        return value if isinstance(value, int) and value > 0 else None
+
+    def _discard_candidate(self) -> None:
+        self._pending_query = {}
+        self._pending_attempt = None
+        self._approved_query = {}
+
+    @staticmethod
+    def _canonical_cypher(value: Any) -> str | None:
+        if not isinstance(value, str):
+            return None
+        try:
+            lexed = lex_cypher(value)
+        except CypherValidationError:
+            return None
+        canonical = lexed.canonical
+        if not canonical or canonical != value.strip() or lexed.backtick_identifiers:
+            return None
+        return canonical
+
+    @classmethod
+    def _mask_text(cls, value: str) -> str:
+        masked = EMAIL_PATTERN.sub("<redacted-email>", value)
+        masked = PHONE_PATTERN.sub("<redacted-phone>", masked)
+        return STUDENT_ID_PATTERN.sub("<redacted-student-id>", masked)[:256]
+
+    @classmethod
+    def _safe_mapping(cls, value: Any) -> dict[str, Any]:
+        if not isinstance(value, dict):
+            return {}
+        output: dict[str, Any] = {}
+        for raw_key, raw_value in value.items():
+            if not isinstance(raw_key, str) or len(raw_key) > 80:
+                continue
+            if any(marker in raw_key.lower() for marker in cls._SECRET_KEY_MARKERS):
+                output[raw_key] = "<redacted>"
+            elif isinstance(raw_value, str):
+                output[raw_key] = cls._mask_text(raw_value)
+            elif isinstance(raw_value, bool) or raw_value is None:
+                output[raw_key] = raw_value
+            elif isinstance(raw_value, (int, float)) and not isinstance(raw_value, bool):
+                output[raw_key] = raw_value
+            elif isinstance(raw_value, (list, tuple)):
+                output[raw_key] = [
+                    cls._mask_text(item) if isinstance(item, str) else item
+                    for item in raw_value[:100]
+                    if isinstance(item, (str, int, float, bool)) or item is None
+                ]
+        return output
+
+    @classmethod
+    def _safe_plan(cls, value: Any) -> dict[str, Any]:
+        if not isinstance(value, dict):
+            return {}
+        plan: dict[str, Any] = {}
+        intent = value.get("intent")
+        if isinstance(intent, str):
+            plan["intent"] = cls._mask_text(intent)
+        plan["filters"] = cls._safe_mapping(value.get("filters"))
+        fields = value.get("requested_fields")
+        if isinstance(fields, (list, tuple)):
+            plan["requested_fields"] = [
+                item for item in fields[:100] if isinstance(item, str) and len(item) <= 80
+            ]
+        for key in ("evidence_required", "selection_mode"):
+            item = value.get(key)
+            if isinstance(item, (str, bool)):
+                plan[key] = item
+        return plan
+
+    @staticmethod
+    def _safe_strings(value: Any) -> list[str]:
+        if not isinstance(value, (list, tuple)):
+            return []
+        return sorted({item for item in value if isinstance(item, str) and len(item) <= 80})
+
+    @staticmethod
+    def _safe_count(value: Any) -> int:
+        return (
+            value
+            if isinstance(value, int) and not isinstance(value, bool) and value >= 0
+            else 0
+        )
+
+    @staticmethod
+    def _update(event: ProgressEvent, summary: dict[str, Any]) -> dict[str, Any]:
+        return {
+            "type": "inspection_update",
+            "stage": event.phase.value,
+            "status": event.state.value,
+            "summary": summary,
+            "elapsed_ms": event.elapsed_ms,
+        }
+
+    @staticmethod
+    def _safe_error_code(event: ProgressEvent) -> str:
+        return str(event.public_payload().get("error_code", "PIPELINE_STAGE_FAILED"))
+
+    def record(self, event: ProgressEvent) -> dict[str, Any] | None:
+        attempt = self._candidate_attempt(event)
+        if (
+            event.phase is ProgressPhase.CYPHER_GENERATION
+            and event.state is ProgressState.STARTED
+        ):
+            self._active_attempt = attempt
+            self._discard_candidate()
+            if attempt is not None and attempt > 1:
+                return self._update(
+                    event,
+                    {
+                        "retry": True,
+                        "discard_previous_candidate": True,
+                    },
+                )
+            return None
+
+        if event.state is ProgressState.FAILED:
+            self.stage_timings_ms[event.phase.value] = event.elapsed_ms
+            if event.phase in {
+                ProgressPhase.STATIC_VALIDATION,
+                ProgressPhase.NEO4J_EXPLAIN,
+            }:
+                self._discard_candidate()
+            return self._update(
+                event,
+                {"error_code": self._safe_error_code(event)},
+            )
+
+        if event.phase is ProgressPhase.STATIC_VALIDATION:
+            if (
+                event.state is ProgressState.COMPLETED
+                and attempt is not None
+                and attempt == self._active_attempt
+            ):
+                candidate = {
+                    key: event.details[key]
+                    for key in self._STATIC_DETAIL_KEYS
+                    if key in event.details
+                }
+                canonical = self._canonical_cypher(candidate.get("validated_cypher"))
+                if canonical is not None and "parameters" in candidate:
+                    candidate["validated_cypher"] = canonical
+                    self._pending_query = candidate
+                    self._pending_attempt = attempt
+                else:
+                    self._discard_candidate()
+                self.stage_timings_ms[event.phase.value] = event.elapsed_ms
+                return self._update(
+                    event,
+                    {
+                        "read_only_syntax_verified": True,
+                        "ontology_schema_verified": True,
+                    },
+                )
+            return None
+
+        if event.phase is ProgressPhase.NEO4J_EXPLAIN:
+            if (
+                event.state is ProgressState.COMPLETED
+                and attempt is not None
+                and attempt == self._active_attempt == self._pending_attempt
+                and self._pending_query
+            ):
+                operators = event.details.get("operators")
+                if isinstance(operators, list) and all(
+                    isinstance(item, str) for item in operators
+                ):
+                    cypher = self._pending_query["validated_cypher"]
+                    limit_match = self._LIMIT.search(cypher)
+                    self._approved_query = {
+                        **self._pending_query,
+                        "operators": list(operators),
+                        "limit": int(limit_match.group(1)) if limit_match else None,
+                    }
+                self._pending_query = {}
+                self._pending_attempt = None
+                self.stage_timings_ms[event.phase.value] = event.elapsed_ms
+                if self._approved_query:
+                    return self._update(
+                        event,
+                        {
+                            "approved_cypher": self._approved_query["validated_cypher"],
+                            "parameters": self._safe_mapping(
+                                self._approved_query["parameters"]
+                            ),
+                            "operators": self._safe_strings(
+                                self._approved_query["operators"]
+                            ),
+                            "labels": self._safe_strings(
+                                self._approved_query.get("labels")
+                            ),
+                            "relationships": self._safe_strings(
+                                self._approved_query.get("relationship_types")
+                            ),
+                            "limit": self._approved_query["limit"],
+                        },
+                    )
+            return None
+
+        if event.state is not ProgressState.COMPLETED:
+            return None
+        self.stage_timings_ms[event.phase.value] = event.elapsed_ms
+        summary: dict[str, Any]
+        if event.phase is ProgressPhase.QUESTION_ANALYSIS:
+            summary = {
+                "status": event.details.get("planning_status"),
+                "query_plan": self._safe_plan(event.details.get("query_plan")),
+            }
+        elif event.phase is ProgressPhase.SCHEMA_SELECTION:
+            labels = self._safe_strings(event.details.get("labels"))
+            relationships = self._safe_strings(event.details.get("relationship_types"))
+            summary = {
+                "labels": labels,
+                "relationships": relationships,
+                "node_label_count": len(labels),
+                "relationship_count": len(relationships),
+            }
+        elif event.phase is ProgressPhase.CYPHER_GENERATION:
+            summary = {
+                "candidate_generated": True,
+                "message": "LLM이 Cypher 후보를 생성했습니다. 안전 검증을 진행합니다.",
+            }
+        elif event.phase is ProgressPhase.GRAPH_EXECUTION:
+            summary = {"row_count": self._safe_count(event.details.get("row_count"))}
+        elif event.phase is ProgressPhase.RESULT_VALIDATION:
+            summary = {
+                "row_count": self._safe_count(event.details.get("row_count")),
+                "fact_count": self._safe_count(event.details.get("fact_count")),
+                "verified_evidence_count": self._safe_count(
+                    event.details.get("evidence_count")
+                ),
+                "fact_status_verified": event.details.get("fact_status_verified") is True,
+                "evidence_status_verified": (
+                    event.details.get("evidence_status_verified") is True
+                ),
+                "direct_provenance_verified": (
+                    event.details.get("direct_provenance_verified") is True
+                ),
+            }
+        elif event.phase is ProgressPhase.CLAIM_BUILDING:
+            summary = {"claim_count": self._safe_count(event.details.get("claim_count"))}
+        elif event.phase is ProgressPhase.ANSWER_RENDERING:
+            summary = {
+                "citation_count": self._safe_count(
+                    event.details.get(
+                        "citation_count", event.details.get("evidence_count", 0)
+                    )
+                )
+            }
+        elif event.phase is ProgressPhase.COMPLETED:
+            summary = {
+                "total_elapsed_ms": event.elapsed_ms,
+                "stage_timings_ms": dict(sorted(self.stage_timings_ms.items())),
+            }
+        else:
+            return None
+        return self._update(event, summary)
 
 
 def _env_bool(name: str, default: bool = False) -> bool:
@@ -102,6 +397,7 @@ class ChatState:
         self.error: str | None = None
         self.error_code: str | None = None
         self.debug = False
+        self.show_query_details = False
         self.max_concurrent = DEFAULT_MAX_CONCURRENT
         self.client_timeout_seconds = DEFAULT_CLIENT_TIMEOUT_SECONDS
         self.limiter: anyio.Semaphore | None = None
@@ -114,6 +410,7 @@ class ChatState:
     def open(self) -> None:
         try:
             self.debug = _env_bool("KG_CHAT_DEBUG")
+            self.show_query_details = _env_bool("KG_CHAT_SHOW_QUERY_DETAILS")
             self.max_concurrent = _env_int(
                 "KG_CHAT_MAX_CONCURRENT", DEFAULT_MAX_CONCURRENT, 1, 4
             )
@@ -197,15 +494,16 @@ async def index(request: Request) -> Response:
 
 async def health(request: Request) -> Response:
     state = _state(request)
-    source = await anyio.to_thread.run_sync(pdf_evidence.inspect_pdf)
+    source = pdf_evidence.inspect_pdf()
     payload: dict[str, Any] = {
         "service_ready": state.ready,
         "error": state.error,
-        "pdf": source.to_public_dict(),
+        "pdf_mounted": source.available,
         "examples": list(EXAMPLE_QUESTIONS),
         "max_question_length": MAX_QUESTION_LENGTH,
         "client_timeout_seconds": state.client_timeout_seconds,
         "debug": state.debug,
+        "show_query_details": state.show_query_details,
     }
     if state.debug:
         payload["error_code"] = state.error_code
@@ -214,6 +512,63 @@ async def health(request: Request) -> Response:
 
 def _sse(payload: dict[str, Any]) -> bytes:
     return f"data: {json.dumps(payload, ensure_ascii=False)}\n\n".encode("utf-8")
+
+
+def _clarification_options_event(event: ProgressEvent) -> dict[str, Any] | None:
+    """Build the versioned presentation envelope outside sealed ChatResponse."""
+
+    if (
+        event.phase is not ProgressPhase.QUESTION_ANALYSIS
+        or event.state is not ProgressState.COMPLETED
+        or event.details.get("planning_status") != "CLARIFICATION_REQUIRED"
+    ):
+        return None
+    raw_missing = event.details.get("missing")
+    missing = [
+        item
+        for item in raw_missing if isinstance(item, str) and re.fullmatch(r"[A-Z_]{1,80}", item)
+    ] if isinstance(raw_missing, (list, tuple)) else []
+    raw_options = event.details.get("clarification_options")
+    options: list[dict[str, Any]] = []
+    if isinstance(raw_options, (list, tuple)):
+        for option in raw_options[:100]:
+            filter_name = getattr(option, "filter_name", None)
+            value = getattr(option, "value", None)
+            label = getattr(option, "label", None)
+            detail = getattr(option, "detail", None)
+            if (
+                not isinstance(filter_name, str)
+                or not re.fullmatch(r"[a-z_]{1,80}", filter_name)
+                or not isinstance(label, str)
+                or not label.strip()
+            ):
+                continue
+            try:
+                canonical_value = json.dumps(
+                    value, ensure_ascii=False, sort_keys=True, separators=(",", ":")
+                )
+            except (TypeError, ValueError):
+                continue
+            choice_id = hashlib.sha256(
+                f"{filter_name}:{canonical_value}".encode("utf-8")
+            ).hexdigest()[:24]
+            options.append(
+                {
+                    "choice_id": f"choice:{choice_id}",
+                    "filter": filter_name,
+                    "value": value,
+                    "label": label.strip()[:160],
+                    "detail": detail.strip()[:256]
+                    if isinstance(detail, str) and detail.strip()
+                    else None,
+                }
+            )
+    return {
+        "type": "clarification_options",
+        "version": 1,
+        "missing": missing,
+        "options": options,
+    }
 
 
 async def ask(request: Request) -> Response:
@@ -256,51 +611,60 @@ async def ask(request: Request) -> Response:
     adapter = ChatResponseAdapter(debug=state.debug)
 
     async def stream() -> AsyncIterator[bytes]:
-        started = perf_counter()
-        yield _sse(
-            {
-                "type": "progress",
-                "phase": "SUBMITTED",
-                "message": "질문 전송됨",
-                "elapsed_ms": 0,
-            }
-        )
-        yield _sse(
-            {
-                "type": "progress",
-                "phase": "CHECKING",
-                "message": "답변을 확인하고 있습니다",
-                "elapsed_ms": 0,
-            }
-        )
-        try:
+        queue: asyncio.Queue[dict[str, Any]] = asyncio.Queue()
+        loop = asyncio.get_running_loop()
+        collector = InspectionCollector()
+
+        async def run_request() -> None:
+            finished = asyncio.Event()
+
+            def on_progress(event: ProgressEvent) -> None:
+                inspection_update = collector.record(event)
+                loop.call_soon_threadsafe(queue.put_nowait, event.public_payload())
+                clarification_update = _clarification_options_event(event)
+                if clarification_update is not None:
+                    loop.call_soon_threadsafe(queue.put_nowait, clarification_update)
+                if state.show_query_details and inspection_update is not None:
+                    loop.call_soon_threadsafe(queue.put_nowait, inspection_update)
+
+            def worker() -> None:
+                try:
+                    response = service.ask(
+                        question,
+                        resolved=resolved or None,
+                        progress_callback=on_progress,
+                    )
+                    result = adapter.adapt(response)
+                    loop.call_soon_threadsafe(queue.put_nowait, result)
+                except Exception:
+                    error: dict[str, Any] = {
+                        "type": "error",
+                        "message": "요청을 안전하게 처리하지 못했습니다.",
+                    }
+                    if state.debug:
+                        error["error_code"] = "CHAT_REQUEST_FAILED"
+                    loop.call_soon_threadsafe(queue.put_nowait, error)
+                finally:
+                    loop.call_soon_threadsafe(queue.put_nowait, {"type": "end"})
+                    loop.call_soon_threadsafe(finished.set)
+
             async with limiter:
-                response = await anyio.to_thread.run_sync(
-                    service.ask, question, resolved
-                )
-                result = await anyio.to_thread.run_sync(
-                    adapter.adapt, response
-                )
-            yield _sse(result)
-            yield _sse(
-                {
-                    "type": "progress",
-                    "phase": "COMPLETED",
-                    "message": "답변 완료",
-                    "elapsed_ms": round((perf_counter() - started) * 1000),
-                }
-            )
-        except anyio.get_cancelled_exc_class():
-            return
-        except Exception:
-            error: dict[str, Any] = {
-                "type": "error",
-                "message": "요청을 안전하게 처리하지 못했습니다.",
-            }
-            if state.debug:
-                error["error_code"] = "CHAT_REQUEST_FAILED"
-            yield _sse(error)
-        yield _sse({"type": "end"})
+                Thread(target=worker, name="evidence-chat-request", daemon=True).start()
+                await finished.wait()
+
+        task = asyncio.create_task(run_request())
+        try:
+            while True:
+                item = await queue.get()
+                yield _sse(item)
+                if item.get("type") == "end":
+                    break
+            await task
+        finally:
+            # A disconnected browser cannot cancel an already-running local model
+            # call.  Keep the task alive so it holds the single-GPU semaphore until
+            # the worker finishes; its queue is intentionally unbounded and local.
+            pass
 
     return StreamingResponse(
         stream(),
@@ -312,7 +676,7 @@ async def ask(request: Request) -> Response:
 async def pdf_page(request: Request) -> Response:
     page_number = request.path_params["page"]
     try:
-        image = await anyio.to_thread.run_sync(pdf_evidence.render_page_png, page_number)
+        image = pdf_evidence.render_page_png(page_number)
     except pdf_evidence.PdfEvidenceError:
         return JSONResponse(
             {"error": "요청한 PDF 페이지를 표시할 수 없습니다."}, status_code=404
@@ -331,14 +695,14 @@ def create_app(state_factory: Callable[[], ChatState] = ChatState) -> Starlette:
     async def lifespan(app: Starlette) -> AsyncIterator[None]:
         state = state_factory()
         app.state.chat = state
-        await anyio.to_thread.run_sync(state.open)
+        state.open()
         state.limiter = anyio.Semaphore(state.max_concurrent)
         print(
             "[evidence-chat] 서비스 준비됨"
             if state.ready
             else "[evidence-chat] 서비스 준비 실패"
         )
-        source = await anyio.to_thread.run_sync(pdf_evidence.inspect_pdf)
+        source = pdf_evidence.inspect_pdf()
         print(f"[evidence-chat] PDF: {'탑재됨' if source.available else '없음'}")
         try:
             yield

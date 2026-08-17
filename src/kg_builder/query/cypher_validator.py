@@ -98,9 +98,11 @@ class LiteralSpan:
 @dataclass(frozen=True, slots=True)
 class LexedCypher:
     sanitized: str
+    canonical: str
     string_literals: tuple[str, ...]
     literal_spans: tuple[LiteralSpan, ...]
     semicolons: tuple[int, ...]
+    backtick_identifiers: tuple[LiteralSpan, ...]
 
 
 IDENTIFIER = r"[A-Za-z][A-Za-z0-9_]*"
@@ -154,25 +156,31 @@ FUNCTION_CALL = re.compile(rf"\b({IDENTIFIER})\s*\(")
 
 def lex_cypher(text: str) -> LexedCypher:
     output = list(text)
+    canonical = list(text)
     literals: list[str] = []
     literal_spans: list[LiteralSpan] = []
     semicolons: list[int] = []
+    backtick_identifiers: list[LiteralSpan] = []
     index = 0
     state = "normal"
     quote = ""
     literal: list[str] = []
     literal_start = 0
+    backtick: list[str] = []
+    backtick_start = 0
     while index < len(text):
         char = text[index]
         next_char = text[index + 1] if index + 1 < len(text) else ""
         if state == "normal":
             if char == "/" and next_char == "/":
                 output[index] = output[index + 1] = " "
+                canonical[index] = canonical[index + 1] = " "
                 state = "line_comment"
                 index += 2
                 continue
             if char == "/" and next_char == "*":
                 output[index] = output[index + 1] = " "
+                canonical[index] = canonical[index + 1] = " "
                 state = "block_comment"
                 index += 2
                 continue
@@ -183,27 +191,47 @@ def lex_cypher(text: str) -> LexedCypher:
                 output[index] = " "
                 state = "string"
             elif char == "`":
-                raise CypherValidationError(
-                    "CYPHER_BACKTICK_IDENTIFIER", "backtick identifiers are not allowed"
-                )
+                backtick = []
+                backtick_start = index
+                output[index] = " "
+                state = "backtick"
             elif char == ";":
                 semicolons.append(index)
             index += 1
             continue
         if state == "line_comment":
             output[index] = "\n" if char == "\n" else " "
+            canonical[index] = "\n" if char == "\n" else " "
             if char == "\n":
                 state = "normal"
             index += 1
             continue
         if state == "block_comment":
             output[index] = " "
+            canonical[index] = " "
             if char == "*" and next_char == "/":
                 output[index + 1] = " "
+                canonical[index + 1] = " "
                 state = "normal"
                 index += 2
             else:
                 index += 1
+            continue
+        if state == "backtick":
+            output[index] = " "
+            if char == "`":
+                if next_char == "`":
+                    backtick.append("`")
+                    output[index + 1] = " "
+                    index += 2
+                    continue
+                backtick_identifiers.append(
+                    LiteralSpan(backtick_start, index + 1, "".join(backtick))
+                )
+                state = "normal"
+            else:
+                backtick.append(char)
+            index += 1
             continue
         output[index] = " "
         if char == "\\" and next_char:
@@ -224,10 +252,18 @@ def lex_cypher(text: str) -> LexedCypher:
         else:
             literal.append(char)
         index += 1
-    if state in {"string", "block_comment"}:
-        raise CypherValidationError("CYPHER_UNTERMINATED_TOKEN", "unterminated string or comment")
+    if state in {"string", "block_comment", "backtick"}:
+        raise CypherValidationError(
+            "CYPHER_UNTERMINATED_TOKEN",
+            "unterminated string, comment, or identifier",
+        )
     return LexedCypher(
-        "".join(output), tuple(literals), tuple(literal_spans), tuple(semicolons)
+        "".join(output),
+        "".join(canonical).strip(),
+        tuple(literals),
+        tuple(literal_spans),
+        tuple(semicolons),
+        tuple(backtick_identifiers),
     )
 
 
@@ -235,6 +271,17 @@ def defensive_read_only_check(text: str) -> None:
     """Executor-side defense in depth; full validation still belongs to the pipeline."""
 
     lexed = lex_cypher(text)
+    if not lexed.canonical:
+        raise CypherValidationError("CYPHER_EMPTY", "Cypher must contain a query")
+    if lexed.canonical != text.strip():
+        raise CypherValidationError(
+            "CYPHER_COMMENT_NOT_CANONICAL",
+            "executor accepts only comment-free canonical Cypher",
+        )
+    if lexed.backtick_identifiers:
+        raise CypherValidationError(
+            "CYPHER_BACKTICK_IDENTIFIER", "backtick identifiers are not allowed"
+        )
     if lexed.semicolons:
         raise CypherValidationError("CYPHER_SEMICOLON", "semicolons are not allowed")
     if FORBIDDEN_KEYWORDS.search(lexed.sanitized):
@@ -283,8 +330,12 @@ class CypherValidator:
         if not isinstance(cypher, str) or not cypher.strip():
             self._fail("CYPHER_EMPTY", "Cypher must be non-empty text")
         lexed = lex_cypher(cypher)
-        defensive_read_only_check(cypher)
+        if not lexed.canonical:
+            self._fail("CYPHER_EMPTY", "Cypher must contain a query after comments are removed")
+        defensive_read_only_check(lexed.canonical)
         sanitized = lexed.sanitized
+        if lexed.backtick_identifiers:
+            self._fail("CYPHER_BACKTICK_IDENTIFIER", "backtick identifiers are not allowed")
         if any(value != "VERIFIED" for value in lexed.string_literals):
             self._fail(
                 "CYPHER_LITERAL_VALUE",
@@ -421,7 +472,7 @@ class CypherValidator:
             self._fail("CYPHER_LIMIT_EXCEEDED", f"LIMIT must be between 1 and {self.max_rows}")
 
         return ValidatedCypher._issue(
-            text=cypher.strip(),
+            text=lexed.canonical,
             parameters=dict(plan.filters),
             limit=limit,
             labels=tuple(sorted(labels)),

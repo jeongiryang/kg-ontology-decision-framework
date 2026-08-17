@@ -28,8 +28,14 @@ class StubQueryService:
     def __init__(self, result: NaturalLanguageResult):
         self.result = result
 
-    def ask(self, question: str) -> NaturalLanguageResult:
-        del question
+    def ask(
+        self,
+        question: str,
+        *,
+        resolved=None,
+        progress_callback=None,
+    ) -> NaturalLanguageResult:
+        del question, resolved, progress_callback
         return self.result
 
 

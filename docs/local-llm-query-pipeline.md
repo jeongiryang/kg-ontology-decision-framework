@@ -97,8 +97,17 @@ planner는 provider가 반환한 JSON Schema 계약 응답을 사용하고 다�
 - `CLARIFICATION_REQUIRED`
 - `OUT_OF_SCOPE`
 - `UNSUPPORTED`
+- `UNRESOLVED`
 
-질문 원문을 코드의 분기 키로 비교하지 않는다. 지원 연도, 학과 ID, 통제어휘와 VERIFIED Rule 식별자 목록은 Verified KG·온톨로지에서 실행 시 파생한다. Rule의 의미 힌트에서는 숫자를 제거해 계획 단계가 정답값을 직접 전달하지 않게 한다. 단일 Rule은 `rule_id` 또는 한 원소 `rule_ids`, 영역의 복수 Rule은 `rule_ids`로 표현한다.
+질문 원문을 코드의 분기 키로 비교하지 않는다. 지원 연도, 학과 ID, 통제어휘와 VERIFIED Rule 식별자 목록은 Verified KG·온톨로지에서 실행 시 파생한다. Rule의 의미 힌트에서는 숫자를 제거해 계획 단계가 정답값을 직접 전달하지 않게 한다. `REVIEW_REQUIRED` Rule도 값 없이 의미와 Condition의 `subject_field`만 별도 컨텍스트에 제공한다. 따라서 TOEIC 같은 일반 기준 질문이 미검증 임계값을 요구하면 개인 이력 질문으로 오분류하거나 숫자를 추측하지 않고 `UNRESOLVED`로 끝난다. 단일 Rule은 `rule_id` 또는 한 원소 `rule_ids`, 영역의 복수 Rule은 `rule_ids`로 표현한다.
+
+졸업 관련 질문 분류는 다음 데이터 요구량을 구분한다.
+
+- 일반 규정 조회: 개인 이력 없이 기준·점수·학점·과목을 조회한다.
+- 단일 조건 비교: 사용자가 제시한 한 점수·학점과 규정의 충족 여부를 비교한다. 비교 기능이 미지원이면 개인 이력 부재와 다른 고정 한국어 `UNSUPPORTED` 안내를 사용한다.
+- 전체 개인 이력 판정: 수강내역·취득학점·성적표 등 개인 기록과 졸업 가능 판정을 함께 요구할 때만 결정론적으로 `UNSUPPORTED` 처리한다.
+
+`내가`, `학생`, `졸업` 같은 단어만으로 전체 개인 이력 판정으로 승격하지 않는다. 분류기는 답·Rule ID·Evidence ID·페이지·점수를 만들지 않는다.
 
 `QuerySchemaSelector`는 QueryPlan 필터·요청 필드에서 필요한 fact 계열을 고르고, 온톨로지 관계 그래프의 최단 경로로 관련 라벨·관계·통제어휘만 선택한다. 전체 26개 라벨을 매번 모델에 보내지 않는다.
 

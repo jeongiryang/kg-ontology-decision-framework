@@ -634,8 +634,14 @@ class ExtendedServiceTests(unittest.TestCase):
         payload = plan_payload("CAREER_FIELD_LIST", ["name_ko", "field_order"])
 
         class StubQueryService:
-            def ask(self, question: str) -> NaturalLanguageResult:
-                del question
+            def ask(
+                self,
+                question: str,
+                *,
+                resolved=None,
+                progress_callback=None,
+            ) -> NaturalLanguageResult:
+                del question, resolved, progress_callback
                 return NaturalLanguageResult(
                     request_id="request-1",
                     status="ANSWERABLE",

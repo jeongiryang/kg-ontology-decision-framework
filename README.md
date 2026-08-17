@@ -156,7 +156,12 @@ uv run python -m kg_builder.query_cli \
 uv run python -m evidence_chat.server
 ```
 
-기본 주소는 `http://127.0.0.1:8501`입니다. `NEO4J_QUERY_*`와 `KG_LLM_*` 설정이 필요하며, 근거 페이지 이미지와 강조 표시를 보려면 발췌 PDF를 로컬에 두고 `CURRICULUM_PDF_PATH`로 경로를 지정합니다. PDF가 없어도 근거 원문과 세 종류 페이지 번호는 표시됩니다. 상태별 화면, Citation, 동시성·타임아웃 정책은 [학사규정 근거 챗봇 가이드](docs/evidence-chat.md)를 참고합니다.
+기본 주소는 `http://127.0.0.1:8501`입니다. `NEO4J_QUERY_*`와 `KG_LLM_*` 설정이 필요하며, 근거 페이지 이미지와 실제 텍스트 검색 강조를 보려면 Git 제외된 19쪽 발췌 PDF를 `KG_CHAT_PDF_PATH`로 지정합니다. PDF가 없어도 근거 원문과 세 종류 페이지 번호는 표시됩니다. 실제 pipeline 단계의 누적 타임라인, EXPLAIN 승인 후에만 공개되는 선택적 Cypher inspection, 상태별 화면과 Citation 정책은 [학사규정 근거 챗봇 가이드](docs/evidence-chat.md)를 참고합니다.
+
+되묻기 선택지는 `ChatResponse`에 필드를 추가하지 않고 별도 versioned
+`clarification_options` SSE event로 전달됩니다. 선택 후 재질의는 `resolved`를,
+실시간 단계 표시는 `progress_callback`을 각각 keyword-only 인자로 사용하므로 기존
+8필드 응답 계약과 승인 경계는 유지됩니다.
 
 현재 실제 구현은 `src/kg_builder/`의 `config.py`, `graph_bundle.py`, `neo4j_schema.py`, `neo4j_ingest.py`, `query_*.py`와 `src/evidence_chat/`에 있습니다. 위쪽 초기 디렉터리 설명의 0바이트 골격 모듈은 향후 구조 예시이며 구현 완료 상태를 뜻하지 않습니다.
 

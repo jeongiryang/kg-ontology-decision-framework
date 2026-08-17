@@ -32,6 +32,7 @@ from .contracts import (
 
 ALLOWED_RULE_UNITS = frozenset({"CREDIT", "COURSE", "COURSE_PER_AREA", "AREA"})
 FIELD_UNITS: Mapping[str, str | None] = {
+    "course_code": None,
     "grade_year": None,
     "semester": None,
     "credits": "CREDIT",
@@ -375,6 +376,10 @@ class ClaimValidator:
             isinstance(claim.value, bool) or not isinstance(claim.value, (int, float))
         ):
             self._invalid("credits is not numeric")
+        if claim.field == "course_code" and (
+            not isinstance(claim.value, str) or not claim.value.strip()
+        ):
+            self._invalid("course_code is invalid")
 
     def _requirement(self, claim: GroundedClaim, by_fact) -> None:
         _, row = self._single_fact(claim, by_fact)
