@@ -61,6 +61,15 @@ intent는 설명/추적용일 뿐 고정 쿼리 선택 키가 아니다.
 Rule 질문에 broad area_id를 사용하지 않는다."""
 
 
+# 되묻기로 값이 확정된 요청에만 덧붙이는 지시. 시스템 프롬프트에 상시로 두면 고른 값이
+# 없는 첫 질문의 판단까지 규칙 조회 쪽으로 끌어당긴다(2026-08-15 실측).
+SETTLED_CHOICES_DIRECTIVE = """
+user_settled_choices는 사용자가 되묻기 선택지에서 직접 고른 확정 값이다. 그 selection_mode와 필터를 그대로 사용하고 다른 값으로 바꾸지 않는다.
+user_settled_choices만으로 조회가 가능하면 질문 문장이 짧고 모호해도 CLARIFICATION_REQUIRED 대신 READY를 반환한다.
+user_settled_choices에 rule_ids가 한 개면 SINGLE_RULE, 두 개 이상이면 MULTIPLE_RULES를 사용한다.
+user_settled_choices가 정한 조회 종류와 무관한 missing_scope는 넣지 않는다. 규칙 조회에 과목명을 요구하지 않는다."""
+
+
 CYPHER_SYSTEM_PROMPT = """당신은 제한된 Neo4j 읽기 전용 Cypher 생성기다.
 반드시 JSON 객체 {\"cypher\": \"...\"}만 반환하고 설명을 쓰지 않는다.
 제공된 QueryPlan과 스키마 부분집합만 사용한다.
@@ -85,16 +94,28 @@ def planner_prompt(
     context: Mapping[str, Any],
     *,
     previous_error: str | None = None,
+    settled_choices: Mapping[str, Any] | None = None,
 ) -> str:
-    return "질문과 허용 컨텍스트를 사용해 계획하라.\n" + json.dumps(
-        {
-            "question": question,
-            "allowed_context": context,
-            "previous_contract_error": previous_error,
-        },
-        ensure_ascii=False,
-        sort_keys=True,
-    )
+    """Build one planning prompt, including anything the user already picked.
+
+    ``settled_choices`` 는 앞선 되묻기에서 사용자가 **선택지에서 고른** 값이다. 이것을
+    넘기지 않으면 모델은 같은 질문 문장만 다시 보게 돼, 사용자가 다 골랐는데도 또
+    되묻는다. 값 자체는 적재 데이터에서 나왔고 계획기가 이미 대조해 통과시킨 것이며,
+    모델이 무시하더라도 계획기가 다시 잠가 넣는다.
+    """
+
+    settled = dict(settled_choices or {})
+    header = "질문과 허용 컨텍스트를 사용해 계획하라."
+    if settled:
+        header += SETTLED_CHOICES_DIRECTIVE
+    payload: dict[str, Any] = {
+        "question": question,
+        "allowed_context": context,
+        "previous_contract_error": previous_error,
+    }
+    if settled:
+        payload["user_settled_choices"] = settled
+    return header + "\n" + json.dumps(payload, ensure_ascii=False, sort_keys=True)
 
 
 def cypher_prompt(

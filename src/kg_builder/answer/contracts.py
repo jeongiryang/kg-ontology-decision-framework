@@ -54,6 +54,7 @@ MISSING_SCOPE_LABELS: dict[str, str] = {
     "ACADEMIC_YEAR": "학년도",
     "DEPARTMENT": "학과",
     "COURSE_IDENTITY": "과목명 또는 학수번호",
+    "COURSE_ASPECT": "그 과목의 무엇을 묻는지",
     "RULE_TOPIC": "어떤 이수요건을 묻는지",
     "QUESTION_INTENT": "무엇을 알고 싶은지",
 }
@@ -69,6 +70,7 @@ MISSING_SCOPE_QUESTIONS: dict[str, str] = {
     "ACADEMIC_YEAR": "어느 학년도를 말씀하시나요?",
     "DEPARTMENT": "어느 학과를 말씀하시나요?",
     "COURSE_IDENTITY": "어떤 과목을 말씀하시나요?",
+    "COURSE_ASPECT": "무엇을 알고 싶으신가요?",
     "RULE_TOPIC": "어떤 이수요건을 말씀하시나요?",
     "QUESTION_INTENT": "무엇을 알고 싶으신가요?",
 }
@@ -81,6 +83,7 @@ FILTER_QUESTIONS: dict[str, str] = {
     "academic_year": "어느 학년도를 말씀하시나요?",
     "department_id": "어느 학과를 말씀하시나요?",
     "course_code": "어떤 과목을 말씀하시나요?",
+    "requested_fields": "무엇을 알고 싶으신가요?",
     "rule_ids": "어떤 이수요건을 말씀하시나요?",
     "selection_mode": "무엇을 알고 싶으신가요?",
 }

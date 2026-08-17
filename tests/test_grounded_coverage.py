@@ -296,7 +296,11 @@ class KoreanParticleTests(unittest.TestCase):
             ("주체적 창의력", True),
             ("피지컬AI", None),
             ("", None),
-            ("3", None),
+            # 숫자는 읽는 소리로 판정한다. 과목명 끝의 일련번호가 그렇다.
+            ("산학캡스톤디자인1", True),
+            ("컴퓨터프로그래밍2", False),
+            ("3", True),
+            ("9", False),
         ):
             with self.subTest(text=text):
                 self.assertIs(_has_final_consonant(text), expected)

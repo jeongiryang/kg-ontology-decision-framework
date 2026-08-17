@@ -32,7 +32,7 @@ const el = {
   clarification: $("clarification"),
   choices: $("choices"),
   choiceList: $("choice-list"),
-  resolvedNote: $("resolved-note"),
+  trail: $("answer-trail"),
   scopeNotice: $("scope-notice"),
   debugMeta: $("debug-meta"),
   evidenceSection: $("evidence-section"),
@@ -57,16 +57,25 @@ const span = (className, text) => {
 
 // 되묻기로 확정된 값. 서버는 대화 상태를 들지 않으므로 브라우저가 들고 매 요청에
 // 함께 보낸다. 값이 실제로 제시된 선택지였는지는 서버가 다시 만들어 대조한다.
+//
+// `trail` 은 화면에만 쓰는 기록이다. 서버로 보내지 않으며 조회에도 관여하지 않는다.
+// 무엇을 물었고 무엇을 골라 여기까지 왔는지 사용자가 되짚을 수 있게 하는 용도다.
 const CLARIFY_KEY = "evidence-chat-clarify";
+
+function emptyClarify(question = "") {
+  return { question, resolved: {}, trail: [] };
+}
 
 function loadClarify() {
   try {
     const saved = JSON.parse(sessionStorage.getItem(CLARIFY_KEY) || "null");
-    if (saved && typeof saved.question === "string" && saved.resolved) return saved;
+    if (saved && typeof saved.question === "string" && saved.resolved) {
+      return { ...saved, trail: Array.isArray(saved.trail) ? saved.trail : [] };
+    }
   } catch (error) {
     /* 저장된 값이 깨졌으면 그냥 새로 시작한다. */
   }
-  return { question: "", resolved: {} };
+  return emptyClarify();
 }
 
 function saveClarify(state) {
@@ -78,7 +87,7 @@ function saveClarify(state) {
 }
 
 function clearClarify() {
-  clarify = { question: "", resolved: {} };
+  clarify = emptyClarify();
   try {
     sessionStorage.removeItem(CLARIFY_KEY);
   } catch (error) {
@@ -174,7 +183,7 @@ el.form.addEventListener("submit", (event) => {
   if (question && !inFlight) {
     // 새로 입력한 질문은 앞서 채운 조건과 무관하다. 확정값을 버리고 시작한다.
     clearClarify();
-    clarify = { question, resolved: {} };
+    clarify = emptyClarify(question);
     saveClarify(clarify);
     ask(question);
   }
@@ -313,6 +322,7 @@ function renderAnswer(result) {
 
   el.clarification.hidden = !response.clarification;
   el.clarification.textContent = response.clarification || "";
+  renderTrail();
   renderChoices(response);
   el.scopeNotice.hidden = !presentation.scope_notice;
   el.scopeNotice.textContent = presentation.scope_notice || "";
@@ -323,15 +333,27 @@ function renderAnswer(result) {
   renderEvidence(presentation);
 }
 
-// 사용자가 이미 고른 조건을 답변 화면에 그대로 밝힌다. 무엇을 더해 조회했는지
-// 보이지 않으면 왜 이런 답이 나왔는지 알 수 없다.
-function renderResolvedNote() {
-  if (!el.resolvedNote) return;
-  const picked = Object.keys(clarify.resolved).length;
-  el.resolvedNote.hidden = picked === 0;
-  el.resolvedNote.textContent = picked
-    ? `추가로 지정한 조건 ${picked}개를 함께 조회했습니다.`
-    : "";
+// 어떤 질문에서 무엇을 골라 이 답에 닿았는지 그대로 남긴다. 선택지를 여러 번 타고
+// 들어가면 처음 물은 것이 무엇이었는지 잊게 되고, 그러면 답이 맞는지도 판단할 수 없다.
+// 화면 표시일 뿐이며 조회 조건은 `clarify.resolved` 가 그대로 들고 있다.
+function renderTrail() {
+  if (!el.trail) return;
+  const steps = clarify.trail || [];
+  el.trail.textContent = "";
+  el.trail.hidden = steps.length === 0;
+  if (!steps.length) return;
+  for (const step of steps) {
+    const item = document.createElement("li");
+    item.className = "trail-step";
+    const asked = document.createElement("span");
+    asked.className = "trail-asked";
+    asked.textContent = step.prompt || "되물음";
+    const picked = document.createElement("span");
+    picked.className = "trail-picked";
+    picked.textContent = step.label;
+    item.append(asked, picked);
+    el.trail.append(item);
+  }
 }
 
 function renderChoices(response) {
@@ -341,8 +363,9 @@ function renderChoices(response) {
   const options = response.options || [];
   el.choiceList.textContent = "";
   el.choices.hidden = options.length === 0;
-  renderResolvedNote();
   if (!options.length) return;
+  // 지금 화면에 떠 있는 되묻기 문구. 고른 뒤에는 사라지므로 여기서 기록해 둔다.
+  const prompt = response.clarification || "";
   for (const option of options) {
     const button = document.createElement("button");
     button.type = "button";
@@ -355,6 +378,7 @@ function renderChoices(response) {
       clarify = {
         question: clarify.question,
         resolved: { ...clarify.resolved, [option.filter]: option.value },
+        trail: [...(clarify.trail || []), { prompt, label: option.label }],
       };
       saveClarify(clarify);
       ask(clarify.question);

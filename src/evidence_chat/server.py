@@ -170,6 +170,20 @@ def _state(request: Request) -> ChatState:
     return request.app.state.chat
 
 
+class _FreshStaticFiles(StaticFiles):
+    """Serve the screen assets without letting the browser keep an old copy.
+
+    ``index.html`` 만 캐시를 막아 두면 새 문서가 예전 ``app.js`` 를 부른다. 화면이 멈춘
+    이유가 코드에 없어 찾기 어렵다(2026-08-14 실측). 로컬 개발 서버라 매번 내려받아도
+    비용이 없다.
+    """
+
+    def file_response(self, *args: Any, **kwargs: Any) -> Response:
+        response = super().file_response(*args, **kwargs)
+        response.headers["Cache-Control"] = "no-store"
+        return response
+
+
 async def index(request: Request) -> Response:
     del request
     # 화면 문서는 캐시하지 않는다. 브라우저가 예전 index.html 을 들고 있으면 새
@@ -337,7 +351,7 @@ def create_app(state_factory: Callable[[], ChatState] = ChatState) -> Starlette:
             Route("/api/health", health),
             Route("/api/ask", ask, methods=["POST"]),
             Route("/api/pdf/page/{page:int}.png", pdf_page),
-            Mount("/static", app=StaticFiles(directory=STATIC_DIR), name="static"),
+            Mount("/static", app=_FreshStaticFiles(directory=STATIC_DIR), name="static"),
         ],
         lifespan=lifespan,
     )

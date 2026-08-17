@@ -60,6 +60,35 @@ class ModeCorrectionTests(unittest.TestCase):
     def setUp(self) -> None:
         self.planner = LocalQueryPlanner(SequenceClient([]))
 
+    def test_a_named_course_outranks_a_stray_requested_field(self) -> None:
+        """모델이 종류는 맞고 필드를 틀렸을 때, 필드가 종류를 뒤집으면 안 된다.
+
+        `자료구조는 몇 학년 몇 학기에 개설되나?` 에 계획 모델이 `SINGLE_COURSE` 와
+        권장 교양 과목 전용 필드(`recommended_*`)를 함께 냈다. 필드를 믿는 보정이
+        계획을 권장 과목 조회로 바꿔 놓아, 묻지 않은 사실을 답하게 됐다. 3회 시도가
+        모두 같아 재시도로도 벗어나지 못했다(2026-08-15 실측).
+
+        질문이 적재된 과목을 이름으로 지목했고 모델도 과목 조회라고 했다면, 신호 둘이
+        일치하므로 필드 하나에 지지 않는다.
+        """
+
+        kept = self.planner._mode_for_fields(
+            "자료구조는 몇 학년 몇 학기에 개설되나?",
+            SelectionMode.SINGLE_COURSE.value,
+            ["recommended_grade_year", "recommended_semester"],
+        )
+        self.assertEqual(kept, SelectionMode.SINGLE_COURSE.value)
+
+    def test_the_guard_needs_both_signals(self) -> None:
+        """과목을 지목하지 않은 질문은 종전대로 필드로 고친다."""
+
+        corrected = self.planner._mode_for_fields(
+            "1학년 1학기 권장 교과목은?",
+            SelectionMode.SINGLE_COURSE.value,
+            ["recommended_grade_year", "recommended_semester"],
+        )
+        self.assertNotEqual(corrected, SelectionMode.SINGLE_COURSE.value)
+
     def test_fields_owned_by_one_family_correct_the_mode(self) -> None:
         """요청 필드를 담을 수 있는 모드가 하나뿐이면 그 모드로 고친다."""
 
@@ -124,24 +153,36 @@ class UnresolvedRuleTopicTests(unittest.TestCase):
             {choice.filter_name for choice in outcome.options}, {"rule_ids"}
         )
 
-    def test_meaningless_question_never_returns_every_rule(self) -> None:
-        """뜻 없는 입력에 규칙집 전체가 나오지 않아야 한다."""
+    def test_a_meaningless_question_is_out_of_scope_not_a_menu(self) -> None:
+        """뜻 없는 입력에는 규칙집도, 되묻기 메뉴도 주지 않는다.
 
-        client = SequenceClient(
-            [
-                payload(
-                    status="CLARIFICATION_REQUIRED",
-                    selection_mode="SINGLE_RULE",
-                    missing_scope=["RULE_TOPIC"],
+        종전에는 이런 입력도 되묻기로 넘어갔고, 되묻기가 선언된 fact family 전체를
+        목록으로 내주는 바람에 하나만 고르면 근거가 붙은 답변까지 갔다. 답에 쓰인
+        사실은 진짜였지만 **아무도 그것을 묻지 않았다.** 되물을 자격은 "계획이 서지
+        않았다"가 아니라 "질문이 적재된 사실을 가리킨다"에서 나온다.
+        """
+
+        for question in ("ㅇㅇㄹㅇㄹㅇㄹ", "asdfasdf", "ㅋㅋㅋㅋㅋ"):
+            with self.subTest(question=question):
+                client = SequenceClient(
+                    [
+                        payload(
+                            status="CLARIFICATION_REQUIRED",
+                            selection_mode="SINGLE_RULE",
+                            missing_scope=["RULE_TOPIC"],
+                        )
+                    ]
                 )
-            ]
-        )
-        outcome = LocalQueryPlanner(client).plan("ㅇㅇㄹㅇㄹㅇㄹ")
-        self.assertIs(outcome.status, PlanningStatus.CLARIFICATION_REQUIRED)
-        self.assertIsNone(outcome.plan)
+                outcome = LocalQueryPlanner(client).plan(question)
+                self.assertIs(outcome.status, PlanningStatus.OUT_OF_SCOPE)
+                self.assertIsNone(outcome.plan)
+                self.assertFalse(outcome.options, "고를 것을 주면 답까지 가 버린다")
 
     def test_clarification_always_offers_something_to_pick(self) -> None:
-        """고를 것이 없으면 무엇을 물을 수 있는지라도 보여 준다."""
+        """가리키는 사실이 있는 질문이면, 좁히지 못해도 고를 것을 준다.
+
+        위 검사와 짝이다. 되묻기를 없앤 것이 아니라 **자격을 둔 것**이다.
+        """
 
         client = SequenceClient(
             [
@@ -152,11 +193,9 @@ class UnresolvedRuleTopicTests(unittest.TestCase):
                 )
             ]
         )
-        outcome = LocalQueryPlanner(client).plan("ㅇㅇㄹㅇㄹㅇㄹ")
+        outcome = LocalQueryPlanner(client).plan("알려줘 과목")
+        self.assertIs(outcome.status, PlanningStatus.CLARIFICATION_REQUIRED)
         self.assertTrue(outcome.options)
-        self.assertEqual(
-            {choice.filter_name for choice in outcome.options}, {"selection_mode"}
-        )
 
 
 class NamedCourseGuardTests(unittest.TestCase):
@@ -247,7 +286,8 @@ class SettledScopeTests(unittest.TestCase):
             ]
             * 2
         )
-        outcome = LocalQueryPlanner(client).plan("그거 알려줘")
+        # 가리키는 사실이 있으면서 무엇을 묻는지는 정해지지 않은 질문이어야 한다.
+        outcome = LocalQueryPlanner(client).plan("교양 그거 알려줘")
         self.assertIs(outcome.status, PlanningStatus.CLARIFICATION_REQUIRED)
 
     def test_a_plan_that_ignores_the_named_course_is_not_accepted(self) -> None:
@@ -275,7 +315,7 @@ class PlanningDiagnosticsTests(unittest.TestCase):
 
         bad = payload(selection_mode="SINGLE_COURSE", filters={"credits": 3})
         client = SequenceClient([bad] * 3)
-        outcome = LocalQueryPlanner(client).plan("무엇이든 알려줘")
+        outcome = LocalQueryPlanner(client).plan("교양 학점 알려줘")
         # 시도를 다 써도 계획이 서지 않으면 되묻기로 끝난다. 진단 기록은 그대로다.
         self.assertIs(outcome.status, PlanningStatus.CLARIFICATION_REQUIRED)
         self.assertTrue(outcome.options)
@@ -288,7 +328,9 @@ class PlanningDiagnosticsTests(unittest.TestCase):
         for record in rejected:
             self.assertEqual(record.selection_mode, "SINGLE_COURSE")
             self.assertEqual(record.filter_names, ("credits",))
-            self.assertIn("SINGLE_COURSE", record.contract_error)
+            # 어떤 계약에 걸렸는지는 남되, 문구 자체는 계획기 내부 사정이라 고정하지
+            # 않는다. 여기서 지키는 것은 "이유가 기록된다"이지 특정 문장이 아니다.
+            self.assertTrue(record.contract_error)
         # 골격만 남기므로 값은 어디에도 들어 있지 않다.
         self.assertNotIn("3", str(rejected[0].filter_names))
 

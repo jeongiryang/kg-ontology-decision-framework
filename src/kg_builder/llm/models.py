@@ -26,6 +26,8 @@ class MissingScope(StrEnum):
     ACADEMIC_YEAR = "ACADEMIC_YEAR"
     DEPARTMENT = "DEPARTMENT"
     COURSE_IDENTITY = "COURSE_IDENTITY"
+    # 어느 과목인지는 정해졌으나 그 과목의 **무엇을** 묻는지가 비어 있는 경우.
+    COURSE_ASPECT = "COURSE_ASPECT"
     RULE_TOPIC = "RULE_TOPIC"
     QUESTION_INTENT = "QUESTION_INTENT"
 

@@ -473,17 +473,36 @@ def _single_list_claim(
     return matched[0]
 
 
+# 숫자로 끝나는 표기는 읽는 소리로 받침을 정한다. 과목명에 붙는 일련번호가 그렇다
+# (`산학캡스톤디자인1` → "일" → 받침 ㄹ). 0 영, 1 일, 3 삼, 6 육, 7 칠, 8 팔은 받침이
+# 있고 2 이, 4 사, 5 오, 9 구는 없다.
+_DIGIT_HAS_FINAL = {
+    "0": True,
+    "1": True,
+    "2": False,
+    "3": True,
+    "4": False,
+    "5": False,
+    "6": True,
+    "7": True,
+    "8": True,
+    "9": False,
+}
+
+
 def _has_final_consonant(text: str) -> bool | None:
     """Return whether the last Hangul syllable has a final consonant.
 
     한글 음절은 ``(코드 - 0xAC00) % 28`` 이 0 이 아니면 받침이 있다. 마지막 글자가 한글
-    음절이 아니면 판정하지 않고 ``None`` 을 돌려준다. 조사를 잘못 붙이는 것보다 두 형태를
-    함께 적는 쪽이 원문 표기를 덜 훼손한다.
+    음절도 숫자도 아니면 판정하지 않고 ``None`` 을 돌려준다. 조사를 잘못 붙이는 것보다 두
+    형태를 함께 적는 쪽이 원문 표기를 덜 훼손한다.
     """
 
     if not text:
         return None
     last = text[-1]
+    if last in _DIGIT_HAS_FINAL:
+        return _DIGIT_HAS_FINAL[last]
     if not "가" <= last <= "힣":
         return None
     return (ord(last) - 0xAC00) % 28 != 0

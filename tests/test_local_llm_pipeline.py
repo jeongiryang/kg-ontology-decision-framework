@@ -117,7 +117,9 @@ class LocalLLMContractTests(unittest.TestCase):
                 "message": "safe stop",
                 "selection_mode": "COURSE_LIST",
             }
-            outcome = LocalQueryPlanner(SequenceClient([payload])).plan("질문")
+            # 적재된 사실을 가리키는 질문이어야 계획 모델까지 간다. 아무것과도 겹치지
+            # 않는 입력은 계획 단계 앞에서 범위 밖으로 끝난다.
+            outcome = LocalQueryPlanner(SequenceClient([payload])).plan("교양 학점은?")
             self.assertEqual(outcome.status.value, status)
             self.assertIsNone(outcome.plan)
 
@@ -135,7 +137,7 @@ class LocalLLMContractTests(unittest.TestCase):
             "selection_mode": "SINGLE_COURSE",
         }
         client = SequenceClient([ambiguous_course, ambiguous_course])
-        outcome = LocalQueryPlanner(client).plan("동명과목은?")
+        outcome = LocalQueryPlanner(client).plan("동명과목은 몇 학년 몇 학기?")
         self.assertEqual(outcome.status, PlanningStatus.CLARIFICATION_REQUIRED)
         self.assertIsNone(outcome.plan)
         self.assertEqual(len(client.prompts), 2)
@@ -144,7 +146,7 @@ class LocalLLMContractTests(unittest.TestCase):
         ready_course["status"] = "READY"
         ready_course["message"] = None
         client = SequenceClient([ambiguous_course, ready_course])
-        outcome = LocalQueryPlanner(client).plan("동명과목은?")
+        outcome = LocalQueryPlanner(client).plan("동명과목은 몇 학년 몇 학기?")
         self.assertEqual(outcome.status, PlanningStatus.READY)
         self.assertIsNotNone(outcome.plan)
         self.assertEqual(outcome.plan.selection_mode, SelectionMode.SINGLE_COURSE)

@@ -38,6 +38,29 @@ _BM25_K1 = 1.5
 _BM25_B = 0.75
 # 이 점수 아래는 우연한 글자 겹침으로 본다. 후보가 없으면 호출자가 종전 경로로 돌아간다.
 MIN_SCORE = 0.5
+# 최상위 점수에 견줘 이 비율 아래로 떨어지는 후보는 꼬리로 본다. 2-gram 은 `균형교양` 과
+# `기초교양` 이 `교양` 을 공유하므로, 무관한 규칙도 얼마간 점수를 받는다. 자리를 채우려고
+# 꼬리까지 실으면 묻지 않은 것이 답과 선택지에 섞인다.
+SCORE_RATIO = 0.75
+
+
+def leading_candidates(
+    candidates: Sequence[FactCandidate], ratio: float = SCORE_RATIO
+) -> tuple[FactCandidate, ...]:
+    """Keep only the candidates close to the best score.
+
+    계획기(`_rules_related_to`)에만 있던 자르기를 공용으로 올린 것이다. 종전에는 되묻기
+    선택지 생성기가 이 자르기 없이 자리 수만큼 채워, 없앤 줄 알았던 "넓히기"가 선택지
+    화면으로 자리를 옮겨 살아남았다(2026-08-15 실측: `균형교양 이수요건은?` 에 기초교양·
+    대학영어 규칙이 선택지로 나옴).
+    """
+
+    if not candidates:
+        return ()
+    threshold = candidates[0].score * ratio
+    return tuple(
+        candidate for candidate in candidates if candidate.score >= threshold
+    )
 
 # 어느 라벨의 사실이 어떤 모드로 조회되는지. 기존 두 family 는 선언형이 아니므로
 # 여기서 함께 적는다. 확장 family 는 선언에서 읽으므로 family 를 추가해도 이 표를

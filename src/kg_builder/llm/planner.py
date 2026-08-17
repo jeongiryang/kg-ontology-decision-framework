@@ -11,10 +11,15 @@ from typing import Any, Mapping
 from kg_builder.query.clarification import (
     FILTER_IMPLIED_MODE,
     MAX_ROUNDS as MAX_CLARIFICATION_ROUNDS,
+    REQUESTED_FIELDS,
     Choice,
     ClarificationChoices,
 )
-from kg_builder.query.fact_index import FactIndex, vocabulary_labels
+from kg_builder.query.fact_index import (
+    FactIndex,
+    leading_candidates,
+    vocabulary_labels,
+)
 
 from kg_builder.query.fact_families import (
     allowed_fields_for_mode,
@@ -98,13 +103,12 @@ RULE_FIELDS = ("rule_type", "operator", "value", "unit", "description_ko")
 INTERNAL_CONTEXT_KEYS = (
     "rule_field_presence",
     "question_matchable_values",
+    "course_codes_by_name",
     "rule_match_text",
 )
 # 질문 낱말이 규칙 설명과 겹치는지 볼 때 인정하는 최소 길이. 조사가 붙은 낱말은
 # 앞에서부터 잘라 가며 맞춰 본다.
 MIN_MATCH_PREFIX = 2
-# 규칙 후보를 남길 점수 비율. 최상위 점수의 이 배수 이상만 조회 대상으로 삼는다.
-RULE_SCORE_RATIO = 0.75
 # 모드를 역산할 때 훑어보는 검색 후보 수.
 MODE_CANDIDATE_LIMIT = 12
 # 같은 fact label 안에서 어느 종류인지를 가르는 필터. 이 필터가 비면 종류가 다른 행이
@@ -112,6 +116,9 @@ MODE_CANDIDATE_LIMIT = 12
 FAMILY_DISCRIMINATORS = frozenset({"aggregate_type", "alignment_type", "competency_type"})
 # 계획 시도 상한. 계약 위반 문구를 되먹여 스스로 고칠 기회를 준다.
 MAX_PLANNING_ATTEMPTS = 3
+# 되묻지 않고 자동으로 채택할 단일 후보의 연쇄 상한. 고를 것이 하나뿐인 되묻기가
+# 이어질 수 있으나, 매번 계획을 다시 세우므로 무한히 돌지 않도록 막는다.
+MAX_AUTO_ADOPTED_CHOICES = 2
 # 어떤 필터가 채워지면 그 부족 코드가 해소되는지. 필터로 메울 수 없는 코드는 넣지
 # 않으며, 그런 코드는 되묻기로 남는다.
 SCOPE_FILLING_FILTERS: dict[MissingScope, tuple[str, ...]] = {
@@ -133,6 +140,15 @@ COURSE_DETAIL_FIELDS = (
 )
 # 어떤 과목을 묻는지 계획이 실제로 담고 있는지 확인할 때 보는 필터.
 COURSE_IDENTIFYING_FILTERS = ("name_ko", "course_code", "course_name_ko")
+# 고른 규칙 개수가 곧 조회 종류를 정하는 모드들.
+# 한 과목 또는 과목 목록을 조회하는 모드. 질문이 적재된 과목을 지목했을 때 이 모드를
+# 필드만 보고 다른 family 로 옮기지 않는다.
+COURSE_SELECTION_MODES = frozenset(
+    {SelectionMode.SINGLE_COURSE.value, SelectionMode.COURSE_LIST.value}
+)
+RULE_SELECTION_MODES = frozenset(
+    {SelectionMode.SINGLE_RULE.value, SelectionMode.MULTIPLE_RULES.value}
+)
 _WORD = re.compile(r"[가-힣A-Za-z]{2,}")
 
 def planner_response_schema(catalog: SchemaCatalog) -> dict[str, Any]:
@@ -348,9 +364,21 @@ def build_planner_context(
             }
         )
     }
+    # 어느 과목명이 어느 학수번호인지. 계획 모델이 지어낸 학수번호로 다른 과목을 답하는
+    # 것을 막는 대조용이며, 프롬프트에는 싣지 않는다(동명 과목이 있어 값은 목록이다).
+    course_codes_by_name: dict[str, list[str]] = {}
+    for node in data["nodes"]:
+        if "Course" not in node["labels"]:
+            continue
+        props = node["properties"]
+        name = props.get("name_ko")
+        code = props.get("course_code")
+        if isinstance(name, str) and name and isinstance(code, str) and code:
+            course_codes_by_name.setdefault(name, []).append(code)
     return {
         "academic_years": sorted(academic_years),
         "question_matchable_values": question_matchable_values,
+        "course_codes_by_name": course_codes_by_name,
         "filterable_values": filterable_values,
         "departments": sorted(departments, key=lambda item: item["department_id"]),
         "verified_rule_identifiers": sorted(rule_ids, key=lambda item: item["rule_id"]),
@@ -686,9 +714,23 @@ class LocalQueryPlanner:
         대신 데이터와 맞춰 보는 것이며, 고친 계획도 같은 계약 검증을 다시 거친다.
 
         지금 모드로도 충분하면 손대지 않는다.
+
+        **보정이 거꾸로 도는 경우가 있다.** 모델이 종류는 맞게 고르고 필드를 틀리게
+        고르면, 필드를 믿는 이 보정이 맞는 종류를 뒤집는다. `자료구조는 몇 학년 몇
+        학기에 개설되나?` 에 모델이 `SINGLE_COURSE` + `recommended_grade_year` 를 내면
+        (권장 교양 과목 전용 필드다) 계획이 통째로 권장 과목 조회로 바뀌어, 묻지 않은
+        사실을 답하게 된다. 3회 시도 모두 같은 값이 나와 재시도로도 벗어나지 못했다
+        (2026-08-15 실측).
+
+        그래서 신호가 둘 이상 일치하면 필드 하나에 지지 않는다. 질문이 적재된 과목을
+        이름으로 지목했고 모델도 과목 조회라고 했다면, 그 둘이 일치하는 쪽을 따른다.
+        과목명이 적재 데이터에 실제로 있는지 확인한 값이라 필드보다 근거가 세다. 틀린
+        필드는 뒤에서 그 모드가 줄 수 있는 것만 남기고 채워 넣으므로 버려도 손해가 없다.
         """
 
         if not isinstance(requested_fields, list) or not requested_fields:
+            return selection_mode
+        if selection_mode in COURSE_SELECTION_MODES and self._names_a_course(question):
             return selection_mode
         wanted = {name for name in requested_fields if isinstance(name, str)}
         if not wanted:
@@ -847,7 +889,9 @@ class LocalQueryPlanner:
         if self._resolved:
             filters = dict(filters) if isinstance(filters, Mapping) else {}
             for name, value in self._resolved.items():
-                if name != "selection_mode":
+                # 조회 종류와 요청 필드는 필터가 아니다. 필터 자리에 넣으면 뒤에서
+                # 걸러지긴 하지만, 애초에 다른 것이므로 여기서 가른다.
+                if name not in {"selection_mode", REQUESTED_FIELDS}:
                     filters[name] = value
             chosen = self._resolved.get("selection_mode")
             if not isinstance(chosen, str):
@@ -858,7 +902,13 @@ class LocalQueryPlanner:
                         break
             if isinstance(chosen, str):
                 selection_mode = chosen
-        selection_mode = self._mode_for_fields(question, selection_mode, requested_fields)
+        # 요청 필드로 모드를 고쳐 주는 보정은 사용자가 조회 종류를 직접 고르지 않았을
+        # 때만 쓴다. 되묻기 payload 는 계획을 접은 껍데기라 필드가 앞 시도의 잔재일 수
+        # 있고, 그 필드로 사용자의 선택을 뒤집으면 고른 것과 다른 사실을 조회하게 된다.
+        if not self._settled_mode():
+            selection_mode = self._mode_for_fields(
+                question, selection_mode, requested_fields
+            )
         rule_ids = filters.get("rule_ids") if isinstance(filters, Mapping) else None
         if selection_mode == SelectionMode.SINGLE_RULE.value and (
             not isinstance(filters, Mapping)
@@ -894,18 +944,27 @@ class LocalQueryPlanner:
             and isinstance(requested_fields, list)
             and requested_fields
         ):
-            requested_fields = list(
-                dict.fromkeys(list(requested_fields) + list(COURSE_DETAIL_FIELDS))
-            )
+            picked = self._resolved.get(REQUESTED_FIELDS)
+            if isinstance(picked, list) and picked:
+                # 사용자가 무엇을 물을지 골랐으면 그것만 답한다. 개설 정보를 통째로
+                # 답하면 고른 것이 무의미해진다. 과목명은 답의 주어라 함께 남긴다.
+                requested_fields = list(dict.fromkeys(["name_ko", *picked]))
+            else:
+                requested_fields = list(
+                    dict.fromkeys(list(requested_fields) + list(COURSE_DETAIL_FIELDS))
+                )
         # 요청 필드가 아예 비어 있으면 손대지 않는다. 그건 계획이 무엇을 물었는지
         # 정하지 못했다는 뜻이고, 그 계획은 계약 위반으로 거부되는 편이 맞다.
+        # 과목 목록은 과목명이 있어야 답이 된다. 이수구분과 같은 이유의 구조적 보강이며,
+        # 계획 모델이 `credits` 만 요청해도 어느 과목의 학점인지 말할 수 있어야 한다.
         if (
             selection_mode == SelectionMode.COURSE_LIST.value
             and isinstance(requested_fields, list)
             and requested_fields
-            and "completion_type" not in requested_fields
         ):
-            requested_fields = list(requested_fields) + ["completion_type"]
+            requested_fields = list(
+                dict.fromkeys(list(requested_fields) + ["name_ko", "completion_type"])
+            )
         # 확장 family 도 같은 이유로 구조적 보강만 한다. 문장을 만들 수 없는 필드
         # 조합이 오면 답변 단계에서 안전 실패로 끝나므로, 질문별 분기 없이 family 가
         # 선언한 최소 필드를 채워 준다.
@@ -978,6 +1037,29 @@ class LocalQueryPlanner:
                         list(requested_fields) + list(family.mandatory_fields)
                     )
                 )
+        # 고른 모드가 줄 수 없는 필드는 조회문을 만들 자리가 없어 생성 단계에서 반드시
+        # 실패한다(과목 조회에 Rule 전용 description_ko 가 섞이는 경우). family 가 선언된
+        # 확장 모드에서는 이미 걸러지지만 기본 네 모드에는 그 단계가 없었다. 어느 모드가
+        # 어떤 필드를 줄 수 있는지는 온톨로지 선언이 정하므로 여기서 그대로 따른다.
+        mode_fields = allowed_fields_for_mode(selection_mode)
+        if mode_fields is not None and isinstance(requested_fields, list):
+            requested_fields = [
+                name for name in requested_fields if name in mode_fields
+            ]
+        # 되묻기 payload 는 모델이 계획을 접은 껍데기라 요청 필드가 없거나 앞 시도의
+        # 잔재뿐이다(위에서 모두 걸러진다). 사용자가 규칙을 골라 조회가 정해졌는데도 그
+        # 껍데기 때문에 계약이 깨지면, 다 고른 뒤에도 답을 받지 못한다. 무엇을 요청할지는
+        # 고른 규칙이 실제로 가진 필드에서 나오므로 값을 지어내지 않는다.
+        if (
+            selection_mode in RULE_SELECTION_MODES
+            and not requested_fields
+            and self._resolved
+        ):
+            chosen_rules = filters.get("rule_ids") or (
+                [filters["rule_id"]] if filters.get("rule_id") else []
+            )
+            if chosen_rules:
+                requested_fields = self._fields_every_rule_has(list(chosen_rules))
         allowed = allowed_filters_for_mode(selection_mode)
         filters.update(
             {
@@ -1026,18 +1108,111 @@ class LocalQueryPlanner:
             return False
         return any(isinstance(name, str) and name and name in question for name in names)
 
+    def _named_courses(self, question: str) -> list[str]:
+        """Every loaded course name the question states verbatim."""
+
+        values = self.context.get("question_matchable_values")
+        if not isinstance(values, Mapping):
+            return []
+        names = values.get("name_ko")
+        if not isinstance(names, list):
+            return []
+        return [
+            name
+            for name in names
+            if isinstance(name, str) and name and name in question
+        ]
+
+    def _names_a_course(self, question: str) -> bool:
+        """Say whether the question states a loaded course name verbatim."""
+
+        return bool(self._named_courses(question))
+
     def _ignores_named_course(self, question: str, plan_payload: Mapping[str, Any]) -> bool:
         """Catch a plan that would answer about something else than the named course.
 
         질문이 적재된 과목을 이름으로 지목했는데 계획에 그 과목을 가리키는 필터가 하나도
         없으면, 조회 결과는 근거가 붙더라도 묻지 않은 것을 답하게 된다. 커버리지를
         넓히는 경로가 다른 질문에 답하는 통로가 되지 않도록 여기서 막는다.
+
+        **필터가 있다는 것만으로는 부족하다.** 계획 모델이 적재에 없는 학수번호를 지어
+        넣으면 이 검사를 통과하고도 조회 결과가 비거나 다른 과목을 가리킨다. 지목한
+        과목이 실제로 그 값을 갖는지까지 적재 데이터와 대조한다.
         """
 
-        if not self._names_a_course(question):
+        named = self._named_courses(question)
+        if not named:
             return False
         filters = plan_payload.get("filters") or {}
-        return not any(name in filters for name in COURSE_IDENTIFYING_FILTERS)
+        present = [name for name in COURSE_IDENTIFYING_FILTERS if name in filters]
+        if not present:
+            return True
+        codes = self._course_codes_for(named)
+        for name in present:
+            value = filters[name]
+            if name == "course_code":
+                # 적재된 학수번호를 모르면 판단하지 않고 통과시킨다. 결과 검증이 뒤에서
+                # 다시 거른다.
+                if codes and value not in codes:
+                    return True
+            elif isinstance(value, str) and value not in named:
+                return True
+        return False
+
+    def _aspect_clarification(
+        self, question: str, plan_payload: Mapping[str, Any]
+    ) -> tuple[Choice, ...] | None:
+        """Choices for which attribute of one course to answer, or ``None`` to answer.
+
+        되묻지 않는 경우가 셋이다. 한 과목 조회가 아닐 때, 질문이 이미 무엇을 묻는지
+        말했을 때(`몇 학년 몇 학기에 개설되나?`), 사용자가 이미 골랐을 때다.
+        """
+
+        if self.choices is None:
+            return None
+        if plan_payload.get("selection_mode") != SelectionMode.SINGLE_COURSE.value:
+            return None
+        if REQUESTED_FIELDS in self._resolved:
+            return None
+        if self.choices.names_an_aspect(question):
+            return None
+        offered = self.choices.for_missing(
+            question, [MissingScope.COURSE_ASPECT.value], self._resolved
+        )
+        return offered or None
+
+    def _named_course_error(self, question: str) -> str:
+        """The contract reason fed back to the planner when it lost the named course.
+
+        종전 문구는 "과목 필터가 없다"고만 알려 줬다. 지어낸 학수번호를 넣은 경우에는
+        틀린 진단이라 모델이 같은 값을 다시 냈다. 지목한 과목과 적재된 학수번호를 그대로
+        되먹여 다음 시도가 스스로 고칠 수 있게 한다. 정답 값이 아니라 조회 대상이다.
+        """
+
+        named = self._named_courses(question)
+        if not named:
+            return "the question names a loaded course but the plan does not filter on it"
+        codes = sorted(self._course_codes_for(named))
+        wanted = f"name_ko must be one of {named}"
+        if codes:
+            wanted += f" or course_code one of {codes}"
+        return (
+            "the plan must filter on the course the question names: "
+            f"{wanted}. do not invent a course_code."
+        )
+
+    def _course_codes_for(self, names: list[str]) -> set[str]:
+        """The loaded course codes belonging to these course names."""
+
+        mapping = self.context.get("course_codes_by_name")
+        if not isinstance(mapping, Mapping):
+            return set()
+        found: set[str] = set()
+        for name in names:
+            codes = mapping.get(name)
+            if isinstance(codes, list):
+                found.update(code for code in codes if isinstance(code, str))
+        return found
 
     def _rules_related_to(self, question: str) -> list[str]:
         """Keep the requirement rules whose verified wording overlaps the question.
@@ -1061,12 +1236,12 @@ class LocalQueryPlanner:
         if not candidates:
             return []
         # 최상위 점수에 가까운 것만 남긴다. 꼬리까지 실으면 종전처럼 묻지 않은
-        # 요건까지 답에 섞인다.
-        threshold = candidates[0].score * RULE_SCORE_RATIO
+        # 요건까지 답에 섞인다. 자르는 기준은 되묻기 선택지와 공유한다. 종전에는 이
+        # 자르기가 여기에만 있어, 같은 결함이 선택지 화면에 그대로 남아 있었다.
         selected = [
             candidate.identifiers["rule_id"]
-            for candidate in candidates
-            if candidate.score >= threshold and "rule_id" in candidate.identifiers
+            for candidate in leading_candidates(candidates)
+            if "rule_id" in candidate.identifiers
         ]
         return sorted({rule_id for rule_id in selected if rule_id in verified})
 
@@ -1181,10 +1356,12 @@ class LocalQueryPlanner:
 
         if not isinstance(resolved, Mapping) or not resolved or self.choices is None:
             return {}
+        # 앞선 턴에서 고른 값을 함께 넘겨 그때의 선택지를 되살린다. 되묻기가 이어지면
+        # 후보가 앞 선택으로 좁혀지므로, 좁혀진 상태를 재현해야 대조가 맞는다.
         return {
             name: value
             for name, value in resolved.items()
-            if self.choices.is_offered(question, str(name), value)
+            if self.choices.is_offered(question, str(name), value, resolved)
         }
 
     def _options_for(
@@ -1204,7 +1381,7 @@ class LocalQueryPlanner:
         # 가리키는지 보고 되물을 종류를 고르며, 마지막에는 "무엇을 알고 싶은지"로
         # 되돌아가므로 언제나 고를 것이 하나는 나온다.
         codes = [code.value for code in missing]
-        return self.choices.for_missing(question, codes)
+        return self.choices.for_missing(question, codes, self._resolved)
 
     def _modes_from_question(self, question: str) -> tuple[SelectionMode, ...]:
         """Derive which selection modes the question's wording actually points at.
@@ -1247,12 +1424,118 @@ class LocalQueryPlanner:
         들지 않으므로 여기서 같은 질문의 선택지를 다시 만들어 그 안의 값인지 대조하고,
         통과한 값만 계획에 잠가 넣는다. 계획 모델이 다른 값을 내도 사용자가 고른 값이
         이긴다.
+
+        **고를 것이 하나뿐이면 묻지 않고 그 값으로 계획을 다시 세운다.** 후보가 하나인
+        것을 되묻는 것은 아는 것을 되묻는 셈이고, 사용자에게 의미 없는 클릭을 시킨다.
+        적재 후보가 하나뿐인 학년도·학과를 되묻지 않는 것과 같은 원칙이다.
         """
 
         if not isinstance(question, str) or not question.strip():
             raise QueryPlanError("question must be a non-empty string")
         question = question.strip()
-        self._resolved = self._accepted_resolved(question, resolved)
+        self._resolved = self._reconciled(self._accepted_resolved(question, resolved))
+        if self._points_at_nothing(question):
+            return PlanningOutcome(status=PlanningStatus.OUT_OF_SCOPE)
+        outcome = self._plan_once(question)
+        for _ in range(MAX_AUTO_ADOPTED_CHOICES):
+            if outcome.status is not PlanningStatus.CLARIFICATION_REQUIRED:
+                return outcome
+            if len(outcome.options) != 1:
+                return outcome
+            only = outcome.options[0]
+            if only.filter_name in self._resolved:
+                return outcome
+            if not self._safe_to_adopt(question, only):
+                return outcome
+            self._resolved[only.filter_name] = only.value
+            outcome = self._plan_once(question)
+        return outcome
+
+    def _points_at_nothing(self, question: str) -> bool:
+        """Whether the question overlaps no loaded fact at all.
+
+        `ㅇ런아러`, `asdfasdf` 처럼 뜻이 없는 입력은 적재된 어느 사실과도 표기가 겹치지
+        않는다. 종전에는 이런 입력도 계획 모델을 거쳐 되묻기로 넘어갔고, 되묻기가 전체
+        메뉴를 내주는 바람에 하나만 고르면 근거가 붙은 `검증된 답변` 까지 갔다. 답에
+        쓰인 사실은 모두 진짜였지만 **아무도 그것을 묻지 않았다.**
+
+        말이 되는 범위 밖 질문(`오늘 점심 뭐 먹지?`)은 계획 모델이 이미 걸러 낸다. 여기서
+        막는 것은 계획 모델이 판단할 거리조차 없는 입력이다. 실측에서 정상 질문 32개 중
+        31개가 이 검사를 통과했고, 걸린 하나(`시간표 알려줘`)는 적재 데이터에 그 개념이
+        없어 거절이 맞는 경우였다.
+
+        되묻기로 값을 고른 뒤에는 검사하지 않는다. 그 값 자체가 적재 데이터에서 나왔고
+        이미 서버가 대조해 통과시킨 것이라, 질문 문장이 짧아도 가리키는 사실이 있다.
+        """
+
+        if self._resolved:
+            return False
+        return not self.fact_index.search(question, limit=1)
+
+    def _settled_mode(self) -> str | None:
+        """The query kind the user's own picks already determine, or ``None``."""
+
+        chosen = self._resolved.get("selection_mode")
+        if isinstance(chosen, str):
+            return chosen
+        for name in self._resolved:
+            implied = FILTER_IMPLIED_MODE.get(name)
+            if implied is not None:
+                return implied.value
+        return None
+
+    @staticmethod
+    def _reconciled(resolved: dict[str, Any]) -> dict[str, Any]:
+        """Let a later, narrower pick refine the query kind the user picked first.
+
+        되묻기가 이어지면 앞에서 고른 조회 종류를 뒤에서 고른 값이 좁힌다. "학사규칙"을
+        고른 뒤 규칙을 **하나** 고르면 그것은 이미 단일 규칙 조회다. 그런데 앞서 고른
+        MULTIPLE_RULES 를 그대로 들고 있으면 계획 계약이 "규칙 두 개 이상"을 요구해
+        깨지고, 사용자는 다 골랐는데도 답을 받지 못한다.
+
+        조회 종류를 추측해서 바꾸는 것이 아니라, 고른 개수가 이미 정해 놓은 종류로
+        맞추는 것뿐이다. 좁혀진 계획도 종전과 똑같이 계약 검증과 근거 검증을 거친다.
+        """
+
+        chosen = resolved.get("selection_mode")
+        rule_ids = resolved.get("rule_ids")
+        if not isinstance(rule_ids, list) or not rule_ids:
+            return resolved
+        narrowed = (
+            SelectionMode.SINGLE_RULE.value
+            if len(rule_ids) == 1
+            else SelectionMode.MULTIPLE_RULES.value
+        )
+        # 조회 종류를 따로 고르지 않았어도 개수가 이미 그것을 정한다. 한 선택지가 여러
+        # 규칙을 함께 담을 수 있게 되면서(같은 라벨로 묶임) `rule_ids` 만 확정된 채
+        # 두 건이 오는 경우가 생겼다. 이때 `FILTER_IMPLIED_MODE` 는 SINGLE_RULE 을
+        # 가리키므로 그대로 두면 "규칙 하나" 계약에 걸려 계획이 깨진다.
+        if (chosen is None or chosen in RULE_SELECTION_MODES) and chosen != narrowed:
+            return {**resolved, "selection_mode": narrowed}
+        return resolved
+
+    def _safe_to_adopt(self, question: str, choice: Choice) -> bool:
+        """Whether picking this single choice for the user cannot answer the wrong thing.
+
+        고를 것이 하나뿐이어도 그것이 질문과 어긋나면 자동으로 채택하면 안 된다.
+
+        **조회 종류는 대신 골라 주지 않는다.** 후보가 하나로 좁혀졌다는 것은 그 종류로만
+        답할 수 있다는 뜻이 아니라 검색이 약하게 걸렸다는 뜻일 수 있다. "무엇을 묻는가"는
+        사용자가 정할 몫이다. 개체(과목·이수요건)가 하나뿐인 경우만 자동으로 채택한다.
+
+        질문이 적재된 과목을 이름으로 지목했는데 남은 후보가 이수요건이라면, 채택하는
+        순간 묻지 않은 것을 답하게 되므로 그때도 사용자에게 보여 주고 고르게 한다.
+        """
+
+        if choice.filter_name in {"selection_mode", REQUESTED_FIELDS}:
+            return False
+        if not self._names_a_course(question):
+            return True
+        return choice.filter_name in COURSE_IDENTIFYING_FILTERS
+
+    def _plan_once(self, question: str) -> PlanningOutcome:
+        """Run one planning pass with the values settled so far."""
+
         attempts: list[PlanningAttempt] = []
         previous_error: str | None = None
         clarification_retried = False
@@ -1264,6 +1547,7 @@ class LocalQueryPlanner:
                     question,
                     self._context_for(question),
                     previous_error=previous_error,
+                    settled_choices=self._resolved,
                 ),
                 response_schema=planner_response_schema(self.catalog),
             )
@@ -1291,6 +1575,22 @@ class LocalQueryPlanner:
                             and self._scope_settled(missing, settled)
                             and not self._ignores_named_course(question, settled)
                         ):
+                            # 이 경로도 READY 로 나가므로 같은 검사를 거쳐야 한다.
+                            # 한쪽에만 두면 계획 모델이 어느 경로로 오느냐에 따라 되묻기가
+                            # 붙거나 말거나 해서 동작이 갈린다.
+                            aspect = self._aspect_clarification(question, settled)
+                            if aspect is not None:
+                                attempts.append(
+                                    self._record(
+                                        index, AttemptOutcome.CLARIFICATION, payload
+                                    )
+                                )
+                                return PlanningOutcome(
+                                    status=PlanningStatus.CLARIFICATION_REQUIRED,
+                                    missing=(MissingScope.COURSE_ASPECT,),
+                                    attempts=tuple(attempts),
+                                    options=aspect,
+                                )
                             attempts.append(
                                 self._record(index, AttemptOutcome.BROADENED, payload)
                             )
@@ -1338,8 +1638,20 @@ class LocalQueryPlanner:
                 # 되묻기를 READY 로 바꿀 때만 이 검사를 했고 계획 모델이 곧바로 READY 를
                 # 내면 걸러지지 않았다. 계약 위반으로 되돌려 다시 계획하게 한다.
                 if self._ignores_named_course(question, plan_payload):
-                    raise QueryPlanError(
-                        "the question names a loaded course but the plan does not filter on it"
+                    raise QueryPlanError(self._named_course_error(question))
+                # 어느 과목인지는 정해졌는데 그 과목의 **무엇을** 묻는지가 비어 있으면,
+                # 개설 정보를 통째로 답하는 대신 고르게 한다. 이때 선택지 라벨은 `학점`
+                # 이고 답은 `3학점` 이라 서로 달라, 고르는 행위가 질문을 실제로 좁힌다.
+                aspect = self._aspect_clarification(question, plan_payload)
+                if aspect is not None:
+                    attempts.append(
+                        self._record(index, AttemptOutcome.CLARIFICATION, payload)
+                    )
+                    return PlanningOutcome(
+                        status=PlanningStatus.CLARIFICATION_REQUIRED,
+                        missing=(MissingScope.COURSE_ASPECT,),
+                        attempts=tuple(attempts),
+                        options=aspect,
                     )
                 attempts.append(self._record(index, AttemptOutcome.ACCEPTED, payload))
                 return PlanningOutcome(
