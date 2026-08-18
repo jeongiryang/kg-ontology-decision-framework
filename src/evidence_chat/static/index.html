@@ -72,6 +72,12 @@
         </div>
         <blockquote class="asked" id="asked"></blockquote>
         <ol class="steps progress-steps" id="progress-steps" aria-label="실제 처리 단계"></ol>
+        <section
+          class="exploration"
+          id="progress-exploration"
+          aria-label="실시간 지식그래프 탐색"
+          hidden
+        ></section>
         <p class="notice error" id="progress-error" hidden></p>
         <button class="ghost" id="progress-back" type="button">요청 취소</button>
       </div>
@@ -103,6 +109,13 @@
           <p class="scope-notice" id="scope-notice" hidden></p>
           <p class="debug-meta" id="debug-meta" hidden></p>
         </article>
+
+        <section
+          class="exploration"
+          id="answer-exploration"
+          aria-label="승인된 질의와 지식그래프 탐색"
+          hidden
+        ></section>
 
         <details class="debug" id="timeline-section" hidden open>
           <summary>처리 과정 보기</summary>

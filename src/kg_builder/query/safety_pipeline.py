@@ -263,6 +263,7 @@ class SafetyPipeline:
                 evidence_status_verified=True,
                 direct_provenance_verified=True,
                 rejected_row_count=0,
+                validated_rows=result.rows,
             )
         except Exception as exc:
             emit_progress(

@@ -135,7 +135,8 @@ QUESTION_ANALYSIS → SCHEMA_SELECTION → CYPHER_GENERATION
 
 각 실제 단계 행은 기본적으로 접힌 disclosure button이다. 키보드로 열고 닫을 수 있으며
 `aria-expanded`와 `aria-controls`가 연결된다. 완료된 행은 답변 화면에도 남는다. 상세
-정보가 없는 단계에는 임의 설명을 만들지 않고 상태·실제 소요시간만 표시한다.
+정보가 없는 단계에는 disclosure를 만들거나 임의 설명을 생성하지 않고 상태·실제
+소요시간만 표시한다.
 
 `KG_CHAT_SHOW_QUERY_DETAILS=true`일 때만 단계 disclosure에 정제된 QueryPlan, 선택
 스키마, 승인된 읽기 전용 Cypher, 정제된 파라미터, EXPLAIN 연산자,
@@ -150,6 +151,19 @@ Cypher는 lexer가 실제 주석을 제거한 comment-free canonical 문자열�
 
 승인된 Cypher는 가로 스크롤, 접기·펼치기와 키보드 접근 가능한 복사 버튼을 제공한다. 검증 전·실패 후보 Cypher, 접속 URI·계정, 로컬 경로, 비밀번호·토큰·API key, system prompt, 모델 원문, traceback, 내부 승인 seal·digest는 상세 모드에서도 포함하지 않는다. sealed `ChatResponse` 8필드는 변경하지 않는다.
 
+상세 모드에는 단계 목록과 별도로 `선택 스키마`, `승인 Cypher`, `조회 그래프` 탭을
+제공한다. 실제 callback에서 데이터가 확정된 탭만 활성화하며 처리 중과 답변 완료 후에
+같은 추적 상태를 유지한다. 스키마 선택 뒤에는 실제 선택 label·relationship projection,
+동일 후보의 정적 검증과 EXPLAIN 승인 뒤에는 canonical Cypher와 질의 구조, 결과 검증
+뒤에는 `VERIFIED` Fact, Claim 승인 뒤에는 직접 `Fact ─SUPPORTED_BY→ Evidence`
+provenance가 순서대로 나타난다. 이는 Neo4j 내부 실행 이벤트나 모델의 생각을 재현하는
+기능이 아니라, 관찰 가능한 승인 산출물을 단계에 맞춰 재생하는 presentation이다.
+
+그래프의 node fade와 승인 경로 pulse는 새 승인 projection을 처음 그릴 때만 실행한다.
+재시도에서 실패한 후보는 projection을 만들지 않으며 이전 후보의 임시 상태도 버린다.
+취소·실패 시에는 마지막으로 실제 승인된 정보까지만 남는다. 운영체제의
+`prefers-reduced-motion` 설정이 켜져 있으면 이동 애니메이션 없이 상태만 갱신한다.
+
 ## inspection 그래프 projection
 
 상세 모드의 그래프는 Neo4j 전체 데이터를 탐색하지 않고 이미 승인된 런타임 산출물을
@@ -157,6 +171,11 @@ Cypher는 lexer가 실제 주석을 제거한 comment-free canonical 문자열�
 
 - 질의 구조 그래프는 EXPLAIN까지 통과한 canonical Cypher의 label·relationship을
   generated schema catalog에 다시 대조해 만든다.
+- 선택 스키마 그래프는 `SCHEMA_SELECTION` callback이 확정한 label·relationship만
+  같은 schema catalog에 대조해 만든다. 아직 생성되거나 승인되지 않은 Cypher를
+  참조하지 않는다.
+- 조회 Fact 그래프는 Graph 실행 행을 곧바로 공개하지 않고 ResultValidator가 모든 행의
+  Fact·Evidence 상태와 직접 provenance를 승인한 뒤에만 `VERIFIED` Fact를 만든다.
 - 결과 provenance 그래프는 ResultValidator를 통과한 `VERIFIED` 행과
   ClaimValidator가 승인한 `(fact_id, evidence_id)` 집합이 정확히 일치할 때만 만든다.
 - 결과 edge는 직접 `SUPPORTED_BY`만 허용한다. 승인 전 행, 사용하지 않은 Evidence,
@@ -165,11 +184,14 @@ Cypher는 lexer가 실제 주석을 제거한 comment-free canonical 문자열�
   element ID, Fact/Evidence ID, 승인 seal·digest는 envelope에 포함하지 않는다.
 - 노출 필드는 표시명, node type, 검증 상태와 Evidence의 발췌 페이지만이다.
 
-versioned `inspection_update` 하위의 `query_graph`와 `provenance_graph`는 presentation
-전용이다. 답변이나 Citation을 변경할 권한이 없으며 sealed `ChatResponse`에는 추가되지
-않는다. 브라우저는 외부 라이브러리 없이 SVG DOM API와 결정론적 type-column 레이아웃을
-사용한다. 확대·축소·화면 맞춤·초기화, 키보드 node 선택과 관계 목록 fallback을 제공하며,
-좁은 화면에서는 세로 배치와 내부 스크롤을 사용한다.
+versioned `inspection_update` 하위의 `schema_graph`, `query_graph`, `fact_graph`,
+`provenance_graph`는 presentation 전용이다. 답변이나 Citation을 변경할 권한이 없으며
+sealed `ChatResponse`에는 추가되지 않는다. 브라우저는 외부 라이브러리 없이 반응형 SVG
+`viewBox`, 결정론적 type-column 레이아웃과 `ResizeObserver`를 사용한다. 기본 화면은
+컨테이너 너비에 맞추고 확대했을 때만 pan·가로 스크롤을 허용한다. 긴 node 이름은 두 줄
+뒤 ellipsis와 SVG title로 보존하고 관계 label은 배경 상자와 offset으로 edge와 분리한다.
+확대·축소·화면 맞춤·초기화, 키보드 node 선택과 관계 목록 fallback을 제공하며 좁은
+화면에서는 위에서 아래로 배치한다.
 
 ## Citation과 PDF 표시
 

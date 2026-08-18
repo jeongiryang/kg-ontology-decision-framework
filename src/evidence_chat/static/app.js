@@ -25,6 +25,7 @@ const el = {
   elapsed: $("elapsed"),
   asked: $("asked"),
   progressSteps: $("progress-steps"),
+  progressExploration: $("progress-exploration"),
   answerQuestion: $("answer-question"),
   answerBadge: $("answer-badge"),
   answerTitle: $("answer-title"),
@@ -36,6 +37,7 @@ const el = {
   debugMeta: $("debug-meta"),
   timelineSection: $("timeline-section"),
   answerProgressSteps: $("answer-progress-steps"),
+  answerExploration: $("answer-exploration"),
   evidenceSection: $("evidence-section"),
   evidenceSummary: $("evidence-summary"),
   evidencePages: $("evidence-pages"),
@@ -66,11 +68,24 @@ let modalZoom = 1;
 let queryDetailsEnabled = false;
 let timelineEvents = [];
 let inspectionUpdates = new Map();
-let approvedInspection = null;
 let expandedStages = new Set();
 let graphScales = new Map();
+let animatedGraphs = new Set();
+let activeExplorationTab = "schema";
+let explorationTabPinned = false;
 let lastResult = null;
 let clarificationPresentation = null;
+const graphResizeObserver = typeof window.ResizeObserver === "function"
+  ? new window.ResizeObserver((entries) => {
+      entries.forEach((entry) => {
+        if (!entry.target.isConnected) {
+          graphResizeObserver.unobserve(entry.target);
+        } else if (typeof entry.target.fitGraph === "function") {
+          entry.target.fitGraph();
+        }
+      });
+    })
+  : null;
 
 const span = (className, text) => {
   const node = document.createElement("span");
@@ -256,9 +271,11 @@ async function ask(question) {
   el.progressNow.textContent = "질문 전송됨";
   timelineEvents = [];
   inspectionUpdates = new Map();
-  approvedInspection = null;
   expandedStages = new Set();
   graphScales = new Map();
+  animatedGraphs = new Set();
+  activeExplorationTab = "schema";
+  explorationTabPinned = false;
   lastResult = null;
   clarificationPresentation = null;
   renderTimelines();
@@ -412,6 +429,7 @@ function renderTimelines() {
   renderTimelineInto(el.progressSteps);
   renderTimelineInto(el.answerProgressSteps);
   el.timelineSection.hidden = timelineEvents.length === 0;
+  renderExplorationPanels();
 }
 
 function renderTimelineInto(container) {
@@ -434,33 +452,39 @@ function renderTimelineInto(container) {
       : event.message;
     const key = `${event.phase}:${event.attempt}`;
     const disclosureId = `${container.id}-${event.phase.toLowerCase()}-${event.attempt}`;
-    const expanded = expandedStages.has(key);
-    const button = document.createElement("button");
-    button.type = "button";
-    button.className = "step-toggle";
-    button.setAttribute("aria-expanded", String(expanded));
-    button.setAttribute("aria-controls", disclosureId);
-    button.append(span("step-icon", icon), span("step-label", labelText));
-    button.append(
+    const hasDetails = stageHasDetails(event);
+    const expanded = hasDetails && expandedStages.has(key);
+    const row = document.createElement(hasDetails ? "button" : "div");
+    if (hasDetails) row.type = "button";
+    row.className = `step-toggle${hasDetails ? "" : " is-static"}`;
+    if (hasDetails) {
+      row.setAttribute("aria-expanded", String(expanded));
+      row.setAttribute("aria-controls", disclosureId);
+    }
+    row.append(span("step-icon", icon), span("step-label", labelText));
+    row.append(
       span(
         "step-time",
         event.state !== "STARTED" && Number.isFinite(event.elapsed_ms)
           ? `${event.elapsed_ms}ms`
           : ""
       ),
-      span("step-chevron", "⌄")
+      span("step-chevron", hasDetails ? "⌄" : "")
     );
-    const disclosure = document.createElement("div");
-    disclosure.id = disclosureId;
-    disclosure.className = "step-disclosure";
-    disclosure.hidden = !expanded;
-    renderStageDetail(disclosure, event);
-    button.addEventListener("click", () => {
-      if (expandedStages.has(key)) expandedStages.delete(key);
-      else expandedStages.add(key);
-      renderTimelines();
-    });
-    item.append(button, disclosure);
+    item.append(row);
+    if (hasDetails) {
+      const disclosure = document.createElement("div");
+      disclosure.id = disclosureId;
+      disclosure.className = "step-disclosure";
+      disclosure.hidden = !expanded;
+      renderStageDetail(disclosure, event);
+      row.addEventListener("click", () => {
+        if (expandedStages.has(key)) expandedStages.delete(key);
+        else expandedStages.add(key);
+        renderTimelines();
+      });
+      item.append(disclosure);
+    }
     container.append(item);
   });
 }
@@ -474,10 +498,29 @@ function latestInspection(stage) {
 }
 
 function stageInspection(event) {
-  return (
-    inspectionUpdates.get(inspectionKey(event.phase, event.attempt)) ||
-    latestInspection(event.phase)
-  );
+  if (event.attempt > 0) {
+    return inspectionUpdates.get(inspectionKey(event.phase, event.attempt)) || null;
+  }
+  return inspectionUpdates.get(inspectionKey(event.phase, 0)) || null;
+}
+
+function stageHasDetails(event) {
+  const inspection = stageInspection(event);
+  if (!inspection || !inspection.summary || inspection.status === "FAILED") return false;
+  const summary = inspection.summary;
+  const allowed = {
+    QUESTION_ANALYSIS: Boolean(summary.status || summary.query_plan),
+    SCHEMA_SELECTION: Array.isArray(summary.labels) && summary.labels.length > 0,
+    CYPHER_GENERATION: Boolean(summary.message),
+    STATIC_VALIDATION: summary.read_only_syntax_verified === true,
+    NEO4J_EXPLAIN: typeof summary.approved_cypher === "string",
+    GRAPH_EXECUTION: Number.isInteger(summary.row_count),
+    RESULT_VALIDATION: summary.direct_provenance_verified === true,
+    CLAIM_BUILDING: Number.isInteger(summary.claim_count),
+    ANSWER_RENDERING: Number.isInteger(summary.citation_count),
+    COMPLETED: Boolean(summary.final_status),
+  };
+  return Boolean(allowed[event.phase]);
 }
 
 function addDetailFacts(container, values) {
@@ -495,17 +538,6 @@ function addDetailFacts(container, values) {
 }
 
 function renderStageDetail(container, event) {
-  addDetailFacts(container, {
-    "단계 상태": {
-      STARTED: "진행 중",
-      COMPLETED: "완료",
-      FAILED: "실패",
-      CANCELLED: "취소됨",
-    }[event.state] || event.state,
-    "후보 시도": event.attempt > 0 ? event.attempt : null,
-    "실제 소요시간": Number.isFinite(event.elapsed_ms) ? `${event.elapsed_ms}ms` : null,
-    "공개 오류 코드": event.error_code || null,
-  });
   const inspection = stageInspection(event);
   const summary = inspection ? inspection.summary : null;
   if (!summary) return;
@@ -534,6 +566,7 @@ function renderStageDetail(container, event) {
     });
     addInspectionItem(container, "선택 node label", summary.labels || []);
     addInspectionItem(container, "선택 relationship type", summary.relationships || []);
+    addExplorationLink(container, "선택 스키마 보기", "schema");
   } else if (event.phase === "CYPHER_GENERATION") {
     addDetailFacts(container, {
       "후보 attempt": summary.candidate_attempt,
@@ -553,23 +586,13 @@ function renderStageDetail(container, event) {
     event.phase === "NEO4J_EXPLAIN" &&
     typeof summary.approved_cypher === "string"
   ) {
-    addInspectionItem(
-      container,
-      "LLM 생성 후 안전 검증된 Cypher",
-      summary.approved_cypher,
-      { cypher: true }
-    );
-    addInspectionItem(container, "정제된 파라미터", summary.parameters);
-    addInspectionItem(container, "EXPLAIN 연산자", summary.operators);
     addDetailFacts(container, {
-      "사용 label": (summary.labels || []).join(", "),
-      "사용 relationship": (summary.relationships || []).join(", "),
+      "EXPLAIN 연산자": (summary.operators || []).join(", "),
       "LIMIT": summary.limit,
     });
-    renderGraphPanel(container, "질의 구조 그래프", summary.query_graph);
+    addExplorationLink(container, "승인 Cypher 보기", "cypher");
   } else if (event.phase === "GRAPH_EXECUTION") {
     const validation = latestInspection("RESULT_VALIDATION");
-    const claims = latestInspection("CLAIM_BUILDING");
     addDetailFacts(container, {
       "반환 행": summary.row_count,
       "고유 Fact": validation ? validation.summary.fact_count : null,
@@ -580,11 +603,7 @@ function renderStageDetail(container, event) {
         ? `${summary.query_elapsed_ms}ms`
         : null,
     });
-    renderGraphPanel(
-      container,
-      "결과 provenance 그래프",
-      claims ? claims.summary.provenance_graph : null
-    );
+    addExplorationLink(container, "조회 그래프 보기", "graph");
   } else if (event.phase === "RESULT_VALIDATION") {
     addDetailFacts(container, {
       "VERIFIED Fact": summary.fact_count,
@@ -649,7 +668,6 @@ function renderInspectionUpdate(update) {
   if (!update || update.type !== "inspection_update" || update.version !== 2) return;
   if (!queryDetailsEnabled) return;
   if (update.summary && update.summary.discard_previous_candidate) {
-    approvedInspection = null;
     [...inspectionUpdates.keys()].forEach((key) => {
       if (
         key.startsWith("NEO4J_EXPLAIN:") ||
@@ -661,17 +679,6 @@ function renderInspectionUpdate(update) {
       }
     });
   }
-  if (
-    update.stage === "NEO4J_EXPLAIN" &&
-    update.status === "COMPLETED" &&
-    update.summary &&
-    typeof update.summary.approved_cypher === "string"
-  ) {
-    approvedInspection = update.summary;
-  }
-  if (update.stage === "NEO4J_EXPLAIN" && update.status === "FAILED") {
-    approvedInspection = null;
-  }
   const attempt = Number.isInteger(update.attempt) ? update.attempt : 0;
   inspectionUpdates.set(inspectionKey(update.stage, attempt), {
     stage: update.stage,
@@ -680,11 +687,208 @@ function renderInspectionUpdate(update) {
     elapsed_ms: update.elapsed_ms,
     summary: update.summary || {},
   });
+  if (!explorationTabPinned && update.status === "COMPLETED") {
+    if (update.stage === "SCHEMA_SELECTION") activeExplorationTab = "schema";
+    if (["NEO4J_EXPLAIN", "RESULT_VALIDATION", "CLAIM_BUILDING"].includes(update.stage)) {
+      activeExplorationTab = "graph";
+    }
+  }
   renderInspectionPanels();
 }
 
 function renderInspectionPanels() {
   renderTimelines();
+}
+
+function addExplorationLink(container, label, tab) {
+  const button = document.createElement("button");
+  button.type = "button";
+  button.className = "stage-jump";
+  button.textContent = label;
+  button.addEventListener("click", () => {
+    activeExplorationTab = tab;
+    explorationTabPinned = true;
+    renderExplorationPanels();
+    const target = el.screens.answer.classList.contains("is-active")
+      ? el.answerExploration
+      : el.progressExploration;
+    target.scrollIntoView({ behavior: "smooth", block: "start" });
+  });
+  container.append(button);
+}
+
+function explorationState() {
+  const schema = latestInspection("SCHEMA_SELECTION");
+  const explain = latestInspection("NEO4J_EXPLAIN");
+  const result = latestInspection("RESULT_VALIDATION");
+  const claims = latestInspection("CLAIM_BUILDING");
+  return {
+    schema: schema && schema.status === "COMPLETED" ? schema.summary : null,
+    explain: explain && explain.status === "COMPLETED" ? explain.summary : null,
+    result: result && result.status === "COMPLETED" ? result.summary : null,
+    claims: claims && claims.status === "COMPLETED" ? claims.summary : null,
+  };
+}
+
+function renderExplorationPanels() {
+  [el.progressExploration, el.answerExploration].forEach((container) => {
+    renderExplorationPanel(container);
+  });
+}
+
+function renderExplorationPanel(container) {
+  if (graphResizeObserver) {
+    container.querySelectorAll(".graph-viewport").forEach((viewport) => {
+      graphResizeObserver.unobserve(viewport);
+    });
+  }
+  container.replaceChildren();
+  container.hidden = !queryDetailsEnabled;
+  if (!queryDetailsEnabled) return;
+
+  const state = explorationState();
+  const availability = {
+    schema: Boolean(state.schema && state.schema.schema_graph),
+    cypher: Boolean(state.explain && typeof state.explain.approved_cypher === "string"),
+    graph: Boolean(
+      (state.explain && state.explain.query_graph) ||
+      (state.result && state.result.fact_graph) ||
+      (state.claims && state.claims.provenance_graph)
+    ),
+  };
+  const availableTabs = Object.keys(availability).filter((key) => availability[key]);
+  if (!availability[activeExplorationTab] && availableTabs.length) {
+    activeExplorationTab = availableTabs[0];
+  }
+
+  const head = document.createElement("div");
+  head.className = "exploration-head";
+  const title = document.createElement("h3");
+  title.textContent = "지식그래프 탐색";
+  const description = document.createElement("p");
+  description.textContent =
+    "실제 파이프라인에서 선택·검증·승인된 projection만 단계에 맞춰 표시합니다.";
+  head.append(title, description);
+
+  const tabs = document.createElement("div");
+  tabs.className = "exploration-tabs";
+  tabs.setAttribute("role", "tablist");
+  tabs.setAttribute("aria-label", "질의 추적 상세");
+  const labels = {
+    schema: "선택 스키마",
+    cypher: "승인 Cypher",
+    graph: "조회 그래프",
+  };
+  Object.entries(labels).forEach(([key, label]) => {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.id = `${container.id}-tab-${key}`;
+    button.setAttribute("role", "tab");
+    button.setAttribute("aria-selected", String(activeExplorationTab === key));
+    button.setAttribute("aria-controls", `${container.id}-panel`);
+    button.disabled = !availability[key];
+    button.title = availability[key]
+      ? `${label} 보기`
+      : "아직 해당 단계가 완료되지 않았습니다";
+    button.textContent = label;
+    button.addEventListener("click", () => {
+      activeExplorationTab = key;
+      explorationTabPinned = true;
+      renderExplorationPanels();
+    });
+    tabs.append(button);
+  });
+
+  const pending = document.createElement("p");
+  pending.className = "exploration-pending";
+  pending.setAttribute("role", "status");
+  const waiting = Object.entries(labels)
+    .filter(([key]) => !availability[key])
+    .map(([, label]) => label);
+  pending.textContent = waiting.length
+    ? `${waiting.join(" · ")}: 아직 해당 단계가 완료되지 않았습니다.`
+    : "모든 추적 정보가 실제 승인 단계까지 완료되었습니다.";
+
+  const panel = document.createElement("div");
+  panel.id = `${container.id}-panel`;
+  panel.className = "exploration-panel";
+  panel.setAttribute("role", "tabpanel");
+  panel.setAttribute("aria-labelledby", `${container.id}-tab-${activeExplorationTab}`);
+  if (!availableTabs.length) {
+    const empty = document.createElement("p");
+    empty.className = "exploration-empty";
+    empty.textContent = "실제 스키마 선택 callback을 기다리고 있습니다.";
+    panel.append(empty);
+  } else if (activeExplorationTab === "schema") {
+    renderSchemaTab(panel, state.schema);
+  } else if (activeExplorationTab === "cypher") {
+    renderCypherTab(panel, state.explain);
+  } else {
+    renderGraphTab(panel, state);
+  }
+  container.append(head, tabs, pending, panel);
+}
+
+function addBadges(container, title, values, kind) {
+  if (!Array.isArray(values) || !values.length) return;
+  const group = document.createElement("section");
+  group.className = "badge-group";
+  const heading = document.createElement("h4");
+  heading.textContent = title;
+  const list = document.createElement("ul");
+  values.forEach((value) => {
+    const item = document.createElement("li");
+    item.className = `schema-badge is-${kind}`;
+    item.textContent = value;
+    list.append(item);
+  });
+  group.append(heading, list);
+  container.append(group);
+}
+
+function renderSchemaTab(container, summary) {
+  if (!summary) return;
+  addBadges(container, "선택된 node label", summary.labels, "node");
+  addBadges(container, "선택된 relationship type", summary.relationships, "relationship");
+  renderGraphPanel(container, "선택된 온톨로지 구조", summary.schema_graph);
+}
+
+function renderCypherTab(container, summary) {
+  if (!summary || typeof summary.approved_cypher !== "string") return;
+  addInspectionItem(
+    container,
+    "LLM 생성 후 안전 검증된 canonical Cypher",
+    summary.approved_cypher,
+    { cypher: true }
+  );
+  addInspectionItem(container, "정제된 파라미터", summary.parameters);
+  addInspectionItem(container, "EXPLAIN 연산자", summary.operators);
+  addDetailFacts(container, {
+    "사용 label": (summary.labels || []).join(", "),
+    "사용 relationship": (summary.relationships || []).join(", "),
+    "LIMIT": summary.limit,
+  });
+}
+
+function renderGraphTab(container, state) {
+  const note = document.createElement("p");
+  note.className = "projection-note";
+  note.textContent =
+    "현재 질문에 대해 실제 승인된 구조와 VERIFIED provenance만 표시한 projection입니다.";
+  container.append(note);
+  if (state.explain && state.explain.query_graph) {
+    renderGraphPanel(container, "1. 질의 구조", state.explain.query_graph);
+  }
+  if (state.result && state.result.fact_graph) {
+    renderGraphPanel(container, "2. ResultValidator 승인 Fact", state.result.fact_graph);
+  }
+  if (state.claims && state.claims.provenance_graph) {
+    renderGraphPanel(
+      container,
+      "3. 조회 결과와 VERIFIED Evidence",
+      state.claims.provenance_graph
+    );
+  }
 }
 
 function addInspectionItem(container, label, value, options = {}) {
@@ -756,7 +960,12 @@ function graphProjectionIsSafe(graph) {
   if (
     !graph ||
     graph.version !== 1 ||
-    !["QUERY_STRUCTURE", "RESULT_PROVENANCE"].includes(graph.kind) ||
+    ![
+      "SELECTED_SCHEMA",
+      "QUERY_STRUCTURE",
+      "RESULT_FACTS",
+      "RESULT_PROVENANCE",
+    ].includes(graph.kind) ||
     !Array.isArray(graph.nodes) ||
     !Array.isArray(graph.edges) ||
     graph.nodes.length > 200 ||
@@ -771,7 +980,9 @@ function graphProjectionIsSafe(graph) {
       ids.has(node.id) ||
       typeof node.display_name !== "string" ||
       typeof node.node_type !== "string" ||
-      !["SCHEMA_APPROVED", "VERIFIED"].includes(node.verification_status)
+      !["SCHEMA_SELECTED", "SCHEMA_APPROVED", "VERIFIED"].includes(
+        node.verification_status
+      )
     ) return false;
     ids.add(node.id);
   }
@@ -813,6 +1024,41 @@ function renderGraphFallback(container, graph) {
   container.append(fallback);
 }
 
+function graphLabelLines(value) {
+  const text = String(value || "").replace(/\s+/g, " ").trim();
+  if (text.length <= 18) return [text];
+  const remainder = text.slice(18);
+  return [
+    text.slice(0, 18),
+    remainder.length > 18 ? `${remainder.slice(0, 17)}…` : remainder,
+  ];
+}
+
+function graphEdgeGeometry(source, target, nodeWidth, nodeHeight, mobile, offset) {
+  if (mobile || source.x === target.x) {
+    const x1 = source.x + nodeWidth / 2;
+    const y1 = source.y + nodeHeight;
+    const x2 = target.x + nodeWidth / 2;
+    const y2 = target.y;
+    const middle = (y1 + y2) / 2;
+    return {
+      path: `M ${x1} ${y1} C ${x1} ${middle}, ${x2} ${middle}, ${x2} ${y2}`,
+      labelX: x1 + 76 + offset,
+      labelY: middle - 7,
+    };
+  }
+  const x1 = source.x + nodeWidth;
+  const y1 = source.y + nodeHeight / 2;
+  const x2 = target.x;
+  const y2 = target.y + nodeHeight / 2;
+  const middle = (x1 + x2) / 2;
+  return {
+    path: `M ${x1} ${y1} C ${middle} ${y1}, ${middle} ${y2}, ${x2} ${y2}`,
+    labelX: middle,
+    labelY: (y1 + y2) / 2 - 12 + offset,
+  };
+}
+
 function renderGraphPanel(container, title, graph) {
   if (!graph) return;
   const panel = document.createElement("section");
@@ -827,18 +1073,25 @@ function renderGraphPanel(container, title, graph) {
   }
   try {
     const graphKey = `${graph.kind}:${graph.nodes.map((node) => node.id).join("|")}`;
+    const animate = !animatedGraphs.has(graphKey);
     const controls = document.createElement("div");
     controls.className = "graph-controls";
     const viewport = document.createElement("div");
     viewport.className = "graph-viewport";
     viewport.tabIndex = 0;
     viewport.setAttribute("aria-label", `${title} 이동 영역`);
+    const canvas = document.createElement("div");
+    canvas.className = "graph-canvas";
     const svg = svgNode("svg", { role: "img", "aria-label": title });
     const mobile = window.matchMedia("(max-width: 640px)").matches;
     const positions = new Map();
     const columns = new Map();
     graph.nodes.forEach((node) => {
-      const column = mobile ? 0 : graphColumn(node);
+      const column = mobile
+        ? 0
+        : graph.kind === "RESULT_FACTS"
+          ? 0
+          : graphColumn(node);
       if (!columns.has(column)) columns.set(column, []);
       columns.get(column).push(node);
     });
@@ -850,25 +1103,29 @@ function renderGraphPanel(container, title, graph) {
         )
       )
     );
-    const nodeWidth = mobile ? 250 : 220;
-    const nodeHeight = 66;
-    const xGap = mobile ? 0 : 300;
-    const yGap = mobile ? 104 : 96;
+    const orderedColumns = [...columns.keys()].sort((left, right) => left - right);
+    const columnIndex = new Map(
+      orderedColumns.map((column, index) => [column, index])
+    );
+    const nodeWidth = mobile ? 244 : 218;
+    const nodeHeight = 86;
+    const xGap = mobile ? 0 : 290;
+    const yGap = mobile ? 132 : 118;
     let maxRows = 1;
     [...columns.entries()].forEach(([column, nodes]) => {
       maxRows = Math.max(maxRows, nodes.length);
       nodes.forEach((node, index) => {
         positions.set(node.id, {
-          x: 40 + column * xGap,
-          y: 44 + index * yGap,
+          x: 52 + columnIndex.get(column) * xGap,
+          y: 52 + index * yGap,
         });
       });
     });
-    const width = mobile ? 330 : Math.max(340, Math.max(...columns.keys()) * xGap + 300);
-    const height = Math.max(180, maxRows * yGap + 48);
+    const width = mobile ? 348 : Math.max(348, orderedColumns.length * xGap + 44);
+    const height = Math.max(210, maxRows * yGap + 56);
     svg.setAttribute("viewBox", `0 0 ${width} ${height}`);
-    svg.setAttribute("width", String(width));
-    svg.setAttribute("height", String(height));
+    svg.setAttribute("preserveAspectRatio", "xMidYMin meet");
+    svg.style.aspectRatio = `${width} / ${height}`;
 
     const definitions = svgNode("defs");
     const marker = svgNode("marker", {
@@ -887,58 +1144,119 @@ function renderGraphPanel(container, title, graph) {
 
     const edgeLayer = svgNode("g", { class: "graph-edges" });
     const nodeLayer = svgNode("g", { class: "graph-nodes" });
-    graph.edges.forEach((edge) => {
+    graph.edges.forEach((edge, index) => {
       const source = positions.get(edge.source);
       const target = positions.get(edge.target);
       if (!source || !target) return;
-      const horizontal = !mobile && target.x !== source.x;
-      const x1 = horizontal ? source.x + nodeWidth : source.x + nodeWidth / 2;
-      const y1 = horizontal ? source.y + nodeHeight / 2 : source.y + nodeHeight;
-      const x2 = horizontal ? target.x : target.x + nodeWidth / 2;
-      const y2 = horizontal ? target.y + nodeHeight / 2 : target.y;
-      const line = svgNode("line", {
-        x1,
-        y1,
-        x2,
-        y2,
-        class: "graph-edge",
+      const geometry = graphEdgeGeometry(
+        source,
+        target,
+        nodeWidth,
+        nodeHeight,
+        mobile,
+        ((index % 3) - 1) * 14
+      );
+      const edgeClasses = ["graph-edge"];
+      if (animate && graph.kind === "QUERY_STRUCTURE") {
+        edgeClasses.push("is-query-pulse");
+      }
+      if (animate && graph.kind === "RESULT_PROVENANCE") {
+        edgeClasses.push("is-provenance-pulse");
+      }
+      const path = svgNode("path", {
+        d: geometry.path,
+        class: edgeClasses.join(" "),
         "marker-end": `url(#${marker.id})`,
       });
+      if (animate) path.style.animationDelay = `${index * 90}ms`;
+      const relationshipLabel = edge.relationship.length > 22
+        ? `${edge.relationship.slice(0, 21)}…`
+        : edge.relationship;
+      const labelWidth = Math.min(
+        178,
+        Math.max(70, relationshipLabel.length * 7 + 18)
+      );
+      const labelX = Math.min(
+        width - labelWidth / 2 - 8,
+        Math.max(labelWidth / 2 + 8, geometry.labelX)
+      );
+      const labelGroup = svgNode("g", { class: "graph-edge-label-group" });
+      const labelTitle = svgNode("title");
+      labelTitle.textContent = edge.relationship;
+      const labelBox = svgNode("rect", {
+        x: labelX - labelWidth / 2,
+        y: geometry.labelY - 13,
+        width: labelWidth,
+        height: 22,
+        rx: 6,
+        ry: 6,
+      });
       const label = svgNode("text", {
-        x: (x1 + x2) / 2,
-        y: (y1 + y2) / 2 - 6,
+        x: labelX,
+        y: geometry.labelY + 2,
         class: "graph-edge-label",
         "text-anchor": "middle",
       });
-      label.textContent = edge.relationship;
-      edgeLayer.append(line, label);
+      label.textContent = relationshipLabel;
+      labelGroup.append(labelTitle, labelBox, label);
+      edgeLayer.append(path, labelGroup);
     });
 
     const selected = document.createElement("p");
     selected.className = "graph-selected";
     selected.textContent = "노드를 선택하면 공개 가능한 상세가 표시됩니다.";
-    graph.nodes.forEach((node) => {
+    graph.nodes.forEach((node, index) => {
       const position = positions.get(node.id);
+      const animationClasses = ["graph-node-visual"];
+      if (animate && graph.kind === "SELECTED_SCHEMA") {
+        animationClasses.push("is-discovered");
+      }
+      if (animate && graph.kind === "RESULT_FACTS") {
+        animationClasses.push("is-result-appearing");
+      }
+      if (
+        animate &&
+        graph.kind === "RESULT_PROVENANCE" &&
+        node.node_type === "Evidence"
+      ) {
+        animationClasses.push("is-evidence-appearing");
+      }
       const group = svgNode("g", {
         class: "graph-node",
         tabindex: 0,
         role: "button",
-        "aria-label": `${node.display_name}, ${node.node_type}`,
+        "aria-label": `${node.display_name}, ${node.node_type}, ${node.verification_status}`,
         "data-kind": graphCategory(node.node_type),
         transform: `translate(${position.x} ${position.y})`,
       });
+      const visual = svgNode("g", { class: animationClasses.join(" ") });
+      if (animate) visual.style.animationDelay = `${index * 70}ms`;
+      const tooltip = svgNode("title");
+      tooltip.textContent = `${node.display_name} · ${node.node_type}`;
       const box = svgNode("rect", {
         width: nodeWidth,
         height: nodeHeight,
         rx: 11,
         ry: 11,
       });
-      const name = svgNode("text", { x: 12, y: 26, class: "graph-node-name" });
-      name.textContent = node.display_name.length > 28
-        ? `${node.display_name.slice(0, 27)}…`
-        : node.display_name;
-      const type = svgNode("text", { x: 12, y: 49, class: "graph-node-type" });
+      const name = svgNode("text", { x: 12, y: 25, class: "graph-node-name" });
+      graphLabelLines(node.display_name).forEach((line, lineIndex) => {
+        const textLine = svgNode("tspan", {
+          x: 12,
+          dy: lineIndex === 0 ? 0 : 18,
+        });
+        textLine.textContent = line;
+        name.append(textLine);
+      });
+      const type = svgNode("text", { x: 12, y: 69, class: "graph-node-type" });
       type.textContent = node.node_type;
+      const verified = svgNode("text", {
+        x: nodeWidth - 14,
+        y: 20,
+        class: "graph-node-check",
+        "text-anchor": "end",
+      });
+      verified.textContent = node.citation_used ? "✓ 근거" : "✓";
       const selectNode = () => {
         const page = Number.isInteger(node.excerpt_page)
           ? ` · 발췌 PDF ${node.excerpt_page}쪽`
@@ -952,17 +1270,19 @@ function renderGraphPanel(container, title, graph) {
           selectNode();
         }
       });
-      group.append(box, name, type);
+      visual.append(box, name, type, verified);
+      group.append(tooltip, visual);
       nodeLayer.append(group);
     });
     svg.append(edgeLayer, nodeLayer);
-    viewport.append(svg);
+    canvas.append(svg);
+    viewport.append(canvas);
 
     const setScale = (next) => {
       const scale = Math.min(2, Math.max(0.6, next));
       graphScales.set(graphKey, scale);
-      svg.style.width = `${width * scale}px`;
-      svg.style.height = `${height * scale}px`;
+      canvas.style.width = `${scale * 100}%`;
+      viewport.classList.toggle("is-pannable", scale > 1);
       scaleLabel.textContent = `${Math.round(scale * 100)}%`;
     };
     const control = (label, action) => {
@@ -989,6 +1309,10 @@ function renderGraphPanel(container, title, graph) {
       })
     );
     setScale(graphScales.get(graphKey) || 1);
+    viewport.fitGraph = () => {
+      if ((graphScales.get(graphKey) || 1) === 1) setScale(1);
+    };
+    if (graphResizeObserver) graphResizeObserver.observe(viewport);
 
     const legend = document.createElement("ul");
     legend.className = "graph-legend";
@@ -1003,6 +1327,7 @@ function renderGraphPanel(container, title, graph) {
       legend.append(item);
     });
     panel.append(controls, viewport, selected, legend);
+    animatedGraphs.add(graphKey);
   } catch (_) {
     renderGraphFallback(panel, graph);
   }

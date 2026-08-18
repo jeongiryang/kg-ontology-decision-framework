@@ -56,6 +56,8 @@ from .chat_adapter import ChatResponseAdapter
 from .graph_projection import (
     build_provenance_projection,
     build_query_structure_projection,
+    build_result_fact_projection,
+    build_selected_schema_projection,
 )
 
 
@@ -359,6 +361,11 @@ class InspectionCollector:
                 "relationships": relationships,
                 "node_label_count": len(labels),
                 "relationship_count": len(relationships),
+                "schema_graph": build_selected_schema_projection(
+                    labels,
+                    relationships,
+                    opaque_key=self._opaque_key,
+                ),
             }
         elif event.phase is ProgressPhase.CYPHER_GENERATION:
             summary = {
@@ -385,6 +392,13 @@ class InspectionCollector:
                 and evidence_status_verified
                 and direct_provenance_verified
             )
+            rows = event.details.get("validated_rows")
+            fact_graph = None
+            if self._result_validation_approved and isinstance(rows, (list, tuple)):
+                fact_graph = build_result_fact_projection(
+                    rows,
+                    opaque_key=self._opaque_key,
+                )
             summary = {
                 "row_count": self._safe_count(event.details.get("row_count")),
                 "fact_count": self._safe_count(event.details.get("fact_count")),
@@ -397,6 +411,7 @@ class InspectionCollector:
                 "rejected_row_count": self._safe_count(
                     event.details.get("rejected_row_count")
                 ),
+                "fact_graph": fact_graph,
             }
         elif event.phase is ProgressPhase.CLAIM_BUILDING:
             rows = event.details.get("validated_rows")

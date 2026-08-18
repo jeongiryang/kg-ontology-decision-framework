@@ -199,6 +199,7 @@ kbd {
   position: relative; border: 0; padding: 0; background: transparent;
   color: inherit; text-align: left;
 }
+.step-toggle.is-static { cursor: default; }
 .step-toggle:focus-visible { outline: 2px solid var(--accent); outline-offset: 5px; border-radius: 7px; }
 .step-icon {
   width: 20px; height: 20px; flex: none; border-radius: 50%;
@@ -225,6 +226,11 @@ kbd {
   border-top: 1px solid var(--line); display: grid; gap: 12px;
 }
 .step-disclosure[hidden] { display: none; }
+.stage-jump {
+  justify-self: start; border: 1px solid var(--accent); border-radius: 8px;
+  padding: 6px 10px; background: transparent; color: var(--accent); font-size: 0.76rem;
+}
+.stage-jump:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 .stage-facts {
   margin: 0; display: grid; grid-template-columns: minmax(130px, 0.45fr) minmax(0, 1fr);
   gap: 5px 12px; font-size: 0.8rem;
@@ -356,6 +362,41 @@ kbd {
 .inspection-action:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 .copy-feedback { color: var(--muted); font-size: 0.72rem; min-height: 1em; }
 
+.exploration {
+  min-width: 0; margin: 18px 0; padding: 16px;
+  border: 1px solid var(--line); border-radius: var(--radius);
+  background: var(--panel); box-shadow: var(--shadow);
+}
+.exploration-head { display: flex; align-items: baseline; gap: 12px; flex-wrap: wrap; }
+.exploration-head h3 { font-size: 1rem; }
+.exploration-head p, .exploration-pending, .projection-note, .exploration-empty {
+  color: var(--muted); font-size: 0.76rem;
+}
+.exploration-tabs {
+  display: flex; gap: 6px; margin-top: 12px; padding-bottom: 2px;
+  overflow-x: auto; scrollbar-width: thin;
+}
+.exploration-tabs button {
+  flex: none; border: 1px solid var(--line); border-radius: 9px;
+  padding: 7px 12px; background: var(--panel-2); color: var(--muted);
+  font: inherit; font-size: 0.8rem;
+}
+.exploration-tabs button[aria-selected="true"] {
+  border-color: var(--accent); background: var(--accent-soft); color: var(--text);
+}
+.exploration-tabs button:disabled { opacity: 0.45; cursor: not-allowed; }
+.exploration-tabs button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.exploration-pending { margin-top: 7px; }
+.exploration-panel { min-width: 0; margin-top: 12px; display: grid; gap: 12px; }
+.badge-group h4 { margin-bottom: 6px; font-size: 0.78rem; color: var(--muted); }
+.badge-group ul { display: flex; flex-wrap: wrap; gap: 6px; list-style: none; margin: 0; padding: 0; }
+.schema-badge {
+  border: 1px solid var(--line); border-radius: 999px; padding: 4px 9px;
+  font: 0.72rem ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+.schema-badge.is-node { border-color: #8b5cf6; background: rgba(139, 92, 246, 0.1); }
+.schema-badge.is-relationship { border-color: var(--accent); background: var(--accent-soft); }
+
 .graph-panel {
   min-width: 0; padding: 12px; border: 1px solid var(--line);
   border-radius: 10px; background: var(--panel-2);
@@ -364,16 +405,26 @@ kbd {
 .graph-controls { display: flex; align-items: center; gap: 7px; flex-wrap: wrap; margin-bottom: 8px; }
 .graph-scale { min-width: 42px; text-align: center; color: var(--muted); font-size: 0.72rem; }
 .graph-viewport {
-  max-height: 520px; overflow: auto; overscroll-behavior: contain;
+  width: 100%; max-width: 100%; max-height: 520px;
+  overflow-x: hidden; overflow-y: auto; overscroll-behavior: contain;
   border: 1px solid var(--line); border-radius: 8px; background: var(--panel);
 }
+.graph-viewport.is-pannable { overflow: auto; }
 .graph-viewport:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
-.graph-viewport svg { display: block; transform-origin: left top; }
-.graph-edge { stroke: var(--muted); stroke-width: 1.5; opacity: 0.68; }
+.graph-canvas { width: 100%; min-width: 0; margin: 0 auto; }
+.graph-viewport svg {
+  display: block; width: 100%; height: auto; max-width: none; transform-origin: left top;
+}
+.graph-edge {
+  fill: none; stroke: var(--muted); stroke-width: 1.5; opacity: 0.68;
+  vector-effect: non-scaling-stroke;
+}
 .graph-arrow { fill: var(--muted); }
+.graph-edge-label-group rect {
+  fill: var(--panel); stroke: var(--line); stroke-width: 1; opacity: 0.96;
+}
 .graph-edge-label {
   fill: var(--muted); font: 10px ui-monospace, SFMono-Regular, Menlo, monospace;
-  paint-order: stroke; stroke: var(--panel); stroke-width: 4px; stroke-linejoin: round;
 }
 .graph-node { cursor: pointer; }
 .graph-node rect { stroke: var(--line); stroke-width: 1.5; fill: var(--panel); }
@@ -384,6 +435,7 @@ kbd {
 .graph-node:focus rect, .graph-node:hover rect { stroke-width: 3; }
 .graph-node-name { fill: var(--text); font: 600 12px system-ui, sans-serif; }
 .graph-node-type { fill: var(--muted); font: 10px ui-monospace, monospace; }
+.graph-node-check { fill: var(--ok); font: 700 10px system-ui, sans-serif; }
 .graph-selected { margin-top: 8px; color: var(--muted); font-size: 0.76rem; overflow-wrap: anywhere; }
 .graph-legend {
   margin: 8px 0 0; padding: 0; display: flex; flex-wrap: wrap; gap: 8px 14px;
@@ -398,6 +450,36 @@ kbd {
 .graph-fallback { color: var(--muted); font-size: 0.78rem; }
 .graph-fallback ul { margin: 8px 0 0; padding-left: 20px; max-height: 240px; overflow: auto; }
 
+@keyframes graph-node-arrive {
+  from { opacity: 0; transform: translateY(5px) scale(0.96); }
+  to { opacity: 1; transform: none; }
+}
+@keyframes graph-path-traverse {
+  0% { stroke-dashoffset: 36; opacity: 0.25; }
+  65% { opacity: 1; }
+  100% { stroke-dashoffset: 0; opacity: 0.88; }
+}
+.graph-node-visual.is-discovered,
+.graph-node-visual.is-result-appearing,
+.graph-node-visual.is-evidence-appearing {
+  transform-box: fill-box; transform-origin: center;
+  animation: graph-node-arrive 320ms ease both;
+}
+.graph-edge.is-query-pulse,
+.graph-edge.is-provenance-pulse {
+  stroke: var(--accent); stroke-width: 2.5; stroke-dasharray: 9 6;
+  animation: graph-path-traverse 850ms ease-out both;
+}
+.graph-edge.is-provenance-pulse { stroke: var(--ok); }
+
+@media (prefers-reduced-motion: reduce) {
+  .graph-node-visual.is-discovered,
+  .graph-node-visual.is-result-appearing,
+  .graph-node-visual.is-evidence-appearing,
+  .graph-edge.is-query-pulse,
+  .graph-edge.is-provenance-pulse { animation: none; }
+}
+
 @media (max-width: 600px) {
   .step-toggle { align-items: flex-start; flex-wrap: wrap; }
   .step-label { flex: 1; min-width: 0; }
@@ -409,6 +491,8 @@ kbd {
   .inspection-grid { padding-inline: 10px; }
   .inspection-item pre { max-width: calc(100vw - 54px); }
   .graph-viewport { max-height: 430px; }
+  .exploration { padding: 12px; }
+  .exploration-tabs { margin-inline: -4px; padding-inline: 4px; }
 }
 
 .view-source {

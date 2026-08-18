@@ -17,6 +17,8 @@ from evidence_chat.chat_adapter import CHAT_RESPONSE_FIELDS, ChatResponseAdapter
 from evidence_chat.graph_projection import (
     build_provenance_projection,
     build_query_structure_projection,
+    build_result_fact_projection,
+    build_selected_schema_projection,
 )
 from evidence_chat.server import ChatState, InspectionCollector, create_app
 from kg_builder.answer.contracts import ChatErrorCode, ChatResponse, ChatStatus
@@ -168,6 +170,7 @@ class _ChatStub:
                 "evidence_status_verified": True,
                 "direct_provenance_verified": True,
                 "rejected_row_count": 0,
+                "validated_rows": [row],
             },
             ProgressPhase.CLAIM_BUILDING: {
                 "claim_count": 1,
@@ -743,10 +746,19 @@ class StarletteRouteTests(unittest.IsolatedAsyncioTestCase):
         updates = [item for item in events if item["type"] == "inspection_update"]
         static = next(item for item in updates if item["stage"] == "STATIC_VALIDATION")
         approved = next(item for item in updates if item["stage"] == "NEO4J_EXPLAIN")
+        schema = next(item for item in updates if item["stage"] == "SCHEMA_SELECTION")
+        result_validation = next(
+            item for item in updates if item["stage"] == "RESULT_VALIDATION"
+        )
         self.assertNotIn("approved_cypher", static["summary"])
+        self.assertEqual(schema["summary"]["schema_graph"]["kind"], "SELECTED_SCHEMA")
         self.assertIn("MATCH (o:CourseOffering)", approved["summary"]["approved_cypher"])
         self.assertEqual(approved["summary"]["operators"], ["NodeIndexSeek"])
         self.assertEqual(approved["summary"]["query_graph"]["version"], 1)
+        self.assertEqual(
+            result_validation["summary"]["fact_graph"]["kind"],
+            "RESULT_FACTS",
+        )
         claims = next(item for item in updates if item["stage"] == "CLAIM_BUILDING")
         provenance = claims["summary"]["provenance_graph"]
         self.assertEqual(provenance["kind"], "RESULT_PROVENANCE")
@@ -756,7 +768,14 @@ class StarletteRouteTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn("offering:cwnu", serialized_provenance)
         self.assertNotIn("evidence:curriculum", serialized_provenance)
         result_index = next(index for index, item in enumerate(events) if item["type"] == "result")
+        schema_index = events.index(schema)
         approved_index = events.index(approved)
+        validation_index = events.index(result_validation)
+        claims_index = events.index(claims)
+        self.assertLess(schema_index, approved_index)
+        self.assertLess(approved_index, validation_index)
+        self.assertLess(validation_index, claims_index)
+        self.assertLess(claims_index, result_index)
         self.assertLess(approved_index, result_index)
         allowed = {
             "QUESTION_ANALYSIS": {
@@ -770,6 +789,7 @@ class StarletteRouteTests(unittest.IsolatedAsyncioTestCase):
                 "relationships",
                 "node_label_count",
                 "relationship_count",
+                "schema_graph",
             },
             "CYPHER_GENERATION": {
                 "candidate_generated",
@@ -803,6 +823,7 @@ class StarletteRouteTests(unittest.IsolatedAsyncioTestCase):
                 "evidence_status_verified",
                 "direct_provenance_verified",
                 "rejected_row_count",
+                "fact_graph",
             },
             "CLAIM_BUILDING": {
                 "claim_count",
@@ -911,6 +932,14 @@ class StarletteRouteTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("Number.isFinite(event.elapsed_ms)", script)
         self.assertIn('setAttribute("aria-expanded"', script)
         self.assertIn('setAttribute("aria-controls"', script)
+        self.assertIn('setAttribute("role", "tablist"', script)
+        self.assertIn("progress-exploration", markup)
+        self.assertIn("answer-exploration", markup)
+        self.assertIn("ResizeObserver", script)
+        self.assertIn("stroke-dasharray", style)
+        self.assertIn("prefers-reduced-motion: reduce", style)
+        self.assertIn("overflow-x: hidden", style)
+        self.assertIn("graphLabelLines", script)
         self.assertIn("renderGraphFallback", script)
         self.assertIn("createElementNS", script)
         self.assertIn("학사규정이나 교육과정에 대해 질문해 주세요", markup)
@@ -980,6 +1009,32 @@ class InspectionGraphProjectionTests(unittest.TestCase):
         )
         serialized = json.dumps(graph, ensure_ascii=False)
         self.assertNotIn("NOT_A_RELATION", serialized)
+
+        selected = build_selected_schema_projection(
+            ["CourseOffering", "Evidence"],
+            ["SUPPORTED_BY"],
+            opaque_key=b"schema-test-key",
+        )
+        self.assertEqual(selected["kind"], "SELECTED_SCHEMA")
+        self.assertEqual(
+            {node["verification_status"] for node in selected["nodes"]},
+            {"SCHEMA_SELECTED"},
+        )
+
+    def test_result_fact_projection_uses_only_verified_rows(self):
+        row = _offering_row()
+        graph = build_result_fact_projection([row], opaque_key=b"fact-test-key")
+        self.assertEqual(graph["kind"], "RESULT_FACTS")
+        self.assertEqual(len(graph["nodes"]), 1)
+        serialized = json.dumps(graph, ensure_ascii=False)
+        self.assertNotIn(row["fact_id"], serialized)
+        self.assertNotIn(row["evidence_id"], serialized)
+        self.assertIsNone(
+            build_result_fact_projection(
+                [{**row, "fact_status": "REVIEW_REQUIRED"}],
+                opaque_key=b"fact-test-key",
+            )
+        )
 
     def test_provenance_projection_requires_exact_verified_pairs(self):
         row = _offering_row()
