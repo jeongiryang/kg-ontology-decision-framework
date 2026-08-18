@@ -34,12 +34,9 @@ const el = {
   trail: $("answer-trail"),
   scopeNotice: $("scope-notice"),
   debugMeta: $("debug-meta"),
-  progressInspectionSection: $("progress-inspection-section"),
-  progressInspectionContent: $("progress-inspection-content"),
   timelineSection: $("timeline-section"),
   answerProgressSteps: $("answer-progress-steps"),
-  inspectionSection: $("inspection-section"),
-  inspectionContent: $("inspection-content"),
+  answerExploration: $("answer-exploration"),
   evidenceSection: $("evidence-section"),
   evidenceSummary: $("evidence-summary"),
   evidencePages: $("evidence-pages"),
@@ -70,9 +67,22 @@ let modalZoom = 1;
 let queryDetailsEnabled = false;
 let timelineEvents = [];
 let inspectionUpdates = new Map();
-let approvedInspection = null;
+let expandedStages = new Set();
+let graphScales = new Map();
+let activeExplorationTab = "schema";
 let lastResult = null;
 let clarificationPresentation = null;
+const graphResizeObserver = typeof window.ResizeObserver === "function"
+  ? new window.ResizeObserver((entries) => {
+      entries.forEach((entry) => {
+        if (!entry.target.isConnected) {
+          graphResizeObserver.unobserve(entry.target);
+        } else if (typeof entry.target.fitGraph === "function") {
+          entry.target.fitGraph();
+        }
+      });
+    })
+  : null;
 
 const span = (className, text) => {
   const node = document.createElement("span");
@@ -191,7 +201,15 @@ function renderExamples(examples) {
 
 function autoGrow() {
   el.question.style.height = "auto";
-  el.question.style.height = `${Math.min(el.question.scrollHeight, 180)}px`;
+  const style = window.getComputedStyle(el.question);
+  const lineHeight = Number.parseFloat(style.lineHeight) || 26;
+  const verticalPadding =
+    (Number.parseFloat(style.paddingTop) || 0) +
+    (Number.parseFloat(style.paddingBottom) || 0);
+  const maxHeight = lineHeight * 5 + verticalPadding;
+  const height = Math.min(el.question.scrollHeight, maxHeight);
+  el.question.style.height = `${height}px`;
+  el.question.style.overflowY = el.question.scrollHeight > maxHeight ? "auto" : "hidden";
 }
 
 el.question.addEventListener("input", autoGrow);
@@ -250,15 +268,13 @@ async function ask(question) {
   el.progressNow.textContent = "질문 전송됨";
   timelineEvents = [];
   inspectionUpdates = new Map();
-  approvedInspection = null;
+  expandedStages = new Set();
+  graphScales = new Map();
+  activeExplorationTab = "schema";
   lastResult = null;
   clarificationPresentation = null;
   renderTimelines();
   el.timelineSection.hidden = true;
-  el.progressInspectionSection.hidden = true;
-  el.progressInspectionContent.replaceChildren();
-  el.inspectionSection.hidden = true;
-  el.inspectionContent.replaceChildren();
   el.progressBack.textContent = "요청 취소";
   showScreen("progress");
   startElapsed();
@@ -346,7 +362,7 @@ async function ask(question) {
     try {
       renderAnswer(result);
       renderTimelines();
-      renderInspectionPanels();
+      renderExplorationPanel(el.answerExploration);
     } catch (error) {
       showNotice(
         el.progressError,
@@ -428,8 +444,17 @@ function renderTimelineInto(container) {
     const labelText = event.error_code
       ? `${event.message} — ${event.error_code}`
       : event.message;
-    const row = document.createElement("div");
-    row.className = "step-row";
+    const key = `${event.phase}:${event.attempt}`;
+    const disclosureId = `${container.id}-${event.phase.toLowerCase()}-${event.attempt}`;
+    const hasDetails = stageHasDetails(event);
+    const expanded = hasDetails && expandedStages.has(key);
+    const row = document.createElement(hasDetails ? "button" : "div");
+    if (hasDetails) row.type = "button";
+    row.className = `step-toggle${hasDetails ? "" : " is-static"}`;
+    if (hasDetails) {
+      row.setAttribute("aria-expanded", String(expanded));
+      row.setAttribute("aria-controls", disclosureId);
+    }
     row.append(span("step-icon", icon), span("step-label", labelText));
     row.append(
       span(
@@ -437,11 +462,188 @@ function renderTimelineInto(container) {
         event.state !== "STARTED" && Number.isFinite(event.elapsed_ms)
           ? `${event.elapsed_ms}ms`
           : ""
-      )
+      ),
+      span("step-chevron", hasDetails ? "⌄" : "")
     );
     item.append(row);
+    if (hasDetails) {
+      const disclosure = document.createElement("div");
+      disclosure.id = disclosureId;
+      disclosure.className = "step-disclosure";
+      disclosure.hidden = !expanded;
+      renderStageDetail(
+        disclosure,
+        event,
+        container === el.answerProgressSteps
+      );
+      row.addEventListener("click", () => {
+        if (expandedStages.has(key)) expandedStages.delete(key);
+        else expandedStages.add(key);
+        renderTimelines();
+      });
+      item.append(disclosure);
+    }
     container.append(item);
   });
+}
+
+function inspectionKey(stage, attempt = 0) {
+  return `${stage}:${Number.isInteger(attempt) ? attempt : 0}`;
+}
+
+function latestInspection(stage) {
+  return [...inspectionUpdates.values()].reverse().find((item) => item.stage === stage) || null;
+}
+
+function stageInspection(event) {
+  if (event.attempt > 0) {
+    return inspectionUpdates.get(inspectionKey(event.phase, event.attempt)) || null;
+  }
+  return inspectionUpdates.get(inspectionKey(event.phase, 0)) || null;
+}
+
+function stageHasDetails(event) {
+  const inspection = stageInspection(event);
+  if (!inspection || !inspection.summary || inspection.status === "FAILED") return false;
+  const summary = inspection.summary;
+  const allowed = {
+    QUESTION_ANALYSIS: Boolean(summary.status || summary.query_plan),
+    SCHEMA_SELECTION: Array.isArray(summary.labels) && summary.labels.length > 0,
+    CYPHER_GENERATION: Boolean(summary.message),
+    STATIC_VALIDATION: summary.read_only_syntax_verified === true,
+    NEO4J_EXPLAIN: typeof summary.approved_cypher === "string",
+    GRAPH_EXECUTION: Number.isInteger(summary.row_count),
+    RESULT_VALIDATION: summary.direct_provenance_verified === true,
+    CLAIM_BUILDING: Number.isInteger(summary.claim_count),
+    ANSWER_RENDERING: Number.isInteger(summary.citation_count),
+    COMPLETED: Boolean(summary.final_status),
+  };
+  return Boolean(allowed[event.phase]);
+}
+
+function addDetailFacts(container, values) {
+  const list = document.createElement("dl");
+  list.className = "stage-facts";
+  Object.entries(values).forEach(([label, value]) => {
+    if (value === null || value === undefined || value === "") return;
+    const term = document.createElement("dt");
+    term.textContent = label;
+    const detail = document.createElement("dd");
+    detail.textContent = typeof value === "boolean" ? (value ? "예" : "아니오") : String(value);
+    list.append(term, detail);
+  });
+  if (list.childElementCount) container.append(list);
+}
+
+function renderStageDetail(container, event, allowExplorationLinks) {
+  const inspection = stageInspection(event);
+  const summary = inspection ? inspection.summary : null;
+  if (!summary) return;
+
+  if (event.phase === "QUESTION_ANALYSIS") {
+    addDetailFacts(container, {
+      "계획 상태": summary.status,
+      "학년도": summary.query_plan && summary.query_plan.filters
+        ? summary.query_plan.filters.academic_year
+        : null,
+      "학과": summary.query_plan && summary.query_plan.filters
+        ? summary.query_plan.filters.department_id
+        : null,
+      "요청 필드": summary.query_plan && Array.isArray(summary.query_plan.requested_fields)
+        ? summary.query_plan.requested_fields.join(", ")
+        : null,
+      "누락 정보": Array.isArray(summary.missing) ? summary.missing.join(", ") : null,
+      "데이터 기반 되묻기": summary.clarification_available,
+    });
+    addInspectionItem(container, "정제된 계획", summary.query_plan);
+  } else if (event.phase === "SCHEMA_SELECTION") {
+    addDetailFacts(container, {
+      "선택 node label 수": summary.node_label_count,
+      "선택 relationship 수": summary.relationship_count,
+      "선택 이유": "검증된 QueryPlan의 필드와 Evidence 경로에 필요한 구조입니다.",
+    });
+    addInspectionItem(container, "선택 node label", summary.labels || []);
+    addInspectionItem(container, "선택 relationship type", summary.relationships || []);
+    if (allowExplorationLinks) {
+      addExplorationLink(container, "선택 스키마 보기", "schema");
+    }
+  } else if (event.phase === "CYPHER_GENERATION") {
+    addDetailFacts(container, {
+      "후보 attempt": summary.candidate_attempt,
+      "재시도": summary.retry,
+      "상태": summary.message,
+    });
+  } else if (event.phase === "STATIC_VALIDATION") {
+    addDetailFacts(container, {
+      "읽기 전용 문법": summary.read_only_syntax_verified,
+      "온톨로지 명세": summary.ontology_schema_verified,
+      "파라미터 바인딩": summary.parameter_binding_verified,
+      "Evidence 직접 경로": summary.direct_evidence_path_verified,
+      "comment-free canonicalization": summary.comment_free_canonical,
+      "LIMIT": summary.limit,
+    });
+  } else if (
+    event.phase === "NEO4J_EXPLAIN" &&
+    typeof summary.approved_cypher === "string"
+  ) {
+    addDetailFacts(container, {
+      "EXPLAIN 연산자": (summary.operators || []).join(", "),
+      "LIMIT": summary.limit,
+    });
+    if (allowExplorationLinks) {
+      addExplorationLink(container, "승인 Cypher 보기", "cypher");
+    }
+  } else if (event.phase === "GRAPH_EXECUTION") {
+    const validation = latestInspection("RESULT_VALIDATION");
+    addDetailFacts(container, {
+      "반환 행": summary.row_count,
+      "고유 Fact": validation ? validation.summary.fact_count : null,
+      "VERIFIED Evidence": validation
+        ? validation.summary.verified_evidence_count
+        : null,
+      "조회 시간": summary.query_elapsed_ms != null
+        ? `${summary.query_elapsed_ms}ms`
+        : null,
+    });
+    if (allowExplorationLinks) {
+      addExplorationLink(container, "조회 그래프 보기", "graph");
+    }
+  } else if (event.phase === "RESULT_VALIDATION") {
+    addDetailFacts(container, {
+      "VERIFIED Fact": summary.fact_count,
+      "VERIFIED Evidence": summary.verified_evidence_count,
+      "Fact 상태 검사": summary.fact_status_verified,
+      "Evidence 상태 검사": summary.evidence_status_verified,
+      "직접 provenance 검사": summary.direct_provenance_verified,
+      "거부된 행": summary.rejected_row_count,
+    });
+  } else if (event.phase === "CLAIM_BUILDING") {
+    addDetailFacts(container, {
+      "Claim 수": summary.claim_count,
+      "Claim 유형": Array.isArray(summary.claim_types) ? summary.claim_types.join(", ") : null,
+      "집계 Claim": summary.aggregate,
+      "Citation 대상": summary.citation_target_count,
+    });
+  } else if (event.phase === "ANSWER_RENDERING") {
+    addDetailFacts(container, {
+      "결정론적 한국어 renderer": summary.deterministic_renderer,
+      "Citation 수": summary.citation_count,
+      "최종 답변 LLM 호출": summary.final_answer_llm_calls,
+    });
+  } else if (event.phase === "COMPLETED") {
+    addDetailFacts(container, {
+      "최종 공개 status": summary.final_status,
+      "전체 처리시간": summary.total_elapsed_ms != null
+        ? `${summary.total_elapsed_ms}ms`
+        : null,
+      "재시도 횟수": summary.retry_count,
+      "Citation 수": summary.citation_count,
+      "request ID": queryDetailsEnabled && lastResult && lastResult.response
+        ? lastResult.response.request_id
+        : null,
+    });
+    addInspectionItem(container, "단계별 시간(ms)", summary.stage_timings_ms);
+  }
 }
 
 function markTimelineCancelled(message) {
@@ -467,47 +669,208 @@ function markTimelineFailed(message, errorCode) {
 }
 
 function renderInspectionUpdate(update) {
-  if (!update || update.type !== "inspection_update") return;
-  queryDetailsEnabled = true;
+  if (!update || update.type !== "inspection_update" || update.version !== 2) return;
+  if (!queryDetailsEnabled) return;
   if (update.summary && update.summary.discard_previous_candidate) {
-    approvedInspection = null;
-    inspectionUpdates.delete("NEO4J_EXPLAIN");
-    inspectionUpdates.delete("GRAPH_EXECUTION");
-    inspectionUpdates.delete("RESULT_VALIDATION");
+    [...inspectionUpdates.keys()].forEach((key) => {
+      if (
+        key.startsWith("NEO4J_EXPLAIN:") ||
+        key.startsWith("GRAPH_EXECUTION:") ||
+        key.startsWith("RESULT_VALIDATION:") ||
+        key.startsWith("CLAIM_BUILDING:")
+      ) {
+        inspectionUpdates.delete(key);
+      }
+    });
   }
-  if (
-    update.stage === "NEO4J_EXPLAIN" &&
-    update.status === "COMPLETED" &&
-    update.summary &&
-    typeof update.summary.approved_cypher === "string"
-  ) {
-    approvedInspection = update.summary;
-  }
-  if (update.stage === "NEO4J_EXPLAIN" && update.status === "FAILED") {
-    approvedInspection = null;
-  }
-  inspectionUpdates.set(update.stage, {
+  const attempt = Number.isInteger(update.attempt) ? update.attempt : 0;
+  inspectionUpdates.set(inspectionKey(update.stage, attempt), {
+    stage: update.stage,
+    attempt,
     status: update.status,
     elapsed_ms: update.elapsed_ms,
     summary: update.summary || {},
   });
-  renderInspectionPanels();
+  renderTimelines();
 }
 
-function renderInspectionPanels() {
-  const visible = queryDetailsEnabled && inspectionUpdates.size > 0;
-  el.progressInspectionSection.hidden = !visible;
-  el.inspectionSection.hidden = !visible;
-  if (!visible) {
-    el.progressInspectionContent.replaceChildren();
-    el.inspectionContent.replaceChildren();
-    return;
+function addExplorationLink(container, label, tab) {
+  const button = document.createElement("button");
+  button.type = "button";
+  button.className = "stage-jump";
+  button.textContent = label;
+  button.addEventListener("click", () => {
+    activeExplorationTab = tab;
+    renderExplorationPanel(el.answerExploration);
+    el.answerExploration.scrollIntoView({ behavior: "smooth", block: "start" });
+  });
+  container.append(button);
+}
+
+function explorationState() {
+  const schema = latestInspection("SCHEMA_SELECTION");
+  const explain = latestInspection("NEO4J_EXPLAIN");
+  const claims = latestInspection("CLAIM_BUILDING");
+  return {
+    schema: schema && schema.status === "COMPLETED" ? schema.summary : null,
+    explain: explain && explain.status === "COMPLETED" ? explain.summary : null,
+    claims: claims && claims.status === "COMPLETED" ? claims.summary : null,
+  };
+}
+
+function renderExplorationPanel(container) {
+  if (graphResizeObserver) {
+    container.querySelectorAll(".graph-viewport").forEach((viewport) => {
+      graphResizeObserver.unobserve(viewport);
+    });
   }
-  if (el.screens.progress.classList.contains("is-active")) {
-    el.progressInspectionSection.open = true;
+  container.replaceChildren();
+  container.hidden = !queryDetailsEnabled;
+  if (!queryDetailsEnabled) return;
+
+  const state = explorationState();
+  const availability = {
+    schema: Boolean(
+      state.schema &&
+      Array.isArray(state.schema.labels) &&
+      state.schema.labels.length
+    ),
+    cypher: Boolean(state.explain && typeof state.explain.approved_cypher === "string"),
+    graph: Boolean(
+      state.explain &&
+      state.explain.query_graph &&
+      state.claims &&
+      state.claims.provenance_graph
+    ),
+  };
+  const availableTabs = Object.keys(availability).filter((key) => availability[key]);
+  if (!availability[activeExplorationTab] && availableTabs.length) {
+    activeExplorationTab = availableTabs[0];
   }
-  renderInspectionInto(el.progressInspectionContent);
-  renderInspectionInto(el.inspectionContent);
+
+  const head = document.createElement("div");
+  head.className = "exploration-head";
+  const title = document.createElement("h3");
+  title.textContent = "지식그래프 탐색";
+  const description = document.createElement("p");
+  description.textContent =
+    "처리가 끝난 뒤 실제 파이프라인에서 승인된 정적 조회 정보만 표시합니다.";
+  head.append(title, description);
+
+  const tabs = document.createElement("div");
+  tabs.className = "exploration-tabs";
+  tabs.setAttribute("role", "tablist");
+  tabs.setAttribute("aria-label", "질의 추적 상세");
+  const labels = {
+    schema: "선택 스키마",
+    cypher: "승인 Cypher",
+    graph: "조회 그래프",
+  };
+  Object.entries(labels).forEach(([key, label]) => {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.id = `${container.id}-tab-${key}`;
+    button.setAttribute("role", "tab");
+    button.setAttribute("aria-selected", String(activeExplorationTab === key));
+    button.setAttribute("aria-controls", `${container.id}-panel`);
+    button.disabled = !availability[key];
+    button.title = availability[key]
+      ? `${label} 보기`
+      : "아직 해당 단계가 완료되지 않았습니다";
+    button.textContent = label;
+    button.addEventListener("click", () => {
+      activeExplorationTab = key;
+      renderExplorationPanel(el.answerExploration);
+    });
+    tabs.append(button);
+  });
+
+  const pending = document.createElement("p");
+  pending.className = "exploration-pending";
+  pending.setAttribute("role", "status");
+  const waiting = Object.entries(labels)
+    .filter(([key]) => !availability[key])
+    .map(([, label]) => label);
+  pending.textContent = waiting.length
+    ? `${waiting.join(" · ")}: 아직 해당 단계가 완료되지 않았습니다.`
+    : "모든 추적 정보가 실제 승인 단계까지 완료되었습니다.";
+
+  const panel = document.createElement("div");
+  panel.id = `${container.id}-panel`;
+  panel.className = "exploration-panel";
+  panel.setAttribute("role", "tabpanel");
+  panel.setAttribute("aria-labelledby", `${container.id}-tab-${activeExplorationTab}`);
+  if (!availableTabs.length) {
+    const empty = document.createElement("p");
+    empty.className = "exploration-empty";
+    empty.textContent = "안전하게 공개할 수 있는 승인 정보가 없습니다.";
+    panel.append(empty);
+  } else if (activeExplorationTab === "schema") {
+    renderSchemaTab(panel, state.schema);
+  } else if (activeExplorationTab === "cypher") {
+    renderCypherTab(panel, state.explain);
+  } else {
+    renderGraphTab(panel, state);
+  }
+  container.append(head, tabs, pending, panel);
+}
+
+function addBadges(container, title, values, kind) {
+  if (!Array.isArray(values) || !values.length) return;
+  const group = document.createElement("section");
+  group.className = "badge-group";
+  const heading = document.createElement("h4");
+  heading.textContent = title;
+  const list = document.createElement("ul");
+  values.forEach((value) => {
+    const item = document.createElement("li");
+    item.className = `schema-badge is-${kind}`;
+    item.textContent = value;
+    list.append(item);
+  });
+  group.append(heading, list);
+  container.append(group);
+}
+
+function renderSchemaTab(container, summary) {
+  if (!summary) return;
+  addBadges(container, "선택된 node label", summary.labels, "node");
+  addBadges(container, "선택된 relationship type", summary.relationships, "relationship");
+}
+
+function renderCypherTab(container, summary) {
+  if (!summary || typeof summary.approved_cypher !== "string") return;
+  addInspectionItem(
+    container,
+    "LLM 생성 후 안전 검증된 canonical Cypher",
+    summary.approved_cypher,
+    { cypher: true }
+  );
+  addInspectionItem(container, "정제된 파라미터", summary.parameters);
+  addInspectionItem(container, "EXPLAIN 연산자", summary.operators);
+  addDetailFacts(container, {
+    "사용 label": (summary.labels || []).join(", "),
+    "사용 relationship": (summary.relationships || []).join(", "),
+    "LIMIT": summary.limit,
+  });
+}
+
+function renderGraphTab(container, state) {
+  const note = document.createElement("p");
+  note.className = "projection-note";
+  note.textContent =
+    "현재 질문에 대해 실제 승인된 구조와 VERIFIED provenance만 표시한 projection입니다.";
+  container.append(note);
+  if (state.explain && state.explain.query_graph) {
+    renderGraphPanel(container, "1. 질의 구조", state.explain.query_graph);
+  }
+  if (state.claims && state.claims.provenance_graph) {
+    renderGraphPanel(
+      container,
+      "2. 조회 결과와 VERIFIED Evidence",
+      state.claims.provenance_graph
+    );
+  }
 }
 
 function addInspectionItem(container, label, value, options = {}) {
@@ -552,67 +915,374 @@ function addInspectionItem(container, label, value, options = {}) {
   container.append(item);
 }
 
-function renderInspectionInto(container) {
-  container.replaceChildren();
-  const analysis = inspectionUpdates.get("QUESTION_ANALYSIS");
-  const schema = inspectionUpdates.get("SCHEMA_SELECTION");
-  const graph = inspectionUpdates.get("GRAPH_EXECUTION");
-  const validation = inspectionUpdates.get("RESULT_VALIDATION");
-  const claims = inspectionUpdates.get("CLAIM_BUILDING");
-  const answer = inspectionUpdates.get("ANSWER_RENDERING");
-  const completed = inspectionUpdates.get("COMPLETED");
-  addInspectionItem(container, "정제된 QueryPlan", analysis && analysis.summary.query_plan);
-  addInspectionItem(container, "질문 분석 상태", analysis && analysis.summary.status);
-  if (schema) {
-    addInspectionItem(container, "선택된 스키마", {
-      labels: schema.summary.labels || [],
-      relationships: schema.summary.relationships || [],
-      node_label_count: schema.summary.node_label_count || 0,
-      relationship_count: schema.summary.relationship_count || 0,
+const SVG_NS = "http://www.w3.org/2000/svg";
+
+function svgNode(name, attributes = {}) {
+  const node = document.createElementNS(SVG_NS, name);
+  Object.entries(attributes).forEach(([key, value]) => node.setAttribute(key, String(value)));
+  return node;
+}
+
+function graphCategory(type) {
+  if (type === "Evidence") return "evidence";
+  if (["Course", "CourseOffering"].includes(type)) return "course";
+  if (["Rule", "Requirement", "CreditRequirement"].includes(type)) return "rule";
+  if (["Curriculum", "CurriculumVersion", "Department"].includes(type)) return "context";
+  return "other";
+}
+
+function graphColumn(node) {
+  const category = graphCategory(node.node_type);
+  if (category === "context") return 0;
+  if (category === "evidence") return 2;
+  return 1;
+}
+
+function graphProjectionIsSafe(graph) {
+  if (
+    !graph ||
+    graph.version !== 1 ||
+    ![
+      "QUERY_STRUCTURE",
+      "RESULT_PROVENANCE",
+    ].includes(graph.kind) ||
+    !Array.isArray(graph.nodes) ||
+    !Array.isArray(graph.edges) ||
+    graph.nodes.length > 200 ||
+    graph.edges.length > 300
+  ) return false;
+  const ids = new Set();
+  for (const node of graph.nodes) {
+    if (
+      !node ||
+      typeof node.id !== "string" ||
+      !node.id.startsWith("ui:") ||
+      ids.has(node.id) ||
+      typeof node.display_name !== "string" ||
+      typeof node.node_type !== "string" ||
+      !["SCHEMA_APPROVED", "VERIFIED"].includes(
+        node.verification_status
+      )
+    ) return false;
+    ids.add(node.id);
+  }
+  return graph.edges.every(
+    (edge) =>
+      edge &&
+      typeof edge.id === "string" &&
+      edge.id.startsWith("ui:") &&
+      ids.has(edge.source) &&
+      ids.has(edge.target) &&
+      typeof edge.relationship === "string"
+  );
+}
+
+function renderGraphFallback(container, graph) {
+  const fallback = document.createElement("div");
+  fallback.className = "graph-fallback";
+  const heading = document.createElement("p");
+  heading.textContent = "그래프를 그리지 못해 검증된 관계를 목록으로 표시합니다.";
+  fallback.append(heading);
+  const nodes = new Map((graph.nodes || []).map((node) => [node.id, node]));
+  const list = document.createElement("ul");
+  (graph.edges || []).forEach((edge) => {
+    const source = nodes.get(edge.source);
+    const target = nodes.get(edge.target);
+    if (!source || !target) return;
+    const item = document.createElement("li");
+    item.textContent = `${source.display_name} ──${edge.relationship}──> ${target.display_name}`;
+    list.append(item);
+  });
+  if (!list.childElementCount) {
+    (graph.nodes || []).forEach((node) => {
+      const item = document.createElement("li");
+      item.textContent = `${node.display_name} (${node.node_type})`;
+      list.append(item);
     });
   }
-  if (approvedInspection) {
-    addInspectionItem(
-      container,
-      "LLM 생성 후 안전 검증된 Cypher",
-      approvedInspection.approved_cypher,
-      { cypher: true }
+  fallback.append(list);
+  container.append(fallback);
+}
+
+function graphLabelLines(value) {
+  const text = String(value || "").replace(/\s+/g, " ").trim();
+  if (text.length <= 18) return [text];
+  const remainder = text.slice(18);
+  return [
+    text.slice(0, 18),
+    remainder.length > 18 ? `${remainder.slice(0, 17)}…` : remainder,
+  ];
+}
+
+function graphEdgeGeometry(source, target, nodeWidth, nodeHeight, mobile, offset) {
+  if (mobile || source.x === target.x) {
+    const x1 = source.x + nodeWidth / 2;
+    const y1 = source.y + nodeHeight;
+    const x2 = target.x + nodeWidth / 2;
+    const y2 = target.y;
+    const middle = (y1 + y2) / 2;
+    return {
+      path: `M ${x1} ${y1} C ${x1} ${middle}, ${x2} ${middle}, ${x2} ${y2}`,
+      labelX: x1 + 76 + offset,
+      labelY: middle - 7,
+    };
+  }
+  const x1 = source.x + nodeWidth;
+  const y1 = source.y + nodeHeight / 2;
+  const x2 = target.x;
+  const y2 = target.y + nodeHeight / 2;
+  const middle = (x1 + x2) / 2;
+  return {
+    path: `M ${x1} ${y1} C ${middle} ${y1}, ${middle} ${y2}, ${x2} ${y2}`,
+    labelX: middle,
+    labelY: (y1 + y2) / 2 - 12 + offset,
+  };
+}
+
+function renderGraphPanel(container, title, graph) {
+  if (!graph) return;
+  const panel = document.createElement("section");
+  panel.className = "graph-panel";
+  const heading = document.createElement("h4");
+  heading.textContent = title;
+  panel.append(heading);
+  if (!graphProjectionIsSafe(graph)) {
+    renderGraphFallback(panel, graph);
+    container.append(panel);
+    return;
+  }
+  try {
+    const graphKey = `${graph.kind}:${graph.nodes.map((node) => node.id).join("|")}`;
+    const controls = document.createElement("div");
+    controls.className = "graph-controls";
+    const viewport = document.createElement("div");
+    viewport.className = "graph-viewport";
+    viewport.tabIndex = 0;
+    viewport.setAttribute("aria-label", `${title} 이동 영역`);
+    const canvas = document.createElement("div");
+    canvas.className = "graph-canvas";
+    const svg = svgNode("svg", { role: "img", "aria-label": title });
+    const mobile = window.matchMedia("(max-width: 640px)").matches;
+    const positions = new Map();
+    const columns = new Map();
+    graph.nodes.forEach((node) => {
+      const column = mobile ? 0 : graphColumn(node);
+      if (!columns.has(column)) columns.set(column, []);
+      columns.get(column).push(node);
+    });
+    [...columns.values()].forEach((nodes) =>
+      nodes.sort((left, right) =>
+        `${left.node_type}:${left.display_name}`.localeCompare(
+          `${right.node_type}:${right.display_name}`,
+          "ko"
+        )
+      )
     );
-    addInspectionItem(container, "정제된 파라미터", approvedInspection.parameters);
-    addInspectionItem(container, "EXPLAIN 연산자", approvedInspection.operators);
-    addInspectionItem(container, "사용 라벨·관계와 LIMIT", {
-      labels: approvedInspection.labels || [],
-      relationships: approvedInspection.relationships || [],
-      limit: approvedInspection.limit,
+    const orderedColumns = [...columns.keys()].sort((left, right) => left - right);
+    const columnIndex = new Map(
+      orderedColumns.map((column, index) => [column, index])
+    );
+    const nodeWidth = mobile ? 244 : 218;
+    const nodeHeight = 86;
+    const xGap = mobile ? 0 : 290;
+    const yGap = mobile ? 132 : 118;
+    let maxRows = 1;
+    [...columns.entries()].forEach(([column, nodes]) => {
+      maxRows = Math.max(maxRows, nodes.length);
+      nodes.forEach((node, index) => {
+        positions.set(node.id, {
+          x: 52 + columnIndex.get(column) * xGap,
+          y: 52 + index * yGap,
+        });
+      });
     });
-  }
-  if (graph || validation || claims || answer) {
-    addInspectionItem(container, "조회·검증 결과", {
-      row_count: graph ? graph.summary.row_count : 0,
-      fact_count: validation ? validation.summary.fact_count : 0,
-      verified_evidence_count: validation
-        ? validation.summary.verified_evidence_count
-        : 0,
-      fact_status_verified: validation
-        ? validation.summary.fact_status_verified
-        : false,
-      evidence_status_verified: validation
-        ? validation.summary.evidence_status_verified
-        : false,
-      direct_provenance_verified: validation
-        ? validation.summary.direct_provenance_verified
-        : false,
-      claim_count: claims ? claims.summary.claim_count : 0,
-      citation_count: answer ? answer.summary.citation_count : 0,
+    const width = mobile ? 348 : Math.max(348, orderedColumns.length * xGap + 44);
+    const height = Math.max(210, maxRows * yGap + 56);
+    svg.setAttribute("viewBox", `0 0 ${width} ${height}`);
+    svg.setAttribute("preserveAspectRatio", "xMidYMin meet");
+    svg.style.aspectRatio = `${width} / ${height}`;
+
+    const definitions = svgNode("defs");
+    const marker = svgNode("marker", {
+      id: `arrow-${graphKey.replace(/[^a-zA-Z0-9]/g, "").slice(-20)}`,
+      markerWidth: 10,
+      markerHeight: 10,
+      refX: 8,
+      refY: 3,
+      orient: "auto",
+      markerUnits: "strokeWidth",
     });
+    const arrow = svgNode("path", { d: "M0,0 L0,6 L9,3 z", class: "graph-arrow" });
+    marker.append(arrow);
+    definitions.append(marker);
+    svg.append(definitions);
+
+    const edgeLayer = svgNode("g", { class: "graph-edges" });
+    const nodeLayer = svgNode("g", { class: "graph-nodes" });
+    graph.edges.forEach((edge, index) => {
+      const source = positions.get(edge.source);
+      const target = positions.get(edge.target);
+      if (!source || !target) return;
+      const geometry = graphEdgeGeometry(
+        source,
+        target,
+        nodeWidth,
+        nodeHeight,
+        mobile,
+        ((index % 3) - 1) * 14
+      );
+      const path = svgNode("path", {
+        d: geometry.path,
+        class: "graph-edge",
+        "marker-end": `url(#${marker.id})`,
+      });
+      const relationshipLabel = edge.relationship.length > 22
+        ? `${edge.relationship.slice(0, 21)}…`
+        : edge.relationship;
+      const labelWidth = Math.min(
+        178,
+        Math.max(70, relationshipLabel.length * 7 + 18)
+      );
+      const labelX = Math.min(
+        width - labelWidth / 2 - 8,
+        Math.max(labelWidth / 2 + 8, geometry.labelX)
+      );
+      const labelGroup = svgNode("g", { class: "graph-edge-label-group" });
+      const labelTitle = svgNode("title");
+      labelTitle.textContent = edge.relationship;
+      const labelBox = svgNode("rect", {
+        x: labelX - labelWidth / 2,
+        y: geometry.labelY - 13,
+        width: labelWidth,
+        height: 22,
+        rx: 6,
+        ry: 6,
+      });
+      const label = svgNode("text", {
+        x: labelX,
+        y: geometry.labelY + 2,
+        class: "graph-edge-label",
+        "text-anchor": "middle",
+      });
+      label.textContent = relationshipLabel;
+      labelGroup.append(labelTitle, labelBox, label);
+      edgeLayer.append(path, labelGroup);
+    });
+
+    const selected = document.createElement("p");
+    selected.className = "graph-selected";
+    selected.textContent = "노드를 선택하면 공개 가능한 상세가 표시됩니다.";
+    graph.nodes.forEach((node) => {
+      const position = positions.get(node.id);
+      const group = svgNode("g", {
+        class: "graph-node",
+        tabindex: 0,
+        role: "button",
+        "aria-label": `${node.display_name}, ${node.node_type}, ${node.verification_status}`,
+        "data-kind": graphCategory(node.node_type),
+        transform: `translate(${position.x} ${position.y})`,
+      });
+      const visual = svgNode("g", { class: "graph-node-visual" });
+      const tooltip = svgNode("title");
+      tooltip.textContent = `${node.display_name} · ${node.node_type}`;
+      const box = svgNode("rect", {
+        width: nodeWidth,
+        height: nodeHeight,
+        rx: 11,
+        ry: 11,
+      });
+      const name = svgNode("text", { x: 12, y: 25, class: "graph-node-name" });
+      graphLabelLines(node.display_name).forEach((line, lineIndex) => {
+        const textLine = svgNode("tspan", {
+          x: 12,
+          dy: lineIndex === 0 ? 0 : 18,
+        });
+        textLine.textContent = line;
+        name.append(textLine);
+      });
+      const type = svgNode("text", { x: 12, y: 69, class: "graph-node-type" });
+      type.textContent = node.node_type;
+      const verified = svgNode("text", {
+        x: nodeWidth - 14,
+        y: 20,
+        class: "graph-node-check",
+        "text-anchor": "end",
+      });
+      verified.textContent = node.citation_used ? "✓ 근거" : "✓";
+      const selectNode = () => {
+        const page = Number.isInteger(node.excerpt_page)
+          ? ` · 발췌 PDF ${node.excerpt_page}쪽`
+          : "";
+        selected.textContent = `${node.display_name} · ${node.node_type} · ${node.verification_status}${page}`;
+      };
+      group.addEventListener("click", selectNode);
+      group.addEventListener("keydown", (event) => {
+        if (event.key === "Enter" || event.key === " ") {
+          event.preventDefault();
+          selectNode();
+        }
+      });
+      visual.append(box, name, type, verified);
+      group.append(tooltip, visual);
+      nodeLayer.append(group);
+    });
+    svg.append(edgeLayer, nodeLayer);
+    canvas.append(svg);
+    viewport.append(canvas);
+
+    const setScale = (next) => {
+      const scale = Math.min(2, Math.max(0.6, next));
+      graphScales.set(graphKey, scale);
+      canvas.style.width = `${scale * 100}%`;
+      viewport.classList.toggle("is-pannable", scale > 1);
+      scaleLabel.textContent = `${Math.round(scale * 100)}%`;
+    };
+    const control = (label, action) => {
+      const button = document.createElement("button");
+      button.type = "button";
+      button.className = "inspection-action";
+      button.textContent = label;
+      button.addEventListener("click", action);
+      return button;
+    };
+    const scaleLabel = span("graph-scale", "100%");
+    controls.append(
+      control("축소", () => setScale((graphScales.get(graphKey) || 1) - 0.2)),
+      scaleLabel,
+      control("확대", () => setScale((graphScales.get(graphKey) || 1) + 0.2)),
+      control("화면 맞춤", () => {
+        setScale(1);
+        viewport.scrollTo({ top: 0, left: 0, behavior: "smooth" });
+      }),
+      control("초기화", () => {
+        setScale(1);
+        viewport.scrollTo({ top: 0, left: 0 });
+        selected.textContent = "노드를 선택하면 공개 가능한 상세가 표시됩니다.";
+      })
+    );
+    setScale(graphScales.get(graphKey) || 1);
+    viewport.fitGraph = () => {
+      if ((graphScales.get(graphKey) || 1) === 1) setScale(1);
+    };
+    if (graphResizeObserver) graphResizeObserver.observe(viewport);
+
+    const legend = document.createElement("ul");
+    legend.className = "graph-legend";
+    [
+      ["context", "Curriculum·Department"],
+      ["course", "Course·CourseOffering"],
+      ["rule", "Rule·Requirement"],
+      ["evidence", "Evidence"],
+    ].forEach(([kind, label]) => {
+      const item = document.createElement("li");
+      item.append(span(`legend-dot is-${kind}`, ""), span("", label));
+      legend.append(item);
+    });
+    panel.append(controls, viewport, selected, legend);
+  } catch (_) {
+    renderGraphFallback(panel, graph);
   }
-  if (completed) {
-    addInspectionItem(container, "단계별 시간(ms)", completed.summary.stage_timings_ms);
-    addInspectionItem(container, "전체 소요시간(ms)", completed.summary.total_elapsed_ms);
-  }
-  if (lastResult && lastResult.response) {
-    addInspectionItem(container, "요청 식별자", lastResult.response.request_id);
-  }
+  container.append(panel);
 }
 
 function renderAnswer(result) {

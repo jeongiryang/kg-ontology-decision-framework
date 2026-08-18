@@ -64,7 +64,7 @@ Starlette lifespan에서 다음 객체를 한 번 구성하고 `app.state`에 �
 | `KG_CHAT_MAX_CONCURRENT` | `1` | 동시에 실행할 전체 chat 요청 수(1~4) |
 | `KG_CHAT_CLIENT_TIMEOUT_SECONDS` | `180` | 브라우저 대기 제한(60~900초) |
 | `KG_CHAT_DEBUG` | `false` | 정제된 request ID/error code 표시 |
-| `KG_CHAT_SHOW_QUERY_DETAILS` | `false` | 승인된 Cypher와 정제된 탐색 정보의 실시간 표시 |
+| `KG_CHAT_SHOW_QUERY_DETAILS` | `false` | 처리 완료 후 승인된 Cypher와 정적 조회 정보 표시 |
 | `KG_CHAT_PDF_PATH` | 빈 값 | Git 제외된 19쪽 발췌 PDF 경로 |
 | `CHATBOT_HOST` | `127.0.0.1` | 로컬 bind 주소 |
 | `CHATBOT_PORT` | `8501` | UI 포트 |
@@ -131,11 +131,57 @@ QUESTION_ANALYSIS → SCHEMA_SELECTION → CYPHER_GENERATION
 
 실행하지 않은 단계를 완료로 만들지 않으며 가짜 퍼센트, hidden chain-of-thought, system prompt와 모델 원문은 보내지 않는다. 화면은 callback이 실제 도착한 단계 행만 그때 생성해 진행 중·완료·실패로 누적하고, 아직 발생하지 않은 미래 단계를 `WAITING`으로 선생성하지 않는다. 완료된 행과 서버가 보낸 실제 소요시간은 답변 화면의 `처리 과정 보기`에도 유지한다. 연결을 취소하면 이미 완료된 행은 유지하고 당시 진행 중이던 행만 취소 상태로 표시한다. 브라우저에 해당 단계의 신뢰 가능한 시작 시각이 있으면 취소 시점까지 계산하고, 없으면 가짜 `0ms` 대신 시간을 생략한다. 안전 파이프라인이 후보를 재생성할 때는 실패 오류 코드와 `안전한 질의를 다시 생성하는 중` 이벤트를 남기되 실패 후보 원문은 보내지 않는다.
 
-`POST /api/ask`는 `progress`, 선택적 `clarification_options`, 선택적 `inspection_update`, `result`, `error`, `end` SSE 이벤트를 보낸다. `result.response`는 승인된 8개 wire 필드이고 `result.presentation`은 상태 라벨, PDF page group, 공개 PDF 상태와 선택적 debug metadata다. `inspection_update`는 단계별 allowlist 요약만 담으며 실제 확정 시점에 `result`보다 먼저 전송될 수 있다.
+`POST /api/ask`는 `progress`, 선택적 `clarification_options`, 선택적 `inspection_update`, `result`, `error` SSE 이벤트를 보낸 뒤 스트림을 종료한다. `result.response`는 승인된 8개 wire 필드이고 `result.presentation`은 상태 라벨, PDF page group, 공개 PDF 상태와 선택적 debug metadata다. `inspection_update`는 단계별 allowlist 요약만 담으며 실제 확정 시점에 `result`보다 먼저 전송될 수 있다.
 
-`KG_CHAT_SHOW_QUERY_DETAILS=true`일 때만 처리 중·결과 화면의 `Cypher 및 지식그래프 탐색 정보 보기`에 정제된 QueryPlan, 선택 스키마, 승인된 읽기 전용 Cypher, 정제된 파라미터, EXPLAIN 연산자, 행·Fact·VERIFIED Evidence·Claim·Citation 수와 단계 시간을 누적한다. 공개 Cypher는 lexer가 실제 주석을 제거한 comment-free canonical 문자열이다. Cypher는 동일 생성 attempt의 `STATIC_VALIDATION`과 `NEO4J_EXPLAIN`이 모두 완료된 뒤에만 `inspection_update`로 승인한다. 정적 검증 직후에는 후보 생성·검증 중이라는 고정 문구만 표시한다. EXPLAIN 실패 후보는 공개하지 않고, 후속 단계 실패로 재생성을 시작하면 이전 승인 후보도 UI에서 철회한다. 재시도 성공 시 최종 승인 후보만 남으며 모든 후보가 실패하면 Cypher 영역을 표시하지 않는다.
+각 실제 단계 행은 기본적으로 접힌 disclosure button이다. 키보드로 열고 닫을 수 있으며
+`aria-expanded`와 `aria-controls`가 연결된다. 완료된 행은 답변 화면에도 남는다. 상세
+정보가 없는 단계에는 disclosure를 만들거나 임의 설명을 생성하지 않고 상태·실제
+소요시간만 표시한다.
+
+`KG_CHAT_SHOW_QUERY_DETAILS=true`일 때만 단계 disclosure에 정제된 QueryPlan, 선택
+스키마, 승인된 읽기 전용 Cypher, 정제된 파라미터, EXPLAIN 연산자,
+행·Fact·VERIFIED Evidence·Claim·Citation 수와 단계 시간을 추가한다. 승인 Cypher는
+`NEO4J_EXPLAIN`, 그래프 조회 결과는 `GRAPH_EXECUTION` 단계 안에 배치한다. 공개
+Cypher는 lexer가 실제 주석을 제거한 comment-free canonical 문자열이다. Cypher는
+동일 생성 attempt의 `STATIC_VALIDATION`과 `NEO4J_EXPLAIN`이 모두 완료된 뒤에만
+`inspection_update`로 승인한다. 정적 검증 직후에는 후보 생성·검증 중이라는 고정
+문구만 표시한다. EXPLAIN 실패 후보는 공개하지 않고, 후속 단계 실패로 재생성을
+시작하면 이전 승인 후보도 UI에서 철회한다. 재시도 성공 시 최종 승인 후보만 남으며
+모든 후보가 실패하면 Cypher 영역을 표시하지 않는다.
 
 승인된 Cypher는 가로 스크롤, 접기·펼치기와 키보드 접근 가능한 복사 버튼을 제공한다. 검증 전·실패 후보 Cypher, 접속 URI·계정, 로컬 경로, 비밀번호·토큰·API key, system prompt, 모델 원문, traceback, 내부 승인 seal·digest는 상세 모드에서도 포함하지 않는다. sealed `ChatResponse` 8필드는 변경하지 않는다.
+
+상세 모드에는 답변이 완료된 뒤 단계 목록과 별도로 `선택 스키마`, `승인 Cypher`,
+`조회 그래프` 탭을 제공한다. 처리 중 화면은 실제 callback의 텍스트 타임라인만 표시하고
+graph를 점진적으로 다시 그리거나 탐색 경로를 재생하지 않는다. 선택 스키마 탭은 실제
+`SCHEMA_SELECTION`의 label·relationship, 승인 Cypher 탭은 같은 후보의 정적 검증과
+EXPLAIN을 통과한 canonical Cypher, 조회 그래프 탭은 EXPLAIN 승인 질의 구조와
+ClaimValidator 승인 provenance를 정적으로 표시한다. 재시도에서 실패한 후보는
+projection을 만들지 않으며 모든 후보가 실패하면 관련 탭을 활성화하지 않는다.
+
+## inspection 그래프 projection
+
+상세 모드의 그래프는 Neo4j 전체 데이터를 탐색하지 않고 이미 승인된 런타임 산출물을
+표시용으로 축소한다. 별도 DB 조회와 쓰기 쿼리는 없다.
+
+- 질의 구조 그래프는 EXPLAIN까지 통과한 canonical Cypher의 label·relationship을
+  generated schema catalog에 다시 대조해 만든다.
+- 결과 provenance 그래프는 ResultValidator를 통과한 `VERIFIED` 행과
+  ClaimValidator가 승인한 `(fact_id, evidence_id)` 집합이 정확히 일치할 때만 만든다.
+- 결과 edge는 직접 `SUPPORTED_BY`만 허용한다. 승인 전 행, 사용하지 않은 Evidence,
+  `REVIEW_REQUIRED` 항목은 projection에 들어가지 않는다.
+- 브라우저 node ID는 요청마다 새 HMAC key로 만든 opaque `ui:*` 값이다. raw Neo4j
+  element ID, Fact/Evidence ID, 승인 seal·digest는 envelope에 포함하지 않는다.
+- 노출 필드는 표시명, node type, 검증 상태와 Evidence의 발췌 페이지만이다.
+
+versioned `inspection_update` 하위의 `query_graph`와 `provenance_graph`는 presentation
+전용이다. 답변이나 Citation을 변경할 권한이 없으며
+sealed `ChatResponse`에는 추가되지 않는다. 브라우저는 외부 라이브러리 없이 반응형 SVG
+`viewBox`, 결정론적 type-column 레이아웃과 `ResizeObserver`를 사용한다. 기본 화면은
+컨테이너 너비에 맞추고 확대했을 때만 pan·가로 스크롤을 허용한다. 긴 node 이름은 두 줄
+뒤 ellipsis와 SVG title로 보존하고 관계 label은 배경 상자와 offset으로 edge와 분리한다.
+확대·축소·화면 맞춤·초기화, 키보드 node 선택과 관계 목록 fallback을 제공하며 좁은
+화면에서는 위에서 아래로 배치한다.
 
 ## Citation과 PDF 표시
 
@@ -164,13 +210,16 @@ KG_CHAT_PDF_PATH=/local/ignored/path/2026_curriculum_excerpt.pdf
 ## 입력과 브라우저 보안
 
 - 빈 질문과 2,000자 초과 질문을 서버에서 거부한다.
-- 질문 JSON은 `question` 하나만 허용한다.
+- 질문 JSON은 `question`과 서버가 발급한 clarification 선택을 되돌려 보내는 선택적
+  `resolved`만 허용한다.
 - UI는 질문·답변·Evidence를 `textContent`로만 삽입한다.
 - PDF route는 Starlette 정수 path converter를 사용한다.
 - 서버 오류, traceback, 로컬 경로, 비밀번호, 토큰을 반환하지 않는다.
 - 외부 URL 자동 이동과 임의 Cypher 입력 경로가 없다.
 - 전송 중 `inFlight`와 비활성 버튼으로 중복 제출을 막는다.
 - `AbortController`와 최소 60초 client timeout을 사용한다.
+- 질문 입력창은 한 줄에서 시작해 최대 5줄까지 자동 확장하고 그 이후에만 내부
+  스크롤을 사용한다. Enter 전송·Shift+Enter 줄바꿈과 예시 질문 chip을 유지한다.
 
 ## 테스트
 
