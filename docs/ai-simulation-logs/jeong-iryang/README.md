@@ -5,7 +5,7 @@
 - 파일명 규칙: `NNNN-short-task-name.md`
   - `NNNN`은 이 폴더에서 독립적으로 증가하는 4자리 번호다.
   - 작업명은 영문 소문자 kebab-case로 작성한다.
-- 현재 다음 로그 번호: `0024`
+- 현재 다음 로그 번호: `0025`
 - 중앙 템플릿: [AI 시뮬레이션 로그 템플릿](../_template.md)
 - 중앙 운영 규칙: [AI 시뮬레이션 로그 운영 규칙](../README.md)
 
@@ -34,3 +34,4 @@
 - [0021. PR #28 실시간 처리 타임라인과 승인 Cypher 추적 UI](0021-realtime-query-timeline.md)
 - [0022. PR #28 canonical Cypher와 타임라인 보완](0022-canonical-cypher-and-timeline-fix.md)
 - [0023. PR #29 clarification·progress 통합](0023-pr29-integration.md)
+- [0024. 질의 inspection 그래프 UI](0024-query-inspection-graph-ui.md)

@@ -16,6 +16,7 @@ import hashlib
 import json
 import os
 import re
+import secrets
 from collections.abc import AsyncIterator, Callable
 from pathlib import Path
 from threading import Thread
@@ -52,6 +53,10 @@ from kg_builder.query.schema_selector import QuerySchemaSelector
 
 from . import pdf_evidence
 from .chat_adapter import ChatResponseAdapter
+from .graph_projection import (
+    build_provenance_projection,
+    build_query_structure_projection,
+)
 
 
 STATIC_DIR = Path(__file__).resolve().parent / "static"
@@ -87,7 +92,13 @@ class InspectionCollector:
     """Build stage-scoped inspection updates from approved pipeline facts only."""
 
     _STATIC_DETAIL_KEYS = frozenset(
-        {"validated_cypher", "parameters", "labels", "relationship_types"}
+        {
+            "validated_cypher",
+            "parameters",
+            "labels",
+            "relationship_types",
+            "limit",
+        }
     )
     _SECRET_KEY_MARKERS = ("password", "token", "secret", "api_key", "uri")
     _LIMIT = re.compile(r"\bLIMIT\s+(\d+)\s*\Z", re.IGNORECASE)
@@ -98,6 +109,9 @@ class InspectionCollector:
         self._pending_query: dict[str, Any] = {}
         self._pending_attempt: int | None = None
         self._approved_query: dict[str, Any] = {}
+        self._opaque_key = secrets.token_bytes(32)
+        self._retry_count = 0
+        self._result_validation_approved = False
 
     @staticmethod
     def _candidate_attempt(event: ProgressEvent) -> int | None:
@@ -188,13 +202,18 @@ class InspectionCollector:
 
     @staticmethod
     def _update(event: ProgressEvent, summary: dict[str, Any]) -> dict[str, Any]:
-        return {
+        payload: dict[str, Any] = {
             "type": "inspection_update",
+            "version": 2,
             "stage": event.phase.value,
             "status": event.state.value,
             "summary": summary,
             "elapsed_ms": event.elapsed_ms,
         }
+        attempt = InspectionCollector._candidate_attempt(event)
+        if attempt is not None:
+            payload["attempt"] = attempt
+        return payload
 
     @staticmethod
     def _safe_error_code(event: ProgressEvent) -> str:
@@ -209,6 +228,7 @@ class InspectionCollector:
             self._active_attempt = attempt
             self._discard_candidate()
             if attempt is not None and attempt > 1:
+                self._retry_count += 1
                 return self._update(
                     event,
                     {
@@ -254,6 +274,14 @@ class InspectionCollector:
                     {
                         "read_only_syntax_verified": True,
                         "ontology_schema_verified": True,
+                        "parameter_binding_verified": (
+                            event.details.get("parameter_binding_verified") is True
+                        ),
+                        "direct_evidence_path_verified": (
+                            event.details.get("direct_evidence_path_verified") is True
+                        ),
+                        "comment_free_canonical": True,
+                        "limit": self._safe_count(event.details.get("limit")),
                     },
                 )
             return None
@@ -280,6 +308,13 @@ class InspectionCollector:
                 self._pending_attempt = None
                 self.stage_timings_ms[event.phase.value] = event.elapsed_ms
                 if self._approved_query:
+                    query_graph = build_query_structure_projection(
+                        self._safe_strings(self._approved_query.get("labels")),
+                        self._safe_strings(
+                            self._approved_query.get("relationship_types")
+                        ),
+                        opaque_key=self._opaque_key,
+                    )
                     return self._update(
                         event,
                         {
@@ -297,6 +332,7 @@ class InspectionCollector:
                                 self._approved_query.get("relationship_types")
                             ),
                             "limit": self._approved_query["limit"],
+                            "query_graph": query_graph,
                         },
                     )
             return None
@@ -306,9 +342,14 @@ class InspectionCollector:
         self.stage_timings_ms[event.phase.value] = event.elapsed_ms
         summary: dict[str, Any]
         if event.phase is ProgressPhase.QUESTION_ANALYSIS:
+            options = event.details.get("clarification_options")
             summary = {
                 "status": event.details.get("planning_status"),
                 "query_plan": self._safe_plan(event.details.get("query_plan")),
+                "missing": self._safe_strings(event.details.get("missing")),
+                "clarification_available": bool(
+                    isinstance(options, (list, tuple)) and options
+                ),
             }
         elif event.phase is ProgressPhase.SCHEMA_SELECTION:
             labels = self._safe_strings(event.details.get("labels"))
@@ -322,39 +363,87 @@ class InspectionCollector:
         elif event.phase is ProgressPhase.CYPHER_GENERATION:
             summary = {
                 "candidate_generated": True,
+                "candidate_attempt": attempt,
+                "retry": bool(attempt is not None and attempt > 1),
                 "message": "LLM이 Cypher 후보를 생성했습니다. 안전 검증을 진행합니다.",
             }
         elif event.phase is ProgressPhase.GRAPH_EXECUTION:
-            summary = {"row_count": self._safe_count(event.details.get("row_count"))}
+            summary = {
+                "row_count": self._safe_count(event.details.get("row_count")),
+                "query_elapsed_ms": event.elapsed_ms,
+            }
         elif event.phase is ProgressPhase.RESULT_VALIDATION:
+            fact_status_verified = event.details.get("fact_status_verified") is True
+            evidence_status_verified = (
+                event.details.get("evidence_status_verified") is True
+            )
+            direct_provenance_verified = (
+                event.details.get("direct_provenance_verified") is True
+            )
+            self._result_validation_approved = (
+                fact_status_verified
+                and evidence_status_verified
+                and direct_provenance_verified
+            )
             summary = {
                 "row_count": self._safe_count(event.details.get("row_count")),
                 "fact_count": self._safe_count(event.details.get("fact_count")),
                 "verified_evidence_count": self._safe_count(
                     event.details.get("evidence_count")
                 ),
-                "fact_status_verified": event.details.get("fact_status_verified") is True,
-                "evidence_status_verified": (
-                    event.details.get("evidence_status_verified") is True
-                ),
-                "direct_provenance_verified": (
-                    event.details.get("direct_provenance_verified") is True
+                "fact_status_verified": fact_status_verified,
+                "evidence_status_verified": evidence_status_verified,
+                "direct_provenance_verified": direct_provenance_verified,
+                "rejected_row_count": self._safe_count(
+                    event.details.get("rejected_row_count")
                 ),
             }
         elif event.phase is ProgressPhase.CLAIM_BUILDING:
-            summary = {"claim_count": self._safe_count(event.details.get("claim_count"))}
+            rows = event.details.get("validated_rows")
+            pairs = event.details.get("approved_provenance")
+            provenance_graph = None
+            if (
+                self._result_validation_approved
+                and isinstance(rows, (list, tuple))
+                and isinstance(pairs, (list, tuple))
+            ):
+                provenance_graph = build_provenance_projection(
+                    rows,
+                    pairs,
+                    opaque_key=self._opaque_key,
+                )
+            summary = {
+                "claim_count": self._safe_count(event.details.get("claim_count")),
+                "claim_types": self._safe_strings(event.details.get("claim_types")),
+                "aggregate": event.details.get("aggregate") is True,
+                "citation_target_count": self._safe_count(
+                    event.details.get("citation_target_count")
+                ),
+                "provenance_graph": provenance_graph,
+            }
         elif event.phase is ProgressPhase.ANSWER_RENDERING:
             summary = {
                 "citation_count": self._safe_count(
                     event.details.get(
                         "citation_count", event.details.get("evidence_count", 0)
                     )
-                )
+                ),
+                "deterministic_renderer": (
+                    event.details.get("deterministic_renderer") is True
+                ),
+                "final_answer_llm_calls": self._safe_count(
+                    event.details.get("final_answer_llm_calls")
+                ),
             }
         elif event.phase is ProgressPhase.COMPLETED:
             summary = {
                 "total_elapsed_ms": event.elapsed_ms,
                 "stage_timings_ms": dict(sorted(self.stage_timings_ms.items())),
+                "final_status": event.details.get("final_status"),
+                "retry_count": self._retry_count,
+                "citation_count": self._safe_count(
+                    event.details.get("citation_count")
+                ),
             }
         else:
             return None
@@ -616,7 +705,7 @@ async def ask(request: Request) -> Response:
         collector = InspectionCollector()
 
         async def run_request() -> None:
-            finished = asyncio.Event()
+            finished: asyncio.Future[None] = loop.create_future()
 
             def on_progress(event: ProgressEvent) -> None:
                 inspection_update = collector.record(event)
@@ -645,21 +734,32 @@ async def ask(request: Request) -> Response:
                         error["error_code"] = "CHAT_REQUEST_FAILED"
                     loop.call_soon_threadsafe(queue.put_nowait, error)
                 finally:
-                    loop.call_soon_threadsafe(queue.put_nowait, {"type": "end"})
-                    loop.call_soon_threadsafe(finished.set)
+                    loop.call_soon_threadsafe(finished.set_result, None)
 
             async with limiter:
-                Thread(target=worker, name="evidence-chat-request", daemon=True).start()
-                await finished.wait()
+                # Keep the blocking local model call off the event loop.  The
+                # independently-created request task is deliberately not cancelled
+                # on a browser disconnect, so the single-GPU semaphore remains held
+                # until the worker really exits.
+                Thread(
+                    target=worker,
+                    name="evidence-chat-request",
+                    daemon=True,
+                ).start()
+                await finished
 
         task = asyncio.create_task(run_request())
         try:
             while True:
-                item = await queue.get()
-                yield _sse(item)
-                if item.get("type") == "end":
+                if task.done() and queue.empty():
                     break
-            await task
+                try:
+                    item = await asyncio.wait_for(queue.get(), timeout=0.1)
+                except TimeoutError:
+                    continue
+                yield _sse(item)
+            with contextlib.suppress(asyncio.CancelledError, Exception):
+                await task
         finally:
             # A disconnected browser cannot cancel an already-running local model
             # call.  Keep the task alive so it holds the single-GPU semaphore until

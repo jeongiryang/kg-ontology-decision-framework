@@ -14,6 +14,10 @@ import httpx2
 
 from evidence_chat import pdf_evidence
 from evidence_chat.chat_adapter import CHAT_RESPONSE_FIELDS, ChatResponseAdapter
+from evidence_chat.graph_projection import (
+    build_provenance_projection,
+    build_query_structure_projection,
+)
 from evidence_chat.server import ChatState, InspectionCollector, create_app
 from kg_builder.answer.contracts import ChatErrorCode, ChatResponse, ChatStatus
 from kg_builder.answer.service import CurriculumChatService
@@ -130,12 +134,16 @@ class _ChatStub:
     ) -> ChatResponse:
         self.questions.append(question)
         self.resolved = resolved
+        row = _offering_row()
         details = {
             ProgressPhase.QUESTION_ANALYSIS: {
+                "planning_status": "READY",
                 "query_plan": {
                     "filters": {"academic_year": 2026},
                     "requested_fields": ["completion_type"],
-                }
+                },
+                "missing": [],
+                "clarification_options": [],
             },
             ProgressPhase.SCHEMA_SELECTION: {
                 "labels": ["CourseOffering", "Evidence"],
@@ -144,10 +152,40 @@ class _ChatStub:
             ProgressPhase.STATIC_VALIDATION: {
                 "validated_cypher": "MATCH (o:CourseOffering)-[:SUPPORTED_BY]->(e:Evidence) WHERE o.status = 'VERIFIED' RETURN o LIMIT 1",
                 "parameters": {"academic_year": 2026},
+                "labels": ["CourseOffering", "Evidence"],
+                "relationship_types": ["SUPPORTED_BY"],
+                "limit": 1,
+                "parameter_binding_verified": True,
+                "direct_evidence_path_verified": True,
             },
             ProgressPhase.NEO4J_EXPLAIN: {"operators": ["NodeIndexSeek"]},
             ProgressPhase.GRAPH_EXECUTION: {"row_count": 1},
-            ProgressPhase.RESULT_VALIDATION: {"row_count": 1, "evidence_count": 1},
+            ProgressPhase.RESULT_VALIDATION: {
+                "row_count": 1,
+                "fact_count": 1,
+                "evidence_count": 1,
+                "fact_status_verified": True,
+                "evidence_status_verified": True,
+                "direct_provenance_verified": True,
+                "rejected_row_count": 0,
+            },
+            ProgressPhase.CLAIM_BUILDING: {
+                "claim_count": 1,
+                "claim_types": ["FIELD_VALUE"],
+                "aggregate": False,
+                "citation_target_count": 1,
+                "validated_rows": [row],
+                "approved_provenance": [(row["fact_id"], row["evidence_id"])],
+            },
+            ProgressPhase.ANSWER_RENDERING: {
+                "citation_count": 1,
+                "deterministic_renderer": True,
+                "final_answer_llm_calls": 0,
+            },
+            ProgressPhase.COMPLETED: {
+                "final_status": "ANSWERABLE",
+                "citation_count": 1,
+            },
         }
         if progress_callback:
             for phase in ProgressPhase:
@@ -708,21 +746,44 @@ class StarletteRouteTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn("approved_cypher", static["summary"])
         self.assertIn("MATCH (o:CourseOffering)", approved["summary"]["approved_cypher"])
         self.assertEqual(approved["summary"]["operators"], ["NodeIndexSeek"])
+        self.assertEqual(approved["summary"]["query_graph"]["version"], 1)
+        claims = next(item for item in updates if item["stage"] == "CLAIM_BUILDING")
+        provenance = claims["summary"]["provenance_graph"]
+        self.assertEqual(provenance["kind"], "RESULT_PROVENANCE")
+        self.assertEqual(len(provenance["edges"]), 1)
+        self.assertTrue(all(node["id"].startswith("ui:") for node in provenance["nodes"]))
+        serialized_provenance = json.dumps(provenance, ensure_ascii=False)
+        self.assertNotIn("offering:cwnu", serialized_provenance)
+        self.assertNotIn("evidence:curriculum", serialized_provenance)
         result_index = next(index for index, item in enumerate(events) if item["type"] == "result")
         approved_index = events.index(approved)
         self.assertLess(approved_index, result_index)
         allowed = {
-            "QUESTION_ANALYSIS": {"status", "query_plan"},
+            "QUESTION_ANALYSIS": {
+                "status",
+                "query_plan",
+                "missing",
+                "clarification_available",
+            },
             "SCHEMA_SELECTION": {
                 "labels",
                 "relationships",
                 "node_label_count",
                 "relationship_count",
             },
-            "CYPHER_GENERATION": {"candidate_generated", "message"},
+            "CYPHER_GENERATION": {
+                "candidate_generated",
+                "candidate_attempt",
+                "retry",
+                "message",
+            },
             "STATIC_VALIDATION": {
                 "read_only_syntax_verified",
                 "ontology_schema_verified",
+                "parameter_binding_verified",
+                "direct_evidence_path_verified",
+                "comment_free_canonical",
+                "limit",
             },
             "NEO4J_EXPLAIN": {
                 "approved_cypher",
@@ -731,8 +792,9 @@ class StarletteRouteTests(unittest.IsolatedAsyncioTestCase):
                 "labels",
                 "relationships",
                 "limit",
+                "query_graph",
             },
-            "GRAPH_EXECUTION": {"row_count"},
+            "GRAPH_EXECUTION": {"row_count", "query_elapsed_ms"},
             "RESULT_VALIDATION": {
                 "row_count",
                 "fact_count",
@@ -740,12 +802,30 @@ class StarletteRouteTests(unittest.IsolatedAsyncioTestCase):
                 "fact_status_verified",
                 "evidence_status_verified",
                 "direct_provenance_verified",
+                "rejected_row_count",
             },
-            "CLAIM_BUILDING": {"claim_count"},
-            "ANSWER_RENDERING": {"citation_count"},
-            "COMPLETED": {"total_elapsed_ms", "stage_timings_ms"},
+            "CLAIM_BUILDING": {
+                "claim_count",
+                "claim_types",
+                "aggregate",
+                "citation_target_count",
+                "provenance_graph",
+            },
+            "ANSWER_RENDERING": {
+                "citation_count",
+                "deterministic_renderer",
+                "final_answer_llm_calls",
+            },
+            "COMPLETED": {
+                "total_elapsed_ms",
+                "stage_timings_ms",
+                "final_status",
+                "retry_count",
+                "citation_count",
+            },
         }
         for update in updates:
+            self.assertEqual(update["version"], 2)
             self.assertLessEqual(set(update["summary"]), allowed[update["stage"]])
         serialized = json.dumps(updates, ensure_ascii=False)
         for secret in ("system_prompt", "password", "bolt://", "traceback"):
@@ -807,7 +887,11 @@ class StarletteRouteTests(unittest.IsolatedAsyncioTestCase):
 
     def test_xss_and_timeout_contract_use_safe_browser_apis(self):
         script = (Path(__file__).parents[1] / "src/evidence_chat/static/app.js").read_text()
+        markup = (Path(__file__).parents[1] / "src/evidence_chat/static/index.html").read_text()
+        style = (Path(__file__).parents[1] / "src/evidence_chat/static/app.css").read_text()
         self.assertNotIn("innerHTML", script)
+        self.assertNotIn("insertAdjacentHTML", script)
+        self.assertNotIn("eval(", script)
         self.assertIn("textContent", script)
         self.assertIn("AbortController", script)
         self.assertIn("inFlight", script)
@@ -825,6 +909,14 @@ class StarletteRouteTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("started_at_ms: performance.now()", script)
         self.assertIn("Number.isFinite(running.started_at_ms)", script)
         self.assertIn("Number.isFinite(event.elapsed_ms)", script)
+        self.assertIn('setAttribute("aria-expanded"', script)
+        self.assertIn('setAttribute("aria-controls"', script)
+        self.assertIn("renderGraphFallback", script)
+        self.assertIn("createElementNS", script)
+        self.assertIn("학사규정이나 교육과정에 대해 질문해 주세요", markup)
+        self.assertNotIn("Cypher 및 지식그래프 탐색 정보 보기", markup)
+        self.assertIn("resize: none", style)
+        self.assertIn("overflow-y: hidden", style)
 
     def test_frontend_does_not_construct_backend_contracts(self):
         root = Path(__file__).parents[1] / "src/evidence_chat"
@@ -836,6 +928,84 @@ class StarletteRouteTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn("ChatResponse(", runtime)
         self.assertNotIn("RuleBasedPlanner", runtime)
         self.assertNotIn("ChatPipeline", runtime)
+
+
+class InspectionGraphProjectionTests(unittest.TestCase):
+    def test_result_graph_requires_completed_result_validation(self):
+        collector = InspectionCollector()
+        row = _offering_row()
+        claim_event = ProgressEvent(
+            ProgressPhase.CLAIM_BUILDING,
+            ProgressState.COMPLETED,
+            1,
+            {
+                "claim_count": 1,
+                "validated_rows": [row],
+                "approved_provenance": [(row["fact_id"], row["evidence_id"])],
+            },
+        )
+        before = collector.record(claim_event)
+        self.assertIsNone(before["summary"]["provenance_graph"])
+
+        collector.record(
+            ProgressEvent(
+                ProgressPhase.RESULT_VALIDATION,
+                ProgressState.COMPLETED,
+                1,
+                {
+                    "row_count": 1,
+                    "fact_count": 1,
+                    "evidence_count": 1,
+                    "fact_status_verified": True,
+                    "evidence_status_verified": True,
+                    "direct_provenance_verified": True,
+                },
+            )
+        )
+        after = collector.record(claim_event)
+        self.assertEqual(after["summary"]["provenance_graph"]["kind"], "RESULT_PROVENANCE")
+
+    def test_query_projection_uses_only_approved_schema_members(self):
+        graph = build_query_structure_projection(
+            ["CourseOffering", "Course", "Evidence"],
+            ["OF_COURSE", "SUPPORTED_BY", "NOT_A_RELATION"],
+            opaque_key=b"query-test-key",
+        )
+        self.assertIsNotNone(graph)
+        self.assertEqual(graph["version"], 1)
+        self.assertEqual(graph["kind"], "QUERY_STRUCTURE")
+        self.assertEqual(
+            {edge["relationship"] for edge in graph["edges"]},
+            {"OF_COURSE", "SUPPORTED_BY"},
+        )
+        serialized = json.dumps(graph, ensure_ascii=False)
+        self.assertNotIn("NOT_A_RELATION", serialized)
+
+    def test_provenance_projection_requires_exact_verified_pairs(self):
+        row = _offering_row()
+        pair = (row["fact_id"], row["evidence_id"])
+        graph = build_provenance_projection(
+            [row], [pair], opaque_key=b"result-test-key"
+        )
+        self.assertIsNotNone(graph)
+        self.assertEqual(len(graph["nodes"]), 2)
+        self.assertEqual(len(graph["edges"]), 1)
+        serialized = json.dumps(graph, ensure_ascii=False)
+        self.assertNotIn(row["fact_id"], serialized)
+        self.assertNotIn(row["evidence_id"], serialized)
+
+        unrelated = _offering_row(1)
+        self.assertIsNone(
+            build_provenance_projection(
+                [row, unrelated], [pair], opaque_key=b"result-test-key"
+            )
+        )
+        review_required = {**row, "fact_status": "REVIEW_REQUIRED"}
+        self.assertIsNone(
+            build_provenance_projection(
+                [review_required], [pair], opaque_key=b"result-test-key"
+            )
+        )
 
 
 if __name__ == "__main__":

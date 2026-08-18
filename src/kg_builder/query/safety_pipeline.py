@@ -158,6 +158,9 @@ class SafetyPipeline:
                 parameters=dict(validated.parameters),
                 labels=list(validated.labels),
                 relationship_types=list(validated.relationship_types),
+                limit=validated.limit,
+                parameter_binding_verified=True,
+                direct_evidence_path_verified=plan.evidence_required,
                 candidate_attempt=candidate_attempt,
             )
         except Exception as exc:
@@ -259,6 +262,7 @@ class SafetyPipeline:
                 fact_status_verified=True,
                 evidence_status_verified=True,
                 direct_provenance_verified=True,
+                rejected_row_count=0,
             )
         except Exception as exc:
             emit_progress(

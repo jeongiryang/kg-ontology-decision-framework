@@ -78,12 +78,17 @@ class CurriculumChatService:
                 ProgressPhase.ANSWER_RENDERING,
                 ProgressState.COMPLETED,
                 (perf_counter() - started) * 1000,
+                citation_count=0,
+                deterministic_renderer=True,
+                final_answer_llm_calls=0,
             )
             emit_progress(
                 progress_callback,
                 ProgressPhase.COMPLETED,
                 ProgressState.COMPLETED,
                 (perf_counter() - total_started) * 1000,
+                final_status=response.status.value,
+                citation_count=0,
             )
             return response
         claim_started = perf_counter()
@@ -128,6 +133,19 @@ class CurriculumChatService:
                 ProgressState.COMPLETED,
                 (perf_counter() - claim_started) * 1000,
                 claim_count=len(validated.claims),
+                claim_types=sorted(
+                    {claim.claim_type.value for claim in validated.claims}
+                ),
+                aggregate=any(
+                    claim.claim_type.value in {"AGGREGATE", "AGGREGATE_LIST"}
+                    for claim in validated.claims
+                ),
+                citation_target_count=len(validated.citation_sources),
+                validated_rows=query_result.rows,
+                approved_provenance=tuple(
+                    (link.fact_id, link.evidence_id)
+                    for link in validated.provenance
+                ),
             )
             answer_started = perf_counter()
             emit_progress(
@@ -170,12 +188,16 @@ class CurriculumChatService:
                     (perf_counter() - answer_started) * 1000,
                     evidence_count=len(response.citations),
                     citation_count=len(response.citations),
+                    deterministic_renderer=True,
+                    final_answer_llm_calls=0,
                 )
         emit_progress(
             progress_callback,
             ProgressPhase.COMPLETED,
             ProgressState.COMPLETED,
             (perf_counter() - total_started) * 1000,
+            final_status=response.status.value,
+            citation_count=len(response.citations),
         )
         return response
 

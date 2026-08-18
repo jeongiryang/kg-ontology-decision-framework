@@ -45,7 +45,7 @@
               name="question"
               rows="1"
               maxlength="2000"
-              placeholder="예) 자료구조는 몇 학년 몇 학기에 열려?"
+              placeholder="학사규정이나 교육과정에 대해 질문해 주세요"
               aria-label="질문 입력"
               required
             ></textarea>
@@ -72,10 +72,6 @@
         </div>
         <blockquote class="asked" id="asked"></blockquote>
         <ol class="steps progress-steps" id="progress-steps" aria-label="실제 처리 단계"></ol>
-        <details class="debug" id="progress-inspection-section" hidden>
-          <summary>Cypher 및 지식그래프 탐색 정보 보기</summary>
-          <div class="inspection-grid" id="progress-inspection-content"></div>
-        </details>
         <p class="notice error" id="progress-error" hidden></p>
         <button class="ghost" id="progress-back" type="button">요청 취소</button>
       </div>
@@ -108,14 +104,9 @@
           <p class="debug-meta" id="debug-meta" hidden></p>
         </article>
 
-        <details class="debug" id="timeline-section" hidden>
+        <details class="debug" id="timeline-section" hidden open>
           <summary>처리 과정 보기</summary>
           <ol class="steps result-timeline" id="answer-progress-steps" aria-label="완료된 처리 단계"></ol>
-        </details>
-
-        <details class="debug" id="inspection-section" hidden>
-          <summary>Cypher 및 지식그래프 탐색 정보 보기</summary>
-          <div class="inspection-grid" id="inspection-content"></div>
         </details>
 
         <section class="evidence" id="evidence-section" aria-labelledby="evidence-title">
