@@ -450,36 +450,6 @@ kbd {
 .graph-fallback { color: var(--muted); font-size: 0.78rem; }
 .graph-fallback ul { margin: 8px 0 0; padding-left: 20px; max-height: 240px; overflow: auto; }
 
-@keyframes graph-node-arrive {
-  from { opacity: 0; transform: translateY(5px) scale(0.96); }
-  to { opacity: 1; transform: none; }
-}
-@keyframes graph-path-traverse {
-  0% { stroke-dashoffset: 36; opacity: 0.25; }
-  65% { opacity: 1; }
-  100% { stroke-dashoffset: 0; opacity: 0.88; }
-}
-.graph-node-visual.is-discovered,
-.graph-node-visual.is-result-appearing,
-.graph-node-visual.is-evidence-appearing {
-  transform-box: fill-box; transform-origin: center;
-  animation: graph-node-arrive 320ms ease both;
-}
-.graph-edge.is-query-pulse,
-.graph-edge.is-provenance-pulse {
-  stroke: var(--accent); stroke-width: 2.5; stroke-dasharray: 9 6;
-  animation: graph-path-traverse 850ms ease-out both;
-}
-.graph-edge.is-provenance-pulse { stroke: var(--ok); }
-
-@media (prefers-reduced-motion: reduce) {
-  .graph-node-visual.is-discovered,
-  .graph-node-visual.is-result-appearing,
-  .graph-node-visual.is-evidence-appearing,
-  .graph-edge.is-query-pulse,
-  .graph-edge.is-provenance-pulse { animation: none; }
-}
-
 @media (max-width: 600px) {
   .step-toggle { align-items: flex-start; flex-wrap: wrap; }
   .step-label { flex: 1; min-width: 0; }

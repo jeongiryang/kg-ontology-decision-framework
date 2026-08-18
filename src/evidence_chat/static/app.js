@@ -25,7 +25,6 @@ const el = {
   elapsed: $("elapsed"),
   asked: $("asked"),
   progressSteps: $("progress-steps"),
-  progressExploration: $("progress-exploration"),
   answerQuestion: $("answer-question"),
   answerBadge: $("answer-badge"),
   answerTitle: $("answer-title"),
@@ -70,9 +69,7 @@ let timelineEvents = [];
 let inspectionUpdates = new Map();
 let expandedStages = new Set();
 let graphScales = new Map();
-let animatedGraphs = new Set();
 let activeExplorationTab = "schema";
-let explorationTabPinned = false;
 let lastResult = null;
 let clarificationPresentation = null;
 const graphResizeObserver = typeof window.ResizeObserver === "function"
@@ -273,9 +270,7 @@ async function ask(question) {
   inspectionUpdates = new Map();
   expandedStages = new Set();
   graphScales = new Map();
-  animatedGraphs = new Set();
   activeExplorationTab = "schema";
-  explorationTabPinned = false;
   lastResult = null;
   clarificationPresentation = null;
   renderTimelines();
@@ -367,7 +362,7 @@ async function ask(question) {
     try {
       renderAnswer(result);
       renderTimelines();
-      renderInspectionPanels();
+      renderExplorationPanel(el.answerExploration);
     } catch (error) {
       showNotice(
         el.progressError,
@@ -429,7 +424,6 @@ function renderTimelines() {
   renderTimelineInto(el.progressSteps);
   renderTimelineInto(el.answerProgressSteps);
   el.timelineSection.hidden = timelineEvents.length === 0;
-  renderExplorationPanels();
 }
 
 function renderTimelineInto(container) {
@@ -477,7 +471,11 @@ function renderTimelineInto(container) {
       disclosure.id = disclosureId;
       disclosure.className = "step-disclosure";
       disclosure.hidden = !expanded;
-      renderStageDetail(disclosure, event);
+      renderStageDetail(
+        disclosure,
+        event,
+        container === el.answerProgressSteps
+      );
       row.addEventListener("click", () => {
         if (expandedStages.has(key)) expandedStages.delete(key);
         else expandedStages.add(key);
@@ -537,7 +535,7 @@ function addDetailFacts(container, values) {
   if (list.childElementCount) container.append(list);
 }
 
-function renderStageDetail(container, event) {
+function renderStageDetail(container, event, allowExplorationLinks) {
   const inspection = stageInspection(event);
   const summary = inspection ? inspection.summary : null;
   if (!summary) return;
@@ -566,7 +564,9 @@ function renderStageDetail(container, event) {
     });
     addInspectionItem(container, "선택 node label", summary.labels || []);
     addInspectionItem(container, "선택 relationship type", summary.relationships || []);
-    addExplorationLink(container, "선택 스키마 보기", "schema");
+    if (allowExplorationLinks) {
+      addExplorationLink(container, "선택 스키마 보기", "schema");
+    }
   } else if (event.phase === "CYPHER_GENERATION") {
     addDetailFacts(container, {
       "후보 attempt": summary.candidate_attempt,
@@ -590,7 +590,9 @@ function renderStageDetail(container, event) {
       "EXPLAIN 연산자": (summary.operators || []).join(", "),
       "LIMIT": summary.limit,
     });
-    addExplorationLink(container, "승인 Cypher 보기", "cypher");
+    if (allowExplorationLinks) {
+      addExplorationLink(container, "승인 Cypher 보기", "cypher");
+    }
   } else if (event.phase === "GRAPH_EXECUTION") {
     const validation = latestInspection("RESULT_VALIDATION");
     addDetailFacts(container, {
@@ -603,7 +605,9 @@ function renderStageDetail(container, event) {
         ? `${summary.query_elapsed_ms}ms`
         : null,
     });
-    addExplorationLink(container, "조회 그래프 보기", "graph");
+    if (allowExplorationLinks) {
+      addExplorationLink(container, "조회 그래프 보기", "graph");
+    }
   } else if (event.phase === "RESULT_VALIDATION") {
     addDetailFacts(container, {
       "VERIFIED Fact": summary.fact_count,
@@ -687,16 +691,6 @@ function renderInspectionUpdate(update) {
     elapsed_ms: update.elapsed_ms,
     summary: update.summary || {},
   });
-  if (!explorationTabPinned && update.status === "COMPLETED") {
-    if (update.stage === "SCHEMA_SELECTION") activeExplorationTab = "schema";
-    if (["NEO4J_EXPLAIN", "RESULT_VALIDATION", "CLAIM_BUILDING"].includes(update.stage)) {
-      activeExplorationTab = "graph";
-    }
-  }
-  renderInspectionPanels();
-}
-
-function renderInspectionPanels() {
   renderTimelines();
 }
 
@@ -707,12 +701,8 @@ function addExplorationLink(container, label, tab) {
   button.textContent = label;
   button.addEventListener("click", () => {
     activeExplorationTab = tab;
-    explorationTabPinned = true;
-    renderExplorationPanels();
-    const target = el.screens.answer.classList.contains("is-active")
-      ? el.answerExploration
-      : el.progressExploration;
-    target.scrollIntoView({ behavior: "smooth", block: "start" });
+    renderExplorationPanel(el.answerExploration);
+    el.answerExploration.scrollIntoView({ behavior: "smooth", block: "start" });
   });
   container.append(button);
 }
@@ -720,20 +710,12 @@ function addExplorationLink(container, label, tab) {
 function explorationState() {
   const schema = latestInspection("SCHEMA_SELECTION");
   const explain = latestInspection("NEO4J_EXPLAIN");
-  const result = latestInspection("RESULT_VALIDATION");
   const claims = latestInspection("CLAIM_BUILDING");
   return {
     schema: schema && schema.status === "COMPLETED" ? schema.summary : null,
     explain: explain && explain.status === "COMPLETED" ? explain.summary : null,
-    result: result && result.status === "COMPLETED" ? result.summary : null,
     claims: claims && claims.status === "COMPLETED" ? claims.summary : null,
   };
-}
-
-function renderExplorationPanels() {
-  [el.progressExploration, el.answerExploration].forEach((container) => {
-    renderExplorationPanel(container);
-  });
 }
 
 function renderExplorationPanel(container) {
@@ -748,12 +730,17 @@ function renderExplorationPanel(container) {
 
   const state = explorationState();
   const availability = {
-    schema: Boolean(state.schema && state.schema.schema_graph),
+    schema: Boolean(
+      state.schema &&
+      Array.isArray(state.schema.labels) &&
+      state.schema.labels.length
+    ),
     cypher: Boolean(state.explain && typeof state.explain.approved_cypher === "string"),
     graph: Boolean(
-      (state.explain && state.explain.query_graph) ||
-      (state.result && state.result.fact_graph) ||
-      (state.claims && state.claims.provenance_graph)
+      state.explain &&
+      state.explain.query_graph &&
+      state.claims &&
+      state.claims.provenance_graph
     ),
   };
   const availableTabs = Object.keys(availability).filter((key) => availability[key]);
@@ -767,7 +754,7 @@ function renderExplorationPanel(container) {
   title.textContent = "지식그래프 탐색";
   const description = document.createElement("p");
   description.textContent =
-    "실제 파이프라인에서 선택·검증·승인된 projection만 단계에 맞춰 표시합니다.";
+    "처리가 끝난 뒤 실제 파이프라인에서 승인된 정적 조회 정보만 표시합니다.";
   head.append(title, description);
 
   const tabs = document.createElement("div");
@@ -793,8 +780,7 @@ function renderExplorationPanel(container) {
     button.textContent = label;
     button.addEventListener("click", () => {
       activeExplorationTab = key;
-      explorationTabPinned = true;
-      renderExplorationPanels();
+      renderExplorationPanel(el.answerExploration);
     });
     tabs.append(button);
   });
@@ -817,7 +803,7 @@ function renderExplorationPanel(container) {
   if (!availableTabs.length) {
     const empty = document.createElement("p");
     empty.className = "exploration-empty";
-    empty.textContent = "실제 스키마 선택 callback을 기다리고 있습니다.";
+    empty.textContent = "안전하게 공개할 수 있는 승인 정보가 없습니다.";
     panel.append(empty);
   } else if (activeExplorationTab === "schema") {
     renderSchemaTab(panel, state.schema);
@@ -850,7 +836,6 @@ function renderSchemaTab(container, summary) {
   if (!summary) return;
   addBadges(container, "선택된 node label", summary.labels, "node");
   addBadges(container, "선택된 relationship type", summary.relationships, "relationship");
-  renderGraphPanel(container, "선택된 온톨로지 구조", summary.schema_graph);
 }
 
 function renderCypherTab(container, summary) {
@@ -879,13 +864,10 @@ function renderGraphTab(container, state) {
   if (state.explain && state.explain.query_graph) {
     renderGraphPanel(container, "1. 질의 구조", state.explain.query_graph);
   }
-  if (state.result && state.result.fact_graph) {
-    renderGraphPanel(container, "2. ResultValidator 승인 Fact", state.result.fact_graph);
-  }
   if (state.claims && state.claims.provenance_graph) {
     renderGraphPanel(
       container,
-      "3. 조회 결과와 VERIFIED Evidence",
+      "2. 조회 결과와 VERIFIED Evidence",
       state.claims.provenance_graph
     );
   }
@@ -961,9 +943,7 @@ function graphProjectionIsSafe(graph) {
     !graph ||
     graph.version !== 1 ||
     ![
-      "SELECTED_SCHEMA",
       "QUERY_STRUCTURE",
-      "RESULT_FACTS",
       "RESULT_PROVENANCE",
     ].includes(graph.kind) ||
     !Array.isArray(graph.nodes) ||
@@ -980,7 +960,7 @@ function graphProjectionIsSafe(graph) {
       ids.has(node.id) ||
       typeof node.display_name !== "string" ||
       typeof node.node_type !== "string" ||
-      !["SCHEMA_SELECTED", "SCHEMA_APPROVED", "VERIFIED"].includes(
+      !["SCHEMA_APPROVED", "VERIFIED"].includes(
         node.verification_status
       )
     ) return false;
@@ -1073,7 +1053,6 @@ function renderGraphPanel(container, title, graph) {
   }
   try {
     const graphKey = `${graph.kind}:${graph.nodes.map((node) => node.id).join("|")}`;
-    const animate = !animatedGraphs.has(graphKey);
     const controls = document.createElement("div");
     controls.className = "graph-controls";
     const viewport = document.createElement("div");
@@ -1087,11 +1066,7 @@ function renderGraphPanel(container, title, graph) {
     const positions = new Map();
     const columns = new Map();
     graph.nodes.forEach((node) => {
-      const column = mobile
-        ? 0
-        : graph.kind === "RESULT_FACTS"
-          ? 0
-          : graphColumn(node);
+      const column = mobile ? 0 : graphColumn(node);
       if (!columns.has(column)) columns.set(column, []);
       columns.get(column).push(node);
     });
@@ -1156,19 +1131,11 @@ function renderGraphPanel(container, title, graph) {
         mobile,
         ((index % 3) - 1) * 14
       );
-      const edgeClasses = ["graph-edge"];
-      if (animate && graph.kind === "QUERY_STRUCTURE") {
-        edgeClasses.push("is-query-pulse");
-      }
-      if (animate && graph.kind === "RESULT_PROVENANCE") {
-        edgeClasses.push("is-provenance-pulse");
-      }
       const path = svgNode("path", {
         d: geometry.path,
-        class: edgeClasses.join(" "),
+        class: "graph-edge",
         "marker-end": `url(#${marker.id})`,
       });
-      if (animate) path.style.animationDelay = `${index * 90}ms`;
       const relationshipLabel = edge.relationship.length > 22
         ? `${edge.relationship.slice(0, 21)}…`
         : edge.relationship;
@@ -1205,22 +1172,8 @@ function renderGraphPanel(container, title, graph) {
     const selected = document.createElement("p");
     selected.className = "graph-selected";
     selected.textContent = "노드를 선택하면 공개 가능한 상세가 표시됩니다.";
-    graph.nodes.forEach((node, index) => {
+    graph.nodes.forEach((node) => {
       const position = positions.get(node.id);
-      const animationClasses = ["graph-node-visual"];
-      if (animate && graph.kind === "SELECTED_SCHEMA") {
-        animationClasses.push("is-discovered");
-      }
-      if (animate && graph.kind === "RESULT_FACTS") {
-        animationClasses.push("is-result-appearing");
-      }
-      if (
-        animate &&
-        graph.kind === "RESULT_PROVENANCE" &&
-        node.node_type === "Evidence"
-      ) {
-        animationClasses.push("is-evidence-appearing");
-      }
       const group = svgNode("g", {
         class: "graph-node",
         tabindex: 0,
@@ -1229,8 +1182,7 @@ function renderGraphPanel(container, title, graph) {
         "data-kind": graphCategory(node.node_type),
         transform: `translate(${position.x} ${position.y})`,
       });
-      const visual = svgNode("g", { class: animationClasses.join(" ") });
-      if (animate) visual.style.animationDelay = `${index * 70}ms`;
+      const visual = svgNode("g", { class: "graph-node-visual" });
       const tooltip = svgNode("title");
       tooltip.textContent = `${node.display_name} · ${node.node_type}`;
       const box = svgNode("rect", {
@@ -1327,7 +1279,6 @@ function renderGraphPanel(container, title, graph) {
       legend.append(item);
     });
     panel.append(controls, viewport, selected, legend);
-    animatedGraphs.add(graphKey);
   } catch (_) {
     renderGraphFallback(panel, graph);
   }

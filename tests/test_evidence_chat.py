@@ -17,8 +17,6 @@ from evidence_chat.chat_adapter import CHAT_RESPONSE_FIELDS, ChatResponseAdapter
 from evidence_chat.graph_projection import (
     build_provenance_projection,
     build_query_structure_projection,
-    build_result_fact_projection,
-    build_selected_schema_projection,
 )
 from evidence_chat.server import ChatState, InspectionCollector, create_app
 from kg_builder.answer.contracts import ChatErrorCode, ChatResponse, ChatStatus
@@ -170,7 +168,6 @@ class _ChatStub:
                 "evidence_status_verified": True,
                 "direct_provenance_verified": True,
                 "rejected_row_count": 0,
-                "validated_rows": [row],
             },
             ProgressPhase.CLAIM_BUILDING: {
                 "claim_count": 1,
@@ -751,14 +748,11 @@ class StarletteRouteTests(unittest.IsolatedAsyncioTestCase):
             item for item in updates if item["stage"] == "RESULT_VALIDATION"
         )
         self.assertNotIn("approved_cypher", static["summary"])
-        self.assertEqual(schema["summary"]["schema_graph"]["kind"], "SELECTED_SCHEMA")
+        self.assertEqual(schema["summary"]["labels"], ["CourseOffering", "Evidence"])
         self.assertIn("MATCH (o:CourseOffering)", approved["summary"]["approved_cypher"])
         self.assertEqual(approved["summary"]["operators"], ["NodeIndexSeek"])
         self.assertEqual(approved["summary"]["query_graph"]["version"], 1)
-        self.assertEqual(
-            result_validation["summary"]["fact_graph"]["kind"],
-            "RESULT_FACTS",
-        )
+        self.assertNotIn("fact_graph", result_validation["summary"])
         claims = next(item for item in updates if item["stage"] == "CLAIM_BUILDING")
         provenance = claims["summary"]["provenance_graph"]
         self.assertEqual(provenance["kind"], "RESULT_PROVENANCE")
@@ -789,7 +783,6 @@ class StarletteRouteTests(unittest.IsolatedAsyncioTestCase):
                 "relationships",
                 "node_label_count",
                 "relationship_count",
-                "schema_graph",
             },
             "CYPHER_GENERATION": {
                 "candidate_generated",
@@ -823,7 +816,6 @@ class StarletteRouteTests(unittest.IsolatedAsyncioTestCase):
                 "evidence_status_verified",
                 "direct_provenance_verified",
                 "rejected_row_count",
-                "fact_graph",
             },
             "CLAIM_BUILDING": {
                 "claim_count",
@@ -933,11 +925,12 @@ class StarletteRouteTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn('setAttribute("aria-expanded"', script)
         self.assertIn('setAttribute("aria-controls"', script)
         self.assertIn('setAttribute("role", "tablist"', script)
-        self.assertIn("progress-exploration", markup)
+        self.assertNotIn("progress-exploration", markup)
         self.assertIn("answer-exploration", markup)
         self.assertIn("ResizeObserver", script)
-        self.assertIn("stroke-dasharray", style)
-        self.assertIn("prefers-reduced-motion: reduce", style)
+        self.assertNotIn("graph-path-traverse", style)
+        self.assertNotIn("is-query-pulse", script)
+        self.assertNotIn("animatedGraphs", script)
         self.assertIn("overflow-x: hidden", style)
         self.assertIn("graphLabelLines", script)
         self.assertIn("renderGraphFallback", script)
@@ -1009,32 +1002,6 @@ class InspectionGraphProjectionTests(unittest.TestCase):
         )
         serialized = json.dumps(graph, ensure_ascii=False)
         self.assertNotIn("NOT_A_RELATION", serialized)
-
-        selected = build_selected_schema_projection(
-            ["CourseOffering", "Evidence"],
-            ["SUPPORTED_BY"],
-            opaque_key=b"schema-test-key",
-        )
-        self.assertEqual(selected["kind"], "SELECTED_SCHEMA")
-        self.assertEqual(
-            {node["verification_status"] for node in selected["nodes"]},
-            {"SCHEMA_SELECTED"},
-        )
-
-    def test_result_fact_projection_uses_only_verified_rows(self):
-        row = _offering_row()
-        graph = build_result_fact_projection([row], opaque_key=b"fact-test-key")
-        self.assertEqual(graph["kind"], "RESULT_FACTS")
-        self.assertEqual(len(graph["nodes"]), 1)
-        serialized = json.dumps(graph, ensure_ascii=False)
-        self.assertNotIn(row["fact_id"], serialized)
-        self.assertNotIn(row["evidence_id"], serialized)
-        self.assertIsNone(
-            build_result_fact_projection(
-                [{**row, "fact_status": "REVIEW_REQUIRED"}],
-                opaque_key=b"fact-test-key",
-            )
-        )
 
     def test_provenance_projection_requires_exact_verified_pairs(self):
         row = _offering_row()

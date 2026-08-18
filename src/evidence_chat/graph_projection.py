@@ -69,16 +69,8 @@ def build_query_structure_projection(
     relationships: Iterable[str],
     *,
     opaque_key: bytes,
-    kind: str = "QUERY_STRUCTURE",
-    verification_status: str = "SCHEMA_APPROVED",
 ) -> dict[str, Any] | None:
     """Project only labels/relationships used by one EXPLAIN-approved query."""
-
-    if kind not in {"SELECTED_SCHEMA", "QUERY_STRUCTURE"} or verification_status not in {
-        "SCHEMA_SELECTED",
-        "SCHEMA_APPROVED",
-    }:
-        return None
 
     safe_labels = sorted(
         {
@@ -110,7 +102,7 @@ def build_query_structure_projection(
             "id": node_ids[label],
             "display_name": label,
             "node_type": label,
-            "verification_status": verification_status,
+            "verification_status": "SCHEMA_APPROVED",
         }
         for label in safe_labels
     ]
@@ -141,27 +133,10 @@ def build_query_structure_projection(
             break
     return {
         "version": GRAPH_ENVELOPE_VERSION,
-        "kind": kind,
+        "kind": "QUERY_STRUCTURE",
         "nodes": nodes,
         "edges": edges,
     }
-
-
-def build_selected_schema_projection(
-    labels: Iterable[str],
-    relationships: Iterable[str],
-    *,
-    opaque_key: bytes,
-) -> dict[str, Any] | None:
-    """Project only the schema members selected for the validated QueryPlan."""
-
-    return build_query_structure_projection(
-        labels,
-        relationships,
-        opaque_key=opaque_key,
-        kind="SELECTED_SCHEMA",
-        verification_status="SCHEMA_SELECTED",
-    )
 
 
 def _fact_display(row: Mapping[str, Any], fact_label: str) -> str:
@@ -171,50 +146,6 @@ def _fact_display(row: Mapping[str, Any], fact_label: str) -> str:
             if value:
                 return value
     return f"{fact_label} 결과"
-
-
-def build_result_fact_projection(
-    rows: Sequence[Mapping[str, Any]],
-    *,
-    opaque_key: bytes,
-) -> dict[str, Any] | None:
-    """Project VERIFIED Fact nodes only after ResultValidator approval."""
-
-    if not rows:
-        return None
-    fact_rows: dict[str, Mapping[str, Any]] = {}
-    for row in rows:
-        fact_id = row.get("fact_id")
-        fact_label = row.get("fact_label")
-        if (
-            not isinstance(fact_id, str)
-            or not fact_id
-            or not isinstance(fact_label, str)
-            or not _SAFE_TYPE.fullmatch(fact_label)
-            or row.get("fact_status") != "VERIFIED"
-            or row.get("evidence_verification_status") != "VERIFIED"
-        ):
-            return None
-        fact_rows.setdefault(fact_id, row)
-    if len(fact_rows) > MAX_GRAPH_NODES:
-        return None
-    nodes = []
-    for raw_id, row in sorted(fact_rows.items()):
-        fact_label = str(row["fact_label"])
-        nodes.append(
-            {
-                "id": _opaque_id(opaque_key, "result-fact-node", raw_id),
-                "display_name": _fact_display(row, fact_label),
-                "node_type": fact_label,
-                "verification_status": "VERIFIED",
-            }
-        )
-    return {
-        "version": GRAPH_ENVELOPE_VERSION,
-        "kind": "RESULT_FACTS",
-        "nodes": nodes,
-        "edges": [],
-    }
 
 
 def build_provenance_projection(
