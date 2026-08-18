@@ -1,133 +1,165 @@
 # KG Ontology Decision Framework
 
-지식 그래프 및 온톨로지 기반의 의사결정 추론 프레임워크
+2026학년도 공통 교양 이수요건과 컴퓨터공학과 교육과정을 온톨로지와 Neo4j 지식그래프로 구조화하고, 자연어 질문에 검증된 규정 원문과 페이지 근거를 제공하는 로컬 GraphRAG PoC입니다.
 
----
+이 프로젝트의 현재 중심 기능은 **Evidence 기반 학사규정 질의응답**입니다. 개인 CSV 수강내역을 받아 전체 졸업 가능 여부를 판정하는 시스템은 아직 구현하지 않았습니다.
 
-## 1. 전체 파이프라인 흐름 
+## 현재 PoC 범위
+
+| 항목 | 현재 기준 |
+|---|---|
+| 데이터 | 2026학년도 공통 교양 이수요건, 컴퓨터공학과 교육과정 |
+| 원문 | Git에서 제외된 19페이지 발췌 PDF |
+| Verified KG | 노드 1,518개 · 관계 3,260개 · Evidence 511개 |
+| 그래프 DB | 로컬 Neo4j |
+| 로컬 LLM | Ollama `qwen2.5-coder:14b`, context 8,192 |
+| 웹 UI | Starlette + SSE + vanilla HTML/CSS/JavaScript |
+| 기본 주소 | `http://127.0.0.1:8501` |
+
+확정 답변에는 `VERIFIED` Fact와 직접 연결된 `VERIFIED Evidence`가 필요합니다. Citation은 Evidence 원문과 발췌 PDF·원본 PDF·인쇄 페이지를 구분해 제공합니다.
+
+현재 `pyproject.toml`의 런타임 기준은 Python `3.12`, Neo4j Python Driver `6.2+`, Starlette `1.6+`, Uvicorn `0.52+`, PyMuPDF `1.28+`입니다. 정확한 해석 버전은 `uv.lock`으로 고정합니다.
+
+## 전체 아키텍처
 
 ```text
-[입력 데이터]
-├── 학사 규정 (PDF)   ──> PDF 파서 / LLM 추출 ──┐
-└── 수강 내역 (CSV)   ──> CSV 정형 변환기     ──┴─> [중간 가공 데이터 (JSON)]
-                                                          │
-                                                    builder.py (MERGE 쿼리)
-                                                          │
-                                                          ▼
-                                                   [Neo4j 지식 그래프]
-                                                          │
-                                                    evaluator.py (추론 Engine)
-                                                          │
-                                                          ▼
-                                              [최종 졸업 심사 결과 판정]
+2026 교육과정 PDF
+→ ontology/ontology_spec.json
+→ data/verified/2026 JSON bundle
+→ Neo4j
+→ 자연어 질문
+→ LLM QueryPlan
+→ 관련 스키마 선택
+→ LLM Cypher 후보 생성
+→ comment-free canonicalization
+→ 정적 안전 검증
+→ Neo4j EXPLAIN
+→ execute_read
+→ ResultValidator
+→ 구조화 Claim
+→ 결정론적 한국어 답변
+→ VERIFIED Evidence Citation
+→ Starlette/SSE 웹 UI
 ```
 
----
+- LLM은 자연어 질문의 `QueryPlan`과 Cypher 후보를 생성합니다.
+- 생성된 Cypher는 주석 제거, 제한 문법·스키마 검사와 Neo4j `EXPLAIN`을 모두 통과해야 읽기 트랜잭션으로 실행됩니다.
+- 최종 사실 문장은 LLM이 자유롭게 작성하지 않습니다. Python이 검증된 Claim의 값·단위·극성을 결정론적으로 렌더링합니다.
+- Evidence가 없거나 `REVIEW_REQUIRED`인 사실은 확정 답변으로 승격하지 않습니다.
+- clarification 선택지는 sealed `ChatResponse`에 추가하지 않고 별도의 versioned SSE envelope로 전달합니다.
+- 선택 스키마, 승인된 canonical Cypher와 조회 provenance 그래프는 표시 전용 데이터이며 답변·Citation을 변경하지 않습니다.
 
-## 2. 프로젝트 구조
+## 현재 기능
+
+- 온톨로지와 Verified JSON bundle의 계약 검증
+- Neo4j 제약조건·인덱스 적용, 멱등 적재와 대표 사실 검증
+- provider-neutral `StructuredLLMClient`
+  - Ollama
+  - OpenAI-compatible
+- 자연어 `QueryPlan`, 데이터 기반 clarification과 관련 스키마 선택
+- 동적 Text-to-Cypher와 comment-free canonicalization
+- deny-by-default 정적 안전 검증과 Neo4j `EXPLAIN`
+- `execute_read` 기반 읽기 경로와 결과 크기 제한
+- Fact·Evidence 상태 및 직접 provenance 검증
+- 구조화 Claim과 결정론적 한국어 답변
+- Evidence 원문 및 발췌 PDF·원본 PDF·인쇄 페이지 Citation
+- 19페이지 PDF 이미지와 PyMuPDF 실제 텍스트 검색 강조
+- Starlette/SSE 처리 타임라인과 상태별 UI
+- 상세 모드의 선택 스키마·승인 Cypher·정적 조회 그래프
+
+## 지원하지 않거나 제한된 범위
+
+- 개인별 수강과목·취득학점·성적표를 이용한 전체 졸업 가능 여부 판정
+- 모든 학년도와 모든 학과 데이터
+- Evidence가 `REVIEW_REQUIRED`인 규칙의 확정 답변
+- 아직 등록되지 않은 Claim 또는 fact family의 임의 설명
+- 실제 연구실 vLLM 서버와의 통합 검증
+- Neo4j Community Edition의 DB 역할 수준 읽기 전용 보장
+- 인증, 다중 사용자 queue, 고가용성과 자동 복구를 갖춘 운영 서비스
+- 정식 클라우드 배포와 GitHub Actions 기반 CD
+
+현재 범위를 벗어나는 질문은 추측하지 않고 `OUT_OF_SCOPE`, `UNSUPPORTED`, `UNRESOLVED`, `NOT_FOUND` 또는 `SAFE_FAILURE`로 구분합니다.
+
+## 프로젝트 구조
 
 ```text
 kg-ontology-decision-framework/
-├── .venv/                      # [가상환경] Python 3.12 독립 패키지 공간
-├── .gitignore                  # [설정] Git 추적 제외 목록 파일
-├── .env.example                # [환경변수 양식] API 키, DB 비밀번호 등의 설정 템플릿
-├── pyproject.toml              # [패키지 관리] uv 패키지 의존성 정의 파일
-├── README.md                   # [설명서] 프로젝트 개요 및 구조 안내 문서
-├── main.py                     # [진입점] 파싱 -> KG 구축 -> 의사결정 추론 전체 실행 파일
-│
-├── assets/                     # [시각화/캡처] README 및 문서용 이미지, GIF 저장소
-│
-├── config/                     # [설정] 프로젝트 주요 설정 관리 폴더
-│   ├── __init__.py             
-│   └── settings.py             # .env 읽어서 Neo4j IP/비밀번호, LLM API 키 로드
-│
-├── data/                       # [데이터] 원본 및 가공 데이터 저장소
-│   ├── raw/                    # 원본 데이터 (학사 규정 PDF, 학생/수강 목록 CSV)
-│   └── processed/              # 파싱/정제 거친 중간 데이터 (JSON 등)
-│
-├── ontology/                   # [온톨로지] 지식 그래프의 청사진(설계도)
-│   ├── schema.cypher           # Neo4j 속도 향상(인덱스) 및 중복 방지(제약조건) 쿼리
-│   └── ontology_spec.json      # 노드(학생, 과목, 규정)와 간선(이수함, 필수지정) 정의서
-│
-├── src/                        # [핵심 로직] 실제 작동하는 파이썬 소스코드
-│   ├── __init__.py             
-│   ├── database/               # [DB 연동] Neo4j 접속 드라이버
-│   │   ├── __init__.py
-│   │   └── neo4j_client.py     # 파이썬에서 Neo4j로 Cypher 쿼리를 쏘아주는 실행기
-│   │
-│   ├── kg_builder/             # [KG 생성기] 데이터를 읽어 그래프로 구축하는 파이프라인
-│   │   ├── __init__.py
-│   │   └── builder.py          # CSV/PDF를 읽어 노드·간선으로 변환 후 Neo4j에 저장
-│   │
-│   └── decision_engine/        # [추론 엔진] 지식 그래프 기반 의사결정 로직
-│       ├── __init__.py
-│       └── evaluator.py        # Neo4j 그래프를 탐색하여 "졸업 가능 여부" 등 추론/판정
-│
-└── tests/                      # [검증] 코드 테스트 모듈
-    ├── __init__.py
-    └── test_neo4j.py           # Neo4j DB 연결 및 쿼리 동작 정상 여부 테스트
+├── ontology/
+│   ├── ontology_spec.json       # 온톨로지·그래프 계약 원본
+│   ├── llm_query_schema.json    # 명세에서 생성한 LLM 질의 스키마
+│   └── schema.cypher            # Neo4j 스키마 정적 재현본
+├── data/
+│   ├── raw/                     # 원본 기반 JSON과 Git 제외 원문 파일 위치
+│   └── verified/2026/           # 검증·적재 기준 JSON bundle
+├── src/kg_builder/
+│   ├── llm/                     # provider adapter, planner, Cypher generator
+│   ├── query/                   # QueryPlan, selector, SafetyPipeline, validator
+│   ├── answer/                  # Claim 검증, 한국어 renderer, ChatResponse
+│   └── neo4j_ingest.py          # Verified KG 검증·적재 CLI
+├── src/evidence_chat/
+│   ├── server.py                # Starlette 앱과 /api/ask SSE 진입점
+│   ├── chat_adapter.py          # ChatResponse 표시 adapter
+│   ├── graph_projection.py      # 승인 결과의 표시용 graph projection
+│   ├── pdf_evidence.py          # PDF 페이지·텍스트 강조
+│   └── static/                  # vanilla 웹 UI
+├── tests/                       # 단위 및 선택적 로컬 통합 테스트
+├── docs/                        # 설계·환경·운영·AI 작업 문서
+└── .github/workflows/           # 비밀값 없는 CI 검증
 ```
 
+루트의 `main.py`, `config/settings.py`, `src/database/neo4j_client.py`, `src/decision_engine/evaluator.py`, `src/kg_builder/builder.py`는 현재 0바이트 초기 골격이며 실행 진입점이 아닙니다.
 
-**Git 추적 제외 안내: .venv/(가상환경 디렉토리), .env(민감한 환경변수 설정), CSV/PDF/HWP 데이터 파일 등은 보안 및 용량 관리를 위해 .gitignore에 등록되어 저장소 추적 대상에서 제외.**
+## 빠른 시작
 
----
+### 1. 저장소와 Python 환경
 
-## 3. 디렉토리 및 파일 상세 설명
+WSL2 Ubuntu 셸에서 실행합니다. Python 계약은 `>=3.12,<3.13`입니다.
 
-### 루트 파일 및 환경 설정
-* **`.venv/`**: 프로젝트 전용 독립 파이썬 실행 공간. 외부 패키지와 버전 충돌을 방지함.
-* **`.gitignore`**: Git에 올라가면 안 되는 비밀번호(`.env`), 대용량 데이터(`data/`), 가상환경(`.venv/`)을 차단함.
-* **`.env.example`**: DB 접속 비밀번호 및 API 키 설정용 서식. 실제 값은 Git에 올라가지 않는 `.env`에 적어서 사용함.
-* **`pyproject.toml`**: `uv` 패키지 매니저 전용 라이브러리 주문서. `neo4j`, `python-dotenv` 등의 의존성 버전을 고정함.
-* **`README.md`**: 프로젝트의 설계 의도, 실행 방법, 구조 및 각 파일의 역할을 설명하는 안내 문서.
-* **`main.py`**: 전체 프로그램 실행 진입점. 데이터 읽기부터 그래프 생성, 의사결정 추론까지 한 번에 실행함.
-* **`assets/`**: README 및 보고서에 들어갈 Neo4j 그래프 캡처 이미지나 시각화 GIF 파일 보관소.
+```bash
+git clone https://github.com/jeongiryang/kg-ontology-decision-framework.git
+cd kg-ontology-decision-framework
+uv sync --locked
+cp .env.example .env
+```
 
-### `config/` (프로젝트 설정)
-* **`settings.py`**: `.env`에 적힌 DB 주소, 계정, API 키를 읽어와 파이썬 코드 전체에서 안전하게 쓰도록 연결함.
+Windows 11, WSL2, Docker Desktop, Neo4j와 Ollama 설치 과정은 [로컬 개발환경 구축 가이드](docs/environment-setup.md)를 참고합니다.
 
-### `data/` (데이터 보관소)
-* **`raw/`**: 원본 데이터 저장소. 학사행정 규정 PDF 문서 및 학생 수강 내역 CSV 파일이 들어감.
-* **`processed/`**: PDF와 CSV에서 추출해 낸 중간 형태의 정제된 JSON 데이터를 저장함.
+### 2. 로컬 서비스 확인
 
-### `ontology/` (지식 그래프 설계도)
-* **`ontology_spec.json`**: 도메인 스키마 정의서. `[학생]`, `[과목]`, `[규정]` 노드와 `[:이수했음]`, `[:필수과목으로_지정]` 관계의 규칙을 명시함.
-* **`schema.cypher`**: Neo4j 탐색 속도를 높이는 인덱스(Index) 및 중복 노드를 막는 제약조건(Constraint) 생성 쿼리 모음.
+Docker Desktop과 Neo4j, Ollama를 실행하고 모델이 이미 준비됐는지 확인합니다.
 
-### `src/` (핵심 실행 엔진)
-* **`database/neo4j_client.py`**: 파이썬에서 Neo4j DB로 Cypher 쿼리를 안전하게 던지고 결과를 받아오는 통신 드라이버.
-* **`kg_builder/builder.py`**: `processed/`의 중간 데이터를 읽어서 Neo4j에 노드와 화살표를 `MERGE` 쿼리로 구축하는 생성 파이프라인.
-* **`decision_engine/evaluator.py`**: 완공된 Neo4j 그래프의 연결 경로를 탐색하여 학생의 졸업 요건 충족 여부(Pass/Fail 및 사유)를 판단하는 추론 엔진.
+```bash
+docker ps
+ollama list
+curl http://127.0.0.1:11434/api/tags
+```
 
-### `tests/` (검증 모듈)
-* **`test_neo4j.py`**: 전체 시스템 구동 전, Neo4j DB 접속 및 기본 쿼리 실행이 정상인지 단독으로 확인하는 테스트 코드.
+기본 실측 모델은 `qwen2.5-coder:14b`입니다. 모델이 없다면 [로컬 LLM 문서](docs/local-llm-query-pipeline.md)의 설치·VRAM 조건을 확인한 뒤 준비합니다.
 
-## 개발환경 및 AI 작업 기록
+### 3. 환경변수
 
-이 프로젝트는 팀원 간 재현 가능한 개발환경과 AI 에이전트 작업 추적을 위해 별도 문서를 관리합니다.
+실제 자격증명은 Git에서 제외된 `.env`에만 둡니다. 변수명과 안전한 자리표시자는 [`.env.example`](.env.example)을 기준으로 합니다.
 
-### 공통 개발환경
+| 그룹 | 역할 |
+|---|---|
+| `NEO4J_*` | 빈 데이터베이스 스키마·적재용 계정 |
+| `NEO4J_QUERY_*` | 동적 질의용 명시적 query 계정 |
+| `KG_LLM_*` | provider, loopback base URL, 모델, timeout, context |
+| `KG_QUERY_TRACE_*` | 질문 원문·fingerprint opt-in과 보존 설정 |
+| `KG_CHAT_*` | UI debug, 상세 조회, 동시성, timeout, PDF |
+| `CHATBOT_HOST`, `CHATBOT_PORT` | 웹 bind 주소와 포트 |
 
-- Windows 11 + WSL2
-- Ubuntu 24.04
-- Python 3.12.3
-- uv
-- Docker Desktop
-- Neo4j 2026.06.0
+발췌 PDF는 Git에서 제외됩니다. 19페이지 PDF의 로컬 경로를 다음 변수로 지정합니다.
 
-상세 설치 및 검증 절차는 [로컬 개발환경 구축 가이드](docs/environment-setup.md)를 참고합니다.
+```dotenv
+KG_CHAT_PDF_PATH=/path/to/ignored/2026_curriculum_excerpt.pdf
+```
 
-- [2026 학사 교육과정 온톨로지 V1 설계](docs/ontology/ontology-v1.md)
-- [Neo4j V0.2 스키마 적용 및 Verified KG 적재 가이드](docs/neo4j-ingestion.md)
-- [Verified KG 읽기 전용 질의·Evidence 응답 가이드](docs/query-evidence-api.md)
-- [CurriculumChatService 기반 학사규정 근거 챗봇 가이드](docs/evidence-chat.md)
-- [Text-to-Cypher 스키마·검증·실행 안전 기반](docs/text-to-cypher-safety.md)
-- [RTX 4070 Ti 로컬 LLM Text-to-Cypher PoC](docs/local-llm-query-pipeline.md)
-- [VERIFIED Evidence 기반 한국어 답변 계층](docs/evidence-answer-renderer.md)
-- [확장 fact family 기반 답변 커버리지](docs/extended-fact-families.md)
+PDF가 없으면 답변과 Citation 텍스트는 표시되지만 페이지 이미지와 강조는 사용할 수 없습니다. 실제 비밀번호·토큰·개인 경로는 문서나 커밋에 기록하지 않습니다.
 
-Verified bundle 검증과 로컬 Neo4j 적재는 다음 순서로 실행합니다. 각 팀원은 자신의 빈 로컬 Neo4j 데이터베이스에서 독립적으로 수행합니다.
+## 빈 Neo4j 구축
+
+아래 명령은 온톨로지와 Verified bundle을 검사하고 빈 로컬 Neo4j를 멱등하게 구축합니다.
 
 ```bash
 uv run python -m kg_builder.neo4j_ingest validate
@@ -137,65 +169,105 @@ uv run python -m kg_builder.neo4j_ingest load
 uv run python -m kg_builder.neo4j_ingest verify
 ```
 
-- `validate`: 연결 없이 명세와 Verified bundle을 검사합니다.
-- `check-connection`: 로컬 서버 버전과 현재 DB 개수를 확인합니다.
-- `apply-schema`: 고유 제약조건과 조회 인덱스를 멱등 적용합니다.
-- `load`: 빈 DB에 같은 bundle을 두 번 적재하여 멱등성을 확인합니다.
-- `verify`: 전체 개수와 대표 학사 사실·Evidence를 실제 Cypher로 검증합니다.
+`load`는 비어 있지 않은 DB를 자동 삭제하거나 덮어쓰지 않습니다. 이미 이 Verified bundle이 적재되고 `verify`가 통과한 사용자는 다시 적재할 필요가 없습니다. 상세 절차는 [Neo4j 적재 가이드](docs/neo4j-ingestion.md)를 참고합니다.
 
-적재가 끝난 로컬 Neo4j에는 사전 정의된 Intent만 사용하는 읽기 전용 질의 CLI로 접근합니다.
+## 웹 챗봇 실행
 
-```bash
-uv run python -m kg_builder.query_cli \
-  --request '{"intent":"GET_GENERAL_EDUCATION_MIN_CREDITS","parameters":{"academic_year":2026}}'
-```
-
-최종 사용자 화면은 Starlette의 기존 `/api/ask` 안에서 `CurriculumChatService`를 직접 호출하는 로컬 웹 챗봇입니다. 별도 API 서버나 고정 Intent 경로 없이 자연어 QueryPlan, 안전한 Cypher 실행, 구조화 Claim, 결정론적 한국어 답변과 Citation을 한 프로세스에서 연결합니다.
+Neo4j query 설정과 Ollama가 준비된 WSL2 셸에서 실행합니다.
 
 ```bash
 uv run python -m evidence_chat.server
 ```
 
-기본 주소는 `http://127.0.0.1:8501`입니다. `NEO4J_QUERY_*`와 `KG_LLM_*` 설정이 필요하며, 근거 페이지 이미지와 실제 텍스트 검색 강조를 보려면 Git 제외된 19쪽 발췌 PDF를 `KG_CHAT_PDF_PATH`로 지정합니다. PDF가 없어도 근거 원문과 세 종류 페이지 번호는 표시됩니다. 실제 pipeline 단계의 누적 타임라인, EXPLAIN 승인 후에만 공개되는 선택적 Cypher inspection, 상태별 화면과 Citation 정책은 [학사규정 근거 챗봇 가이드](docs/evidence-chat.md)를 참고합니다.
+브라우저에서 `http://127.0.0.1:8501`을 엽니다. 선택 스키마, 승인 Cypher와 정적 조회 그래프를 표시하려면 로컬 `.env`에서 다음 값을 선택적으로 사용합니다.
 
-되묻기 선택지는 `ChatResponse`에 필드를 추가하지 않고 별도 versioned
-`clarification_options` SSE event로 전달됩니다. 선택 후 재질의는 `resolved`를,
-실시간 단계 표시는 `progress_callback`을 각각 keyword-only 인자로 사용하므로 기존
-8필드 응답 계약과 승인 경계는 유지됩니다.
+```dotenv
+KG_CHAT_SHOW_QUERY_DETAILS=true
+```
 
-현재 실제 구현은 `src/kg_builder/`의 `config.py`, `graph_bundle.py`, `neo4j_schema.py`, `neo4j_ingest.py`, `query_*.py`와 `src/evidence_chat/`에 있습니다. 위쪽 초기 디렉터리 설명의 0바이트 골격 모듈은 향후 구조 예시이며 구현 완료 상태를 뜻하지 않습니다.
+상세 모드도 정적 검증과 동일 candidate의 Neo4j `EXPLAIN`을 통과한 comment-free canonical Cypher만 표시합니다. 실패·폐기 후보, prompt, 모델 원문, 접속정보와 로컬 경로는 표시하지 않습니다.
 
-동적 Text-to-Cypher는 명세-derived LLM 스키마, 제한 문법 후보 검증, Neo4j `EXPLAIN`, Evidence provenance에 더해 provider-neutral 로컬 LLM planner·Cypher generator까지 연결되어 있습니다. 현재 실측 provider는 Ollama이고 OpenAI-compatible adapter로 SSH 터널 뒤 연구실 vLLM을 연결할 수 있습니다. 실행 시 명시적인 `NEO4J_QUERY_*`와 로컬 `KG_LLM_*` 설정이 필요합니다.
+로컬 PC에서 `tmux`로 서버와 ngrok 터널을 유지하는 시연 절차는 [로컬 시연 배포 및 정식 배포 계획](docs/deployment.md)을 참고합니다.
+
+## CLI
+
+검증된 구조화 조회 결과:
 
 ```bash
 uv run python -m kg_builder.query.natural_language_cli \
   "2026학년도 컴퓨터공학과 자료구조의 이수구분은?"
 ```
 
-안전 정책은 [Text-to-Cypher 안전 기반 문서](docs/text-to-cypher-safety.md), 모델·실행·실측 결과는 [로컬 LLM PoC 문서](docs/local-llm-query-pipeline.md)를 참고합니다.
-
-`ResultValidator`가 승인한 Fact와 Evidence를 구조화 Claim으로 변환한 뒤 최종 한국어 답변과 Citation JSON으로 조립하려면 다음 CLI를 사용합니다. 최종 사실 문장은 LLM이 작성하지 않으며, Python이 Claim의 값·단위·극성·직접 provenance를 검증하고 결정론적으로 렌더링합니다. 검증 전 `GroundedClaim`은 직접 렌더링할 수 없고 `ClaimValidator`가 발급한 immutable `ValidatedClaims`만 답변·Citation 단계로 전달됩니다. 공개 `ChatResponse`는 읽기·직렬화 전용이며, ANSWERABLE 응답은 승인된 renderer와 Citation payload를 통해서만 발급됩니다. 프론트엔드는 응답을 직접 만들지 않고 서비스 결과의 기존 JSON 필드를 사용합니다.
+구조화 Claim 기반 최종 한국어 답변:
 
 ```bash
 uv run python -m kg_builder.answer.cli \
   "2026학년도 컴퓨터공학과 전공필수 과목을 알려줘"
 ```
 
-응답 상태, Claim 유형, Citation 필드와 안전 실패 정책은 [Evidence 기반 한국어 답변 계층 문서](docs/evidence-answer-renderer.md)를 참고합니다.
-
-답변 가능한 사실의 범위는 확장 fact family로 넓혔습니다. 학년·학기별 교양 학점 배분, 권장 이수 로드맵, 학과 교육목표, 진출 분야, 인재상, 권장 교양 과목을 Evidence와 함께 답변합니다. 근거 규칙은 그대로이며, Evidence 직접 경로가 있는 사실만 등록됩니다. QueryPlan을 직접 지정해 로컬 LLM 없이 이 경로를 확인하려면 다음 CLI를 사용합니다. 안전 관문과 근거 검증은 모두 실제로 실행됩니다.
+확장 fact family의 LLM 없는 확인:
 
 ```bash
 uv run python -m kg_builder.answer.plan_cli --print-examples
-uv run python -m kg_builder.answer.plan_cli --all-examples
 ```
 
-등록된 fact family, 범위 밖으로 남긴 항목, family 추가 절차는 [확장 fact family 문서](docs/extended-fact-families.md)를 참고합니다.
+## 대표 질문
 
-### AI 시뮬레이션 로그
+다음은 사용 예시이며 런타임 분기나 정답 하드코딩이 아닙니다.
 
-AI 에이전트가 수행한 주요 작업, 변경 파일, 의사결정, 검증 결과와 남은 작업을 팀원별로 기록합니다.
+```text
+2026학년도 컴퓨터공학과 학생의 교양 최소 이수학점은?
+자료구조는 몇 학년 몇 학기에 개설돼?
+이산수학의 학수번호는?
+컴퓨터공학과 전공필수 과목은?
+편입생도 교양을 이수해야 해?
+```
 
-- [AI 시뮬레이션 로그 운영 규칙](docs/ai-simulation-logs/README.md)
-- [정이량 작업 로그](docs/ai-simulation-logs/jeong-iryang/README.md)
-- [황대겸 작업 로그](docs/ai-simulation-logs/hwang-daegyeom/README.md)
+## 테스트
+
+비밀값 없는 로컬 단위 테스트와 생성 스키마 검사는 다음과 같습니다.
+
+```bash
+uv run python -m unittest discover -s tests -v
+uv run pytest -q
+uv run python -m kg_builder.query.schema_exporter check
+```
+
+현재 GitHub Actions는 잠금 환경에서 `unittest` discovery와 schema exporter stale check를 실행합니다. 로컬 `pytest` 명령은 같은 테스트 모음을 별도로 확인할 때 사용합니다.
+
+외부 서비스가 필요한 테스트는 명시적으로 opt-in합니다.
+
+```bash
+# 로컬 Neo4j 읽기 통합
+KG_NEO4J_INTEGRATION=1 uv run pytest -q
+
+# 로컬 Ollama + Neo4j smoke
+KG_LOCAL_LLM_INTEGRATION=1 uv run pytest -q tests/test_local_llm_integration.py -s
+```
+
+Neo4j·Ollama와 자격증명이 없는 기본 CI에서는 해당 통합 검사가 skip될 수 있습니다. skip된 검사를 통과로 간주하지 않습니다.
+
+## 문서 안내
+
+| 주제 | 문서 |
+|---|---|
+| 개발환경 | [로컬 개발환경 구축](docs/environment-setup.md) |
+| 온톨로지 | [2026 학사 교육과정 온톨로지](docs/ontology/ontology-v1.md) |
+| Verified KG 적재 | [Neo4j 적재 가이드](docs/neo4j-ingestion.md) |
+| 기존 구조화 질의 | [Verified KG 질의·Evidence API](docs/query-evidence-api.md) |
+| 동적 질의 안전성 | [Text-to-Cypher 안전 기반](docs/text-to-cypher-safety.md) |
+| 로컬 LLM | [Ollama Text-to-Cypher PoC](docs/local-llm-query-pipeline.md) |
+| Claim·답변·Citation | [Evidence 기반 한국어 답변](docs/evidence-answer-renderer.md) |
+| 답변 범위 확장 | [확장 fact family](docs/extended-fact-families.md) |
+| Starlette UI | [학사규정 근거 챗봇](docs/evidence-chat.md) |
+| 로컬 시연·배포 계획 | [배포 및 시연](docs/deployment.md) |
+| AI 작업 기록 | [AI 시뮬레이션 로그](docs/ai-simulation-logs/README.md) |
+
+## 데이터와 보안 원칙
+
+- 숫자·학점·학수번호·규칙을 추정하지 않습니다.
+- Raw·Verified 원문과 `ontology_spec.json`을 런타임 질문에 맞춰 수정하지 않습니다.
+- 질문 값은 Cypher 파라미터로 전달하고 LLM 생성 임의 Cypher를 직접 실행하지 않습니다.
+- `.env`, 원본 PDF, 모델 파일, Neo4j 데이터와 runtime trace는 Git에 포함하지 않습니다.
+- 질문 원문과 fingerprint trace는 기본 비활성입니다.
+- 현재 웹 앱에는 정식 인증이 없으므로 공개 시연은 제한된 시간과 대상에만 사용합니다.
