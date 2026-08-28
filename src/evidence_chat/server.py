@@ -36,6 +36,7 @@ from kg_builder.answer.personalized_service import (
     PersonalizedChatResult,
     PersonalizedCurriculumChatService,
 )
+from kg_builder.agent import AgenticCurriculumChatService, ConversationContext
 from kg_builder.config import ConfigurationError, Neo4jQuerySettings
 from kg_builder.llm.client import LLMConfigurationError, LLMSettings, create_llm_client
 from kg_builder.llm.cypher_generator import LocalCypherGenerator
@@ -69,7 +70,7 @@ DEFAULT_HOST = "127.0.0.1"
 DEFAULT_PORT = 8501
 DEFAULT_CLIENT_TIMEOUT_SECONDS = 180
 DEFAULT_MAX_CONCURRENT = 1
-MAX_BODY_BYTES = 16 * 1024
+MAX_BODY_BYTES = 64 * 1024
 # 되묻기로 채울 수 있는 항목 수 상한. 이 이상은 정상 흐름이 아니다.
 MAX_RESOLVED_ENTRIES = 8
 
@@ -541,6 +542,7 @@ class ChatState:
             self.service = PersonalizedCurriculumChatService(
                 CurriculumChatService(query_service)
             )
+            self.service = AgenticCurriculumChatService(self.service, client)
         except (ConfigurationError, LLMConfigurationError):
             self.error = "서비스 환경 설정을 확인해 주세요."
             self.error_code = "CHAT_CONFIGURATION_ERROR"
@@ -679,9 +681,10 @@ async def ask(request: Request) -> Response:
         "question",
         "resolved",
         "profile",
+        "conversation",
     }:
         return JSONResponse(
-            {"error": "question, resolved, profile 필드만 전송할 수 있습니다."},
+            {"error": "question, resolved, profile, conversation 필드만 전송할 수 있습니다."},
             status_code=400,
         )
     # 되묻기에서 사용자가 고른 값. 서버는 대화 상태를 들지 않으므로 매 요청에 함께
@@ -705,6 +708,12 @@ async def ask(request: Request) -> Response:
         return JSONResponse(
             {"error": f"질문은 {MAX_QUESTION_LENGTH}자를 넘을 수 없습니다."},
             status_code=422,
+        )
+    try:
+        conversation = ConversationContext.from_payload(payload.get("conversation"))
+    except ValueError:
+        return JSONResponse(
+            {"error": "저장된 대화 문맥 형식을 확인해 주세요."}, status_code=422
         )
     state = _state(request)
     if not state.ready or state.service is None or state.limiter is None:
@@ -736,7 +745,50 @@ async def ask(request: Request) -> Response:
 
             def worker() -> None:
                 try:
-                    if isinstance(service, PersonalizedCurriculumChatService):
+                    if isinstance(service, AgenticCurriculumChatService):
+                        def on_agent_trace(event: Any) -> None:
+                            loop.call_soon_threadsafe(
+                                queue.put_nowait,
+                                {
+                                    "type": "agent_trace",
+                                    "version": 1,
+                                    **event.to_public_dict(),
+                                },
+                            )
+
+                        agent_result = service.ask(
+                            question,
+                            profile=profile,
+                            resolved=resolved or None,
+                            conversation=conversation,
+                            progress_callback=on_progress,
+                            trace_callback=on_agent_trace,
+                        )
+                        personalized = agent_result.personalized
+                        response = personalized.response
+                        loop.call_soon_threadsafe(
+                            queue.put_nowait, agent_result.conversation_update()
+                        )
+                        loop.call_soon_threadsafe(
+                            queue.put_nowait,
+                            {
+                                "type": "profile_update",
+                                "version": 1,
+                                "profile": personalized.profile.to_dict(),
+                                "changed_fields": list(
+                                    personalized.changed_profile_fields
+                                ),
+                            },
+                        )
+                        loop.call_soon_threadsafe(
+                            queue.put_nowait,
+                            {
+                                "type": "outcome",
+                                "version": 1,
+                                **personalized.outcome.to_dict(),
+                            },
+                        )
+                    elif isinstance(service, PersonalizedCurriculumChatService):
                         personalized = service.ask(
                             question,
                             profile=profile,

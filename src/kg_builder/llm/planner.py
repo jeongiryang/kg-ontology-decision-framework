@@ -157,6 +157,11 @@ _WORD = re.compile(r"[가-힣A-Za-z]{2,}")
 COURSE_REQUEST_FIELDS = frozenset(
     {"course_code", "name_ko", "grade_year", "semester", "credits", "completion_type"}
 )
+_TOPIC_ONLY_REQUIRED_COURSE_LIST = re.compile(
+    r"^[ \t]*(?:2026(?:학년도)?[ \t]*)?(?:컴퓨터공학과[ \t]*)?"
+    r"(?:전공[ \t]*필수|필수[ \t]*전공)(?:[ \t]*과목)?"
+    r"(?:은|는|이|가|을|를)?[ \t]*(?:뭐|무엇|어떤|알려[ \t]*줘)?[?？]?[ \t]*$"
+)
 _GRADUATION_CONTEXT = re.compile(
     r"(?:졸업|영어\s*대체|대학영어|공인\s*시험|TOEIC|토익)", re.IGNORECASE
 )
@@ -168,6 +173,10 @@ _PERSONAL_RECORD = re.compile(
 _HOLISTIC_JUDGMENT = re.compile(
     r"(?:졸업(?:할\s*수|\s*가능)|남은\s*(?:과목|학점|요건)|"
     r"(?:뭘|무엇을)\s*해야\s*졸업|졸업(?:하려면|하기\s*위해))"
+)
+_GENERAL_WITHOUT_PERSONAL_RECORD = re.compile(
+    r"(?:성적표|개인[ \t]*(?:이력|정보)|수강[ \t]*내역)[ \t]*(?:없이|제외).{0,24}"
+    r"(?:일반|공통|전체)[ \t]*(?:기준|요건|규정)"
 )
 _SINGLE_CONDITION = re.compile(
     r"(?:\d+(?:\.\d+)?\s*(?:점|학점).{0,24}(?:충족|가능|되|면제)|"
@@ -198,20 +207,24 @@ _SUBJECT_FIELD_RULE_LABELS: Mapping[str, str] = {
     "FLEX": "FLEX 기준",
 }
 _REQUESTED_FIELD_PATTERNS: Mapping[str, re.Pattern[str]] = {
-    "grade_year": re.compile(r"(?:몇|어느)\s*학년"),
-    "semester": re.compile(r"(?:몇|어느)\s*학기"),
+    # 일상적인 "언제 들어/듣다/개설"은 추가 조건이 아니라 학년·학기 값을
+    # 요청하는 표현이다. 특정 과목명과 무관한 requested-field 정규화다.
+    "grade_year": re.compile(r"(?:(?:몇|어느)\s*학년|언제\s*(?:들|듣|개설|수강|편성|배치))"),
+    "semester": re.compile(r"(?:(?:몇|어느)\s*학기|언제\s*(?:들|듣|개설|수강|편성|배치))"),
     "course_code": re.compile(
         r"(?:과목\s*코드|학수번호).*(?:뭐|무엇|알려|인가|어떤)"
     ),
 }
 _COURSE_FIELD_HINTS: Mapping[str, re.Pattern[str]] = {
     "course_code": re.compile(r"(?:과목\s*코드|학수번호)"),
-    "grade_year": re.compile(r"(?:학년|권장\s*시기)"),
-    "semester": re.compile(r"(?:학기|개설\s*시기)"),
+    "grade_year": re.compile(r"(?:학년|권장\s*시기|언제\s*(?:들|듣|개설|수강|편성|배치))"),
+    "semester": re.compile(r"(?:학기|개설\s*시기|언제\s*(?:들|듣|개설|수강|편성|배치))"),
     "credits": re.compile(r"(?:몇\s*학점|\d+\s*학점|학점은|학점이|0학점)"),
     "completion_type": re.compile(
         r"(?:이수\s*구분|전공\s*필수|필수\s*전공|전공\s*선택|교양\s*선택|필수\s*과목|"
-        r"필수(?:가|인|인지|인가|이야|맞)|졸업)"
+        r"필수(?:가|인|인지|인가|이야|맞)|졸업|"
+        r"(?:안|못)\s*(?:들|듣|이수|수강).{0,16}(?:안\s*되|문제|필요)|"
+        r"(?:하나|일부).{0,10}(?:빼|누락|제외))"
     ),
 }
 _COURSE_LIST_HINT = re.compile(
@@ -226,7 +239,10 @@ _GENERAL_RULE_HINT = re.compile(
 )
 _COURSE_IDENTITY_COMPARISON = re.compile(
     r"(?:같은\s*과목|다른\s*과목|서로\s*다른|표기|이름.{0,12}다르|"
-    r"둘\s*다.{0,12}(?:신청|수강|들어))"
+    r"둘\s*다.{0,12}(?:신청|수강|들어)|(?:같은|동일한)\s*(?:거|것)(?:야|인가|맞))"
+)
+_BROAD_COURSE_INFORMATION = re.compile(
+    r"(?:과목[ \t]*)?(?:정보|상세)(?:를|는|은|이)?[ \t]*(?:알려|보여|확인|궁금)"
 )
 
 def planner_response_schema(catalog: SchemaCatalog) -> dict[str, Any]:
@@ -597,6 +613,8 @@ def classify_graduation_question(question: str) -> GraduationQuestionClass:
 
     if not _GRADUATION_CONTEXT.search(question):
         return GraduationQuestionClass.OTHER
+    if _GENERAL_WITHOUT_PERSONAL_RECORD.search(question):
+        return GraduationQuestionClass.GENERAL_RULE
     if _PERSONAL_RECORD.search(question) and _HOLISTIC_JUDGMENT.search(question):
         return GraduationQuestionClass.FULL_PERSONAL_HISTORY
     if _SINGLE_CONDITION.search(question):
@@ -1172,7 +1190,8 @@ class LocalQueryPlanner:
             elif self._question_names_course_aspect(question):
                 # 질문이 이미 원하는 출력 필드를 말했으면 그 필드만 유지한다.
                 # 학년·학기·학수번호를 검색 조건으로 되묻거나, 묻지 않은 개설
-                # 정보를 통째로 덧붙이지 않는다.
+                # 정보를 통째로 덧붙이지 않는다. 과목 표시명은 조회 행의 구조 필드로
+                # 별도 보존되므로, 사용자가 요청하지 않은 출력 필드에는 추가하지 않는다.
                 requested_fields = list(dict.fromkeys(requested_fields))
             else:
                 requested_fields = list(
@@ -1653,6 +1672,15 @@ class LocalQueryPlanner:
         requested = [
             field for field, pattern in _COURSE_FIELD_HINTS.items() if pattern.search(question)
         ]
+        if not requested and _BROAD_COURSE_INFORMATION.search(question):
+            requested = list(COURSE_DETAIL_FIELDS)
+        if not requested and re.search(
+            r"(?:추천|조언|진로|어떤.{0,12}순서|무엇을\s*먼저|뭘\s*먼저)",
+            question,
+        ):
+            # Advisory wording selects which verified course facts to retrieve; it
+            # does not supply the recommendation or any course value itself.
+            requested = list(COURSE_DETAIL_FIELDS)
         if _COURSE_IDENTITY_COMPARISON.search(question):
             requested = list(dict.fromkeys([*requested, "name_ko", "course_code"]))
         if (
@@ -1749,7 +1777,18 @@ class LocalQueryPlanner:
                 if any(term in question for term in subject_terms):
                     named_subject_rules.append(rule_id)
 
-        if re.search(
+        if (
+            re.search(r"(?:영어|대학영어)", question)
+            and re.search(r"(?:시험|공인)", question)
+            and re.search(r"(?:전부|전체|모두|각각|시험별)", question)
+        ):
+            # This selects the registered atomic threshold family.  Values remain in
+            # Verified Rule rows and are never copied from the question or an answer
+            # fixture.
+            for rule_id, text in rows:
+                if "대학영어 이수 면제" in text and "기준" in text:
+                    selected.append(rule_id)
+        elif re.search(
             r"(?:TOEIC|토익|TOEFL|토플|TEPS|텝스|OPIc|오픽|G-?TELP|FLEX)",
             question,
             re.IGNORECASE,
@@ -1794,7 +1833,9 @@ class LocalQueryPlanner:
         elif "대학영어" in question and "면제" in question:
             take("대학영어 이수 면제", "학점 인정")
             take("영어 공인시험 중 하나", "면제")
-        elif "교양" in question and re.search(r"(?:최소|총학점|몇\s*학점)", question):
+        elif "교양" in question and re.search(
+            r"(?:최소|총학점|몇\s*학점|부족|모자라|얼마나\s*남)", question
+        ):
             take("일반 적용 대상", "교양", "최소")
         elif "전공필수" in question and "학점" in question:
             take("단일전공", "전공필수 기준")
@@ -1802,16 +1843,24 @@ class LocalQueryPlanner:
             take("단일전공", "전공 합계")
             take("단일전공", "졸업 잔여 기준")
         elif "전공" in question and re.search(
-            r"(?:전공\s*(?:합계|기준)|최소\s*전공|부족|모자라|얼마나\s*남)",
+            r"(?:전공.{0,8}(?:합계|기준)|최소\s*전공|부족|모자라|얼마나\s*남)",
             question,
         ):
             take("단일전공", "전공 합계")
+        elif "졸업" in question and "학점" in question and re.search(
+            r"(?:최소|기준|요건)", question
+        ):
+            take("단일전공", "졸업학점 기준")
         elif ("졸업" in question or "총" in question) and re.search(
             r"(?:총\s*\d+(?:\.\d+)?\s*학점|몇\s*학점|절반)", question
         ):
             take("단일전공", "졸업학점 기준")
         elif "잔여" in question and "학점" in question:
             take("단일전공", "졸업 잔여 기준")
+        elif "졸업" in question and re.search(r"(?:일반|전체).{0,8}(?:기준|요건)", question):
+            take("일반 적용 대상", "교양", "최소")
+            take("단일전공", "전공 합계")
+            take("단일전공", "졸업학점 기준")
 
         selected = sorted(set(selected))
         if not selected:
@@ -1836,7 +1885,31 @@ class LocalQueryPlanner:
         )
 
     def _deterministic_plan(self, question: str) -> QueryPlan | None:
-        if re.search(r"(?:권장\s*과목|과목\s*추천)", question):
+        if re.search(r"진로", question) and re.search(
+            r"(?:선택지|진출[ \t]*분야|어떤[ \t]*분야|분야를[ \t]*(?:비교|알려))",
+            question,
+        ):
+            default = self.context.get("default_scope") or {}
+            return QueryPlan.from_dict(
+                {
+                    "question": question,
+                    "intent": "CAREER_FIELD_LIST",
+                    "filters": {
+                        "academic_year": default.get("academic_year"),
+                        "department_id": default.get("department_id"),
+                    },
+                    "requested_fields": ["name_ko", "field_order"],
+                    "evidence_required": True,
+                    "selection_mode": SelectionMode.CAREER_FIELD_LIST.value,
+                },
+                self.catalog,
+            )
+        if re.search(
+            r"(?:권장\s*과목|과목\s*추천|"
+            r"(?:진로|되고\s*싶|목표).{0,28}(?:어떤\s*과목|과목.{0,12}순서)|"
+            r"(?:어떤\s*과목|과목.{0,12}순서).{0,28}(?:진로|목표))",
+            question,
+        ):
             default = self.context.get("default_scope") or {}
             return QueryPlan.from_dict(
                 {
@@ -1858,9 +1931,20 @@ class LocalQueryPlanner:
                 },
                 self.catalog,
             )
+        zero_credit_required = bool(
+            re.search(
+                r"(?:0\s*학점.{0,20}(?:전공\s*필수|필수\s*전공)|"
+                r"(?:전공\s*필수|필수\s*전공).{0,20}0\s*학점)",
+                question,
+            )
+        )
         if (
             re.search(r"(?:전공\s*필수|필수\s*전공)", question)
-            and _COURSE_LIST_HINT.search(question)
+            and (
+                _COURSE_LIST_HINT.search(question)
+                or _TOPIC_ONLY_REQUIRED_COURSE_LIST.search(question)
+                or zero_credit_required
+            )
             and not self.course_resolver.find_mentions(question)
         ):
             default = self.context.get("default_scope") or {}
@@ -1877,6 +1961,8 @@ class LocalQueryPlanner:
                 filters["semester"] = (
                     "FIRST" if semester_match.group(1) == "1" else "SECOND"
                 )
+            if zero_credit_required:
+                filters["credits"] = 0
             return QueryPlan.from_dict(
                 {
                     "question": question,

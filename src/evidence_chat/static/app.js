@@ -6,6 +6,12 @@ const $ = (id) => document.getElementById(id);
 const SCREEN_ORDER = ["ask", "progress", "answer"];
 const el = {
   status: $("status"),
+  conversationToggle: $("conversation-toggle"),
+  conversationPanel: $("conversation-panel"),
+  conversationNew: $("conversation-new"),
+  conversationClear: $("conversation-clear"),
+  conversationList: $("conversation-list"),
+  conversationTranscript: $("conversation-transcript"),
   stages: document.querySelectorAll(".stages li"),
   screens: {
     ask: $("screen-ask"),
@@ -88,6 +94,9 @@ let activeExplorationTab = "schema";
 let lastResult = null;
 let clarificationPresentation = null;
 let latestOutcome = null;
+let latestConversationUpdate = null;
+let currentConversationId = null;
+let activeTurnId = null;
 const graphResizeObserver = typeof window.ResizeObserver === "function"
   ? new window.ResizeObserver((entries) => {
       entries.forEach((entry) => {
@@ -106,6 +115,267 @@ const span = (className, text) => {
   node.textContent = text;
   return node;
 };
+
+const CONVERSATION_DB = "evidence-chat-conversations";
+const CONVERSATION_DB_VERSION = 1;
+const CONVERSATION_STORE = "conversations";
+const MESSAGE_STORE = "messages";
+const CURRENT_CONVERSATION_KEY = "evidence-chat-current-conversation-v1";
+
+function opaqueId(prefix) {
+  const value = typeof crypto.randomUUID === "function"
+    ? crypto.randomUUID()
+    : `${Date.now()}-${Math.random().toString(16).slice(2)}`;
+  return `${prefix}:${value}`;
+}
+
+function openConversationDb() {
+  return new Promise((resolve, reject) => {
+    const request = indexedDB.open(CONVERSATION_DB, CONVERSATION_DB_VERSION);
+    request.onupgradeneeded = () => {
+      const db = request.result;
+      if (!db.objectStoreNames.contains(CONVERSATION_STORE)) {
+        db.createObjectStore(CONVERSATION_STORE, { keyPath: "conversation_id" });
+      }
+      if (!db.objectStoreNames.contains(MESSAGE_STORE)) {
+        const store = db.createObjectStore(MESSAGE_STORE, { keyPath: "message_id" });
+        store.createIndex("conversation_id", "conversation_id", { unique: false });
+      }
+    };
+    request.onsuccess = () => resolve(request.result);
+    request.onerror = () => reject(new Error("대화 저장소를 열 수 없습니다."));
+  });
+}
+
+async function dbRequest(storeName, mode, operation) {
+  const db = await openConversationDb();
+  return new Promise((resolve, reject) => {
+    const transaction = db.transaction(storeName, mode);
+    const request = operation(transaction.objectStore(storeName));
+    request.onsuccess = () => resolve(request.result);
+    request.onerror = () => reject(new Error("대화 저장 작업을 완료하지 못했습니다."));
+    transaction.oncomplete = () => db.close();
+    transaction.onerror = () => reject(new Error("대화 저장 작업을 완료하지 못했습니다."));
+  });
+}
+
+async function listConversations() {
+  const rows = await dbRequest(CONVERSATION_STORE, "readonly", (store) => store.getAll());
+  return Array.isArray(rows)
+    ? rows
+      .filter((item) => item && item.version === CONVERSATION_DB_VERSION &&
+        typeof item.conversation_id === "string")
+      .sort((left, right) => String(right.updated_at).localeCompare(String(left.updated_at)))
+    : [];
+}
+
+async function loadConversationMessages(conversationId) {
+  const rows = await dbRequest(MESSAGE_STORE, "readonly", (store) =>
+    store.index("conversation_id").getAll(conversationId)
+  );
+  return Array.isArray(rows)
+    ? rows
+      .filter((item) => item && item.version === CONVERSATION_DB_VERSION &&
+        ["user", "assistant"].includes(item.role) && typeof item.content === "string")
+      .sort((left, right) => String(left.created_at).localeCompare(String(right.created_at)))
+    : [];
+}
+
+async function saveConversation(conversation) {
+  await dbRequest(CONVERSATION_STORE, "readwrite", (store) => store.put(conversation));
+}
+
+async function saveConversationMessage(message) {
+  await dbRequest(MESSAGE_STORE, "readwrite", (store) => store.put(message));
+}
+
+async function createConversation() {
+  const now = new Date().toISOString();
+  const conversation = {
+    version: CONVERSATION_DB_VERSION,
+    conversation_id: opaqueId("conversation"),
+    title: "새 채팅",
+    created_at: now,
+    updated_at: now,
+    summary: "",
+    current_topic: null,
+    recent_course_codes: [],
+    recent_evidence_ids: [],
+    pending_clarification: null,
+  };
+  await saveConversation(conversation);
+  currentConversationId = conversation.conversation_id;
+  clearClarify();
+  try { localStorage.setItem(CURRENT_CONVERSATION_KEY, currentConversationId); } catch (_) { /* no-op */ }
+  await renderConversationUi();
+  return conversation;
+}
+
+async function ensureConversation() {
+  if (!currentConversationId) {
+    try { currentConversationId = localStorage.getItem(CURRENT_CONVERSATION_KEY); } catch (_) { /* no-op */ }
+  }
+  if (currentConversationId) {
+    const found = await dbRequest(CONVERSATION_STORE, "readonly", (store) => store.get(currentConversationId));
+    if (found && found.version === CONVERSATION_DB_VERSION) return found;
+  }
+  return createConversation();
+}
+
+async function renderConversationUi() {
+  const conversations = await listConversations().catch(() => []);
+  el.conversationList.replaceChildren();
+  conversations.forEach((conversation) => {
+    const item = document.createElement("li");
+    const select = document.createElement("button");
+    select.type = "button";
+    select.className = "conversation-select";
+    select.textContent = conversation.title || "새 채팅";
+    select.setAttribute("aria-current", String(conversation.conversation_id === currentConversationId));
+    select.addEventListener("click", async () => {
+      currentConversationId = conversation.conversation_id;
+      clearClarify();
+      try { localStorage.setItem(CURRENT_CONVERSATION_KEY, currentConversationId); } catch (_) { /* no-op */ }
+      await renderConversationUi();
+      showScreen("ask");
+    });
+    const remove = document.createElement("button");
+    remove.type = "button";
+    remove.className = "conversation-delete";
+    remove.textContent = "삭제";
+    remove.setAttribute("aria-label", `${conversation.title || "채팅"} 삭제`);
+    remove.addEventListener("click", async () => {
+      await deleteConversation(conversation.conversation_id);
+      if (currentConversationId === conversation.conversation_id) currentConversationId = null;
+      await ensureConversation();
+    });
+    item.append(select, remove);
+    el.conversationList.append(item);
+  });
+  const active = currentConversationId
+    ? await loadConversationMessages(currentConversationId).catch(() => [])
+    : [];
+  el.conversationTranscript.replaceChildren();
+  el.conversationTranscript.hidden = active.length === 0;
+  active.forEach((message) => {
+    const block = document.createElement("article");
+    block.className = `conversation-message is-${message.role}`;
+    const role = document.createElement("strong");
+    role.textContent = message.role === "user" ? "나" : "챗봇";
+    const content = document.createElement("p");
+    content.textContent = message.content;
+    block.append(role, content);
+    el.conversationTranscript.append(block);
+  });
+}
+
+async function deleteConversation(conversationId) {
+  const messages = await loadConversationMessages(conversationId).catch(() => []);
+  const db = await openConversationDb();
+  await new Promise((resolve, reject) => {
+    const transaction = db.transaction([CONVERSATION_STORE, MESSAGE_STORE], "readwrite");
+    transaction.objectStore(CONVERSATION_STORE).delete(conversationId);
+    const store = transaction.objectStore(MESSAGE_STORE);
+    messages.forEach((message) => store.delete(message.message_id));
+    transaction.oncomplete = resolve;
+    transaction.onerror = () => reject(new Error("채팅을 삭제하지 못했습니다."));
+  });
+  db.close();
+}
+
+async function clearConversations() {
+  const db = await openConversationDb();
+  await new Promise((resolve, reject) => {
+    const transaction = db.transaction([CONVERSATION_STORE, MESSAGE_STORE], "readwrite");
+    transaction.objectStore(CONVERSATION_STORE).clear();
+    transaction.objectStore(MESSAGE_STORE).clear();
+    transaction.oncomplete = resolve;
+    transaction.onerror = () => reject(new Error("채팅을 초기화하지 못했습니다."));
+  });
+  db.close();
+  currentConversationId = null;
+  try { localStorage.removeItem(CURRENT_CONVERSATION_KEY); } catch (_) { /* no-op */ }
+  await createConversation();
+}
+
+async function beginConversationTurn(question) {
+  const conversation = await ensureConversation();
+  const messages = await loadConversationMessages(conversation.conversation_id);
+  activeTurnId = opaqueId("turn");
+  const now = new Date().toISOString();
+  if (conversation.title === "새 채팅") {
+    conversation.title = question.slice(0, 36);
+  }
+  conversation.updated_at = now;
+  await saveConversation(conversation);
+  const recent = messages.slice(-8).map((message) => ({
+    turn_id: message.turn_id,
+    role: message.role,
+    content: message.content,
+    created_at: message.created_at,
+    response_status: message.response_status || null,
+    citation_ids: message.citation_ids || [],
+    evidence_ids: message.evidence_ids || [],
+  }));
+  await saveConversationMessage({
+    version: CONVERSATION_DB_VERSION,
+    message_id: opaqueId("message"),
+    conversation_id: conversation.conversation_id,
+    turn_id: activeTurnId,
+    role: "user",
+    content: question,
+    created_at: now,
+    response_status: null,
+    citation_ids: [],
+    evidence_ids: [],
+  });
+  return {
+    version: CONVERSATION_DB_VERSION,
+    conversation_id: conversation.conversation_id,
+    turn_id: activeTurnId,
+    recent_messages: recent,
+    summary: conversation.summary || "",
+    current_topic: conversation.current_topic || null,
+    recent_course_codes: conversation.recent_course_codes || [],
+    recent_evidence_ids: conversation.recent_evidence_ids || [],
+    pending_clarification: conversation.pending_clarification || null,
+  };
+}
+
+async function finishConversationTurn(update) {
+  if (!update || update.version !== 1 || update.conversation_id !== currentConversationId) return;
+  const conversation = await ensureConversation();
+  conversation.updated_at = update.created_at;
+  conversation.summary = update.summary || "";
+  conversation.current_topic = update.current_topic || null;
+  conversation.recent_course_codes = Array.isArray(update.recent_course_codes)
+    ? update.recent_course_codes : [];
+  conversation.recent_evidence_ids = Array.isArray(update.evidence_ids)
+    ? update.evidence_ids : [];
+  conversation.pending_clarification = update.pending_clarification || null;
+  await saveConversation(conversation);
+  await saveConversationMessage({
+    version: CONVERSATION_DB_VERSION,
+    message_id: opaqueId("message"),
+    conversation_id: update.conversation_id,
+    turn_id: update.turn_id,
+    role: "assistant",
+    content: update.display_answer,
+    created_at: update.created_at,
+    response_status: update.response_status,
+    citation_ids: update.citation_ids || [],
+    evidence_ids: update.evidence_ids || [],
+  });
+  await renderConversationUi();
+}
+
+el.conversationToggle.addEventListener("click", () => {
+  const opened = el.conversationPanel.hidden;
+  el.conversationPanel.hidden = !opened;
+  el.conversationToggle.setAttribute("aria-expanded", String(opened));
+});
+el.conversationNew.addEventListener("click", async () => { await createConversation(); });
+el.conversationClear.addEventListener("click", async () => { await clearConversations(); });
 
 // 되묻기로 확정된 값. 서버는 대화 상태를 들지 않으므로 브라우저가 들고 매 요청에
 // 함께 보낸다. 값이 실제로 제시된 선택지였는지는 서버가 다시 만들어 대조한다.
@@ -254,13 +524,16 @@ if (el.profileForm) {
 }
 
 function emptyClarify(question = "") {
-  return { question, resolved: {}, trail: [] };
+  return { question, resolved: {}, trail: [], conversation_id: currentConversationId };
 }
 
 function loadClarify() {
   try {
     const saved = JSON.parse(sessionStorage.getItem(CLARIFY_KEY) || "null");
-    if (saved && typeof saved.question === "string" && saved.resolved) {
+    if (
+      saved && typeof saved.question === "string" && saved.resolved &&
+      (!saved.conversation_id || saved.conversation_id === currentConversationId)
+    ) {
       return { ...saved, trail: Array.isArray(saved.trail) ? saved.trail : [] };
     }
   } catch (error) {
@@ -429,6 +702,7 @@ async function ask(question) {
   lastResult = null;
   clarificationPresentation = null;
   latestOutcome = null;
+  latestConversationUpdate = null;
   renderTimelines();
   el.timelineSection.hidden = true;
   el.progressBack.textContent = "요청 취소";
@@ -439,16 +713,23 @@ async function ask(question) {
   const timeout = window.setTimeout(() => activeController.abort("timeout"), clientTimeoutMs);
   let result = null;
   let failed = false;
+  let conversationContext = null;
 
   try {
+    conversationContext = await beginConversationTurn(question);
+    if (clarify.conversation_id !== conversationContext.conversation_id) {
+      clearClarify();
+      clarify = emptyClarify(question);
+    }
     const response = await fetch("/api/ask", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(
-        Object.keys(clarify.resolved).length
-          ? { question, resolved: clarify.resolved, profile }
-          : { question, profile }
-      ),
+      body: JSON.stringify({
+        question,
+        profile,
+        conversation: conversationContext,
+        ...(Object.keys(clarify.resolved).length ? { resolved: clarify.resolved } : {}),
+      }),
       signal: activeController.signal,
     });
     if (!response.ok || !response.body) {
@@ -478,6 +759,11 @@ async function ask(question) {
           saveProfile(payload.profile);
         } else if (payload.type === "outcome" && payload.version === 1) {
           latestOutcome = payload;
+        } else if (payload.type === "conversation_update" && payload.version === 1) {
+          latestConversationUpdate = payload;
+        } else if (payload.type === "agent_trace" && payload.version === 1) {
+          // Tool trace is observable execution metadata, not model reasoning.  The
+          // existing progress timeline remains the primary user-facing view.
         } else if (payload.type === "inspection_update") {
           renderInspectionUpdate(payload);
         } else if (payload.type === "result") {
@@ -520,6 +806,7 @@ async function ask(question) {
     // 사용자가 '답변 완료' 상태의 진행 화면에 갇혔고, 무엇이 잘못됐는지도
     // 알 수 없었다.
     try {
+      if (latestConversationUpdate) await finishConversationTurn(latestConversationUpdate);
       renderAnswer(result);
       renderTimelines();
       renderExplorationPanel(el.answerExploration);
@@ -786,9 +1073,9 @@ function renderStageDetail(container, event, allowExplorationLinks) {
     });
   } else if (event.phase === "ANSWER_RENDERING") {
     addDetailFacts(container, {
-      "결정론적 한국어 renderer": summary.deterministic_renderer,
+      "sealed canonical Claim renderer": summary.deterministic_renderer,
       "Citation 수": summary.citation_count,
-      "최종 답변 LLM 호출": summary.final_answer_llm_calls,
+      "sealed canonical 생성 LLM 호출": summary.final_answer_llm_calls,
     });
   } else if (event.phase === "COMPLETED") {
     addDetailFacts(container, {
@@ -1459,9 +1746,11 @@ function renderAnswer(result) {
     ? (outcomeLabels[latestOutcome.status] || presentation.status_label)
     : presentation.status_label;
   el.answerBadge.dataset.state = latestOutcome ? latestOutcome.status : response.status;
-  el.answerTitle.textContent = latestOutcome && latestOutcome.message
-    ? latestOutcome.message
-    : response.answer_text;
+  el.answerTitle.textContent = latestConversationUpdate && latestConversationUpdate.display_answer
+    ? latestConversationUpdate.display_answer
+    : latestOutcome && latestOutcome.message
+      ? latestOutcome.message
+      : response.answer_text;
 
   el.clarification.hidden = !response.clarification;
   el.clarification.textContent = response.clarification || "";
@@ -1730,5 +2019,8 @@ el.pdfZoomOut.addEventListener("click", () => {
 });
 
 loadHealth();
+ensureConversation().catch(() => {
+  showNotice(el.askNotice, "브라우저 채팅 저장소를 사용할 수 없어 이번 화면에서만 질문할 수 있습니다.", false);
+});
 autoGrow();
 el.question.focus();

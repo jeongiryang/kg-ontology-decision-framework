@@ -47,8 +47,24 @@ _MORE_COURSES = re.compile(
 )
 _COURSE_IDENTITY_QUESTION = re.compile(
     r"(?:서로\s*다른\s*과목|같은\s*과목|과목명(?:이|은)?.{0,12}다르|"
-    r"표기.{0,12}다르|어떤\s*것으로\s*검색|둘\s*다.{0,12}(?:신청|수강))"
+    r"표기.{0,12}다르|어떤\s*것으로\s*검색|둘\s*다.{0,12}(?:신청|수강)|"
+    r"(?:같은|동일한)\s*(?:거|것)(?:야|인가|맞))"
 )
+_GENERAL_WITHOUT_PERSONAL_RECORD = re.compile(
+    r"(?:성적표|개인[ \t]*(?:이력|정보)|수강[ \t]*내역)[ \t]*(?:없이|제외).{0,24}"
+    r"(?:가능한[ \t]*)?(?:일반|공통|전체)[ \t]*(?:기준|요건|규정)"
+)
+_CREDENTIAL_QUERY_NAMES = {
+    "TOEIC": "TOEIC",
+    "TOEIC_SPEAKING": "TOEIC Speaking",
+    "TOEFL_IBT": "TOEFL iBT",
+    "TEPS": "TEPS",
+    "NEW_TEPS": "New TEPS",
+    "OPIC": "OPIc",
+    "GTELP_LEVEL_2": "G-TELP Level 2",
+    "GTELP_LEVEL_3": "G-TELP Level 3",
+    "FLEX": "FLEX",
+}
 
 
 class BaseChatService(Protocol):
@@ -80,6 +96,13 @@ class PersonalizedCurriculumChatService:
             relationship["from_id"]: self.nodes.get(relationship["to_id"], {})
             .get("properties", {})
             .get("name_ko")
+            for relationship in bundle["relationships"]
+            if relationship["type"] == "OF_COURSE"
+        }
+        self.offering_course_codes = {
+            relationship["from_id"]: self.nodes.get(relationship["to_id"], {})
+            .get("properties", {})
+            .get("course_code")
             for relationship in bundle["relationships"]
             if relationship["type"] == "OF_COURSE"
         }
@@ -125,6 +148,21 @@ class PersonalizedCurriculumChatService:
             response, outcome, extraction.profile, extraction.changed_fields
         )
 
+    @staticmethod
+    def _is_profile_statement_only(question: str) -> bool:
+        """Recognize a user assertion without treating it as curriculum Evidence."""
+
+        if "?" in question:
+            return False
+        return not bool(
+            re.search(
+                r"(?:알려|보여|검색|찾아|알고[ \t]*싶|원해|궁금|뭐|무엇|어떤|"
+                r"얼마|몇|어떻게|계산|분석|추천|확인|조회|해야|되(?:나|지|나요)|"
+                r"할까|인가요|맞아|충족|판단|근거와[ \t]*함께)",
+                question,
+            )
+        )
+
     def _preflight(
         self, question: str, extraction: ProfileExtraction
     ) -> DecisionOutcome | None:
@@ -154,6 +192,17 @@ class PersonalizedCurriculumChatService:
                 limitations=("성적·재수강 적용 규정 근거 없음",),
             )
         if _LIVE_REGISTRATION.search(question):
+            if self._is_advisory(question) and re.search(
+                r"(?:우선|추천|순서)", question
+            ):
+                return DecisionOutcome(
+                    OutcomeStatus.ADVISORY,
+                    "사용자가 제시한 시간표 충돌은 현재 KG에서 검증할 수 없습니다. "
+                    "우선순위는 후보 과목의 전공필수 여부와 편성 학년·학기를 확인한 "
+                    "뒤 조건부로 비교해야 하며, 실제 시간표·잔여석은 학사시스템에서 "
+                    "확인해야 합니다.",
+                    limitations=("실시간 시간표·잔여석 정보 없음",),
+                )
             return DecisionOutcome(
                 OutcomeStatus.INSUFFICIENT_EVIDENCE,
                 "교육과정상 개설 정보는 확인할 수 있지만 실시간 잔여석, 증원과 "
@@ -183,6 +232,16 @@ class PersonalizedCurriculumChatService:
     def _required_profile_fields(
         self, question: str, profile: UserProfile
     ) -> list[str]:
+        # An explicit request for general rules is independent of a transcript.
+        # Negated personal-record wording must not trigger the holistic-profile gate.
+        if _GENERAL_WITHOUT_PERSONAL_RECORD.search(question):
+            return []
+        if re.search(r"\d+(?:\.\d+)?[ \t]*학점", question) and re.search(
+            r"(?:대체|대신|채워|충족|인정|가능|돼|되는)", question
+        ):
+            # The condition is present in this turn.  It remains a USER_ASSERTION,
+            # but asking for the same value again cannot resolve a missing KG rule.
+            return []
         profile_course_reference = re.search(
             r"(?:내가\s*들은\s*과목|앞서\s*(?:말한|알려\s*준)\s*과목|"
             r"방금\s*(?:말한|알려\s*준)\s*과목)",
@@ -190,6 +249,18 @@ class PersonalizedCurriculumChatService:
         )
         if profile_course_reference and not profile.completed_courses:
             return ["completed_courses"]
+        if re.search(
+            r"(?:내[ \t]*성적표|개인[ \t]*(?:수강|이수)[ \t]*내역|"
+            r"남은[ \t]*졸업요건|졸업요건.{0,12}(?:모두|전체)[ \t]*판정)",
+            question,
+        ):
+            required = []
+            if not profile.completed_courses:
+                required.append("completed_courses")
+            if not profile.credits:
+                required.append("credits")
+            if required:
+                return required
         # A question about the consequence of omitting one named course can be
         # answered from that course's verified completion type.  Requiring the
         # student's entire transcript would hide an available grounded fact.
@@ -222,11 +293,18 @@ class PersonalizedCurriculumChatService:
         )
         calculation = re.search(
             r"(?:남았|남은|계산|분석|절반|졸업할\s*수|졸업\s*못|"
-            r"영역별로\s*몇\s*학점)",
+            r"영역별로\s*몇\s*학점|남은\s*(?:졸업)?요건|(?:졸업)?요건.{0,12}판정|"
+            r"모두.{0,12}판정|부족|모자라)",
             question,
         )
         calculation = calculation or _MORE_COURSES.search(question)
         if not (personal_history and calculation):
+            return []
+        if (
+            _MORE_COURSES.search(question)
+            and re.search(r"(?:전공[ \t]*)?필수[ \t]*과목", question)
+            and profile.completed_courses
+        ):
             return []
         if re.search(r"(?:필수.{0,16}(?:빠뜨|다른)|빠뜨렸)", question):
             return []
@@ -269,6 +347,19 @@ class PersonalizedCurriculumChatService:
         SafetyPipeline and Evidence validation.
         """
 
+        if (
+            len(profile.english_credentials) == 1
+            and re.search(r"(?:영어|대체|면제).{0,24}(?:기준|비교|충족|판단)", question)
+            and not re.search(
+                r"(?:TOEIC|토익|TOEFL|토플|TEPS|텝스|OPIc|오픽|G-?TELP|FLEX)",
+                question,
+                re.IGNORECASE,
+            )
+        ):
+            credential = profile.english_credentials[0]
+            display = _CREDENTIAL_QUERY_NAMES.get(credential.test)
+            if display is not None:
+                return f"{display} {question}"
         if self.course_resolver.find_mentions(question) or not profile.completed_courses:
             return question
         if not re.search(
@@ -321,6 +412,17 @@ class PersonalizedCurriculumChatService:
                     "잔여석, 증원과 시간표는 현재 PDF와 Verified KG에 없습니다.",
                     limitations=("실시간 수강신청 정보 없음",),
                 )
+            if re.search(r"(?:면제|대체)", question) and re.search(
+                r"(?:전공[ \t]*필수|전공[ \t]*선택|교양|대학영어|영어[ \t]*기준)",
+                question,
+            ):
+                return DecisionOutcome(
+                    OutcomeStatus.INSUFFICIENT_EVIDENCE,
+                    "질문에 면제·대체 대상을 이미 명시했지만, 그 적용을 확정할 "
+                    "VERIFIED 근거가 현재 PDF와 KG에 없습니다. 사용자 정보를 더 "
+                    "입력해도 확인되지 않은 규정을 추측하지 않습니다.",
+                    limitations=("면제·대체 적용 근거 없음",),
+                )
             return DecisionOutcome(
                 OutcomeStatus.NEEDS_USER_INFO,
                 response.clarification or "답변에 필요한 정보를 조금 더 알려 주세요.",
@@ -331,6 +433,9 @@ class PersonalizedCurriculumChatService:
             sequence = self._curriculum_sequence_advice(question, response)
             if sequence:
                 message = f"{message}\n\n{sequence}"
+            evidence_limitation = self._grounding_limitation(question, response)
+            if evidence_limitation:
+                message = f"{message}\n\n{evidence_limitation}"
             message = (
                 f"{message}\n\n"
                 "추천은 확인된 과목 정보에 기반한 조건부 안내입니다. 실제 개설 여부, "
@@ -412,8 +517,46 @@ class PersonalizedCurriculumChatService:
             if "CourseOffering" in node.get("labels", ())
             and node.get("properties", {}).get("completion_type") == "MAJOR_REQUIRED"
         ]
+        elective_offerings = [
+            node
+            for node in facts
+            if "CourseOffering" in node.get("labels", ())
+            and node.get("properties", {}).get("completion_type")
+            == "MAJOR_ELECTIVE"
+        ]
+        if elective_offerings and re.search(
+            r"(?:안[ \t]*(?:들|이수|수강)|못[ \t]*(?:들|이수|수강)|"
+            r"듣지|이수하지|수강하지|누락|빠뜨).{0,36}(?:졸업|필수)|"
+            r"(?:졸업|필수).{0,36}(?:안[ \t]*(?:들|이수|수강)|"
+            r"못[ \t]*(?:들|이수|수강)|듣지|이수하지|수강하지|누락|빠뜨)",
+            question,
+        ):
+            return (
+                f"{response.answer_text} 조회된 이수구분은 전공선택이므로 이 과목 "
+                "자체가 지정 전공필수라는 근거는 없습니다. 다만 개인의 전체 졸업 "
+                "가능 여부는 전공 학점과 다른 필수요건을 함께 확인해야 합니다."
+            )
+        if (
+            required_offerings
+            and profile.completed_courses
+            and _MORE_COURSES.search(question)
+            and re.search(r"(?:전공[ \t]*)?필수", question)
+        ):
+            completed_codes = {item.course_code for item in profile.completed_courses}
+            remaining = [
+                self.offering_course_names.get(str(node.get("id")))
+                for node in required_offerings
+                if self.offering_course_codes.get(str(node.get("id")))
+                not in completed_codes
+            ]
+            names = [name for name in remaining if isinstance(name, str)]
+            if names:
+                return (
+                    f"{response.answer_text} 사용자 진술로 이수한 과목을 제외하면, "
+                    f"검증된 전공필수 목록에서 남은 과목은 {', '.join(names)}입니다."
+                )
         if required_offerings and re.search(
-            r"(?:빠뜨|누락|안\s*들|못\s*들|다른\s*전공|학점만.{0,12}(?:맞|채))",
+            r"(?:빠뜨|누락|빼|제외|안\s*들|못\s*들|다른\s*전공|학점만.{0,12}(?:맞|채))",
             question,
         ):
             return (
@@ -490,7 +633,9 @@ class PersonalizedCurriculumChatService:
                 )
         if credits and re.search(
             r"(?:영역별|남은\s*\d*\s*학점|몇\s*학점이\s*더|몇\s*학점\s*남|"
-            r"얼마나\s*(?:부족|모자라|남)|(?:부족|모자란)\s*학점)",
+            r"몇\s*학점(?:이)?\s*(?:부족|모자라|남)|"
+            r"얼마나\s*(?:부족|모자라|남)|(?:부족|모자란)\s*학점|"
+            r"(?:다시\s*)?(?:계산|판단)|부족분)",
             question,
         ):
             thresholds: dict[str, float] = {}
@@ -579,7 +724,9 @@ class PersonalizedCurriculumChatService:
         checks = (
             (
                 r"(?:대신\s*(?:채워|채울|들)|대체할|상쇄|자동\s*대체|"
-                r"(?:전공|일반선택|확대교양|다른\s*과목)으로\s*(?:채워|채울|들))",
+                r"(?:전공|일반선택|확대교양|다른\s*과목)으로\s*(?:채워|채울|들)|"
+                r"다른\s*전공(?:필수|선택)?(?:\s*과목)?\s*(?:학점)?으로\s*"
+                r"(?:채워|채울|대체))",
                 ("대체", "인정", "산입"),
             ),
             (
@@ -590,7 +737,7 @@ class PersonalizedCurriculumChatService:
             (r"(?:재수강|성적에|F학점)", ("재수강", "성적")),
             (r"(?:별도\s*표시|사실상\s*필수)", ("별도", "사실상")),
             (
-                r"(?:다음\s*해|내년|실제\s*개설|잔여\s*석|자리|증원|시간대|"
+                r"(?:다음\s*해|내년|실제\s*개설|실시간[ \t]*정보|잔여\s*석|자리|증원|시간대|"
                 r"(?:다른|늦은|[1-6]\s*학년).{0,20}(?:수강|신청|들어).{0,20}(?:가능|제한|돼|되|졸업)|"
                 r"권장\s*시기.{0,20}수강\s*제한)",
                 ("실제 개설", "시간표", "수강 제한"),
@@ -616,8 +763,11 @@ class PersonalizedCurriculumChatService:
         return bool(
             re.search(
                 r"(?:추천|어떤\s*순서|우선|충분|무엇을\s*먼저|뭘\s*먼저|"
-                r"진로|되고\s*싶|먼저\s*듣지|공부.{0,12}(?:좋|순서)|"
-                r"무엇을.{0,12}(?:좋|먼저)|어떤.{0,12}(?:좋|추천))",
+                r"어떤.{0,12}순서|조언|진로.{0,20}(?:추천|어떤|순서|좋|먼저)|"
+                r"되고\s*싶|먼저\s*듣지|공부.{0,12}(?:좋|순서)|"
+                r"무엇을.{0,12}(?:좋|먼저)|어떤.{0,12}(?:좋|추천)|"
+                r"권장[ \t]*시기|무엇을[ \t]*우선|"
+                r"다른[ \t]*학년.{0,24}(?:들|수강).{0,16}(?:졸업|가능))",
                 question,
             )
             and bool(

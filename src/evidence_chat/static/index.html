@@ -15,11 +15,24 @@
         <p>2026학년도 Verified 지식그래프 · 규정 원문 근거 기반 응답</p>
       </div>
     </div>
-    <div class="status" id="status" role="status" aria-live="polite">
-      <span class="dot" data-state="unknown"></span>
-      <span class="status-text">상태 확인 중</span>
+    <div class="topbar-actions">
+      <button type="button" class="conversation-toggle" id="conversation-toggle" aria-expanded="false" aria-controls="conversation-panel">채팅방</button>
+      <div class="status" id="status" role="status" aria-live="polite">
+        <span class="dot" data-state="unknown"></span>
+        <span class="status-text">상태 확인 중</span>
+      </div>
     </div>
   </header>
+
+  <aside class="conversation-panel" id="conversation-panel" aria-label="채팅방 목록" hidden>
+    <div class="conversation-panel-head">
+      <h2>내 채팅</h2>
+      <button type="button" class="primary compact" id="conversation-new">새 채팅</button>
+    </div>
+    <p>채팅은 이 브라우저의 IndexedDB에만 저장됩니다.</p>
+    <ol id="conversation-list" class="conversation-list"></ol>
+    <button type="button" class="ghost compact" id="conversation-clear">전체 채팅 삭제</button>
+  </aside>
 
   <nav class="stages" aria-label="진행 단계">
     <ol>
@@ -38,6 +51,7 @@
           답변은 검증된 규정 원문 근거와 함께 표시됩니다.
         </p>
         <p class="scope-fixed">현재 지원 범위: 2026학년도 공통 교양 및 컴퓨터공학과 교육과정</p>
+        <section class="conversation-transcript" id="conversation-transcript" aria-label="현재 채팅 내용" hidden></section>
         <form id="ask-form" autocomplete="off">
           <div class="prompt">
             <textarea

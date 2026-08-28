@@ -90,6 +90,14 @@ class UserProfileTests(unittest.TestCase):
         values = {item.test: item.value for item in extracted.profile.english_credentials}
         self.assertEqual(values, {"TOEIC": 700, "TOEIC_SPEAKING": 130})
 
+    def test_unambiguous_credential_score_correction_may_omit_test_name(self):
+        current = self.extractor.extract("토익은 650점이야.", UserProfile()).profile
+        corrected = self.extractor.extract("아까 점수는 700점으로 정정할게.", current)
+        self.assertEqual(
+            {item.test: item.value for item in corrected.profile.english_credentials},
+            {"TOEIC": 700},
+        )
+
     def test_conflicting_values_in_one_message_require_resolution(self):
         extracted = self.extractor.extract(
             "교양 30학점이고 교양 32학점이야.", UserProfile()
@@ -118,6 +126,24 @@ class UserProfileTests(unittest.TestCase):
             {"major": 51.0, "general": 29.0, "free_elective": 14.0},
         )
 
+    def test_korean_credit_number_is_typed_before_profile_use(self):
+        extracted = self.extractor.extract(
+            "교양은 삼십 학점 들었다고 치고 부족분을 알려 줘.", UserProfile()
+        )
+        self.assertEqual(extracted.profile.credits_by_category, {"general": 30.0})
+
+    def test_profile_mentions_inside_a_question_do_not_become_statement_only(self):
+        service = PersonalizedCurriculumChatService(
+            _ResponseService(ChatResponse.unresolved("request:question")),
+            bundle_path=BUNDLE,
+        )
+        for question in (
+            "컴퓨터공학과 전공필수 과목을 보여 줘.",
+            "컴공이고 자료구조를 들었어. 더 필요한 필수 과목을 알고 싶어.",
+            "서울대학교 컴퓨터공학과 규정을 검색해 줘.",
+        ):
+            with self.subTest(question=question):
+                self.assertFalse(service._is_profile_statement_only(question))
     def test_negated_course_is_not_recorded_as_completed(self):
         extracted = self.extractor.extract(
             "운영체제는 듣지 않고 데이터통신을 이수했어.", UserProfile()
@@ -149,6 +175,45 @@ class PersonalizedOutcomeTests(unittest.TestCase):
         self.assertIn("completed_courses", result.outcome.required_user_fields)
         self.assertIn("credits", result.outcome.required_user_fields)
         self.assertEqual(base.calls, 0)
+
+    def test_general_rules_without_transcript_do_not_request_personal_history(self):
+        base = _ResponseService(ChatResponse.not_found("request:general-rules"))
+        service = PersonalizedCurriculumChatService(base, bundle_path=BUNDLE)
+        result = service.ask("성적표 없이 가능한 일반 졸업 기준만 알려 줘.")
+        self.assertNotEqual(result.outcome.status, OutcomeStatus.NEEDS_USER_INFO)
+        self.assertEqual(result.outcome.required_user_fields, ())
+        self.assertEqual(base.calls, 1)
+
+    def test_inline_numeric_substitution_condition_is_not_requested_again(self):
+        base = _ResponseService(ChatResponse.not_found("request:inline-condition"))
+        service = PersonalizedCurriculumChatService(base, bundle_path=BUNDLE)
+        result = service.ask(
+            "한 영역에서 2학점을 들었어. 부족한 1학점은 확대교양으로 채워도 돼?"
+        )
+        self.assertNotEqual(result.outcome.status, OutcomeStatus.NEEDS_USER_INFO)
+        self.assertEqual(base.calls, 1)
+
+    def test_live_priority_question_is_conditional_advisory(self):
+        base = _ResponseService(ChatResponse.not_found("request:live-priority"))
+        service = PersonalizedCurriculumChatService(base, bundle_path=BUNDLE)
+        result = service.ask(
+            "과목이 같은 시간대라 하나만 들을 수 있어. 무엇을 우선해야 해?"
+        )
+        self.assertEqual(result.outcome.status, OutcomeStatus.ADVISORY)
+        self.assertIn("실제 시간표", result.outcome.message)
+        self.assertEqual(base.calls, 0)
+
+    def test_explicit_exemption_scope_is_evidence_gap_not_user_information(self):
+        base = _ResponseService(
+            ChatResponse.clarification_required(
+                "request:exemption-gap", "어떤 이수요건을 말씀하시나요?"
+            )
+        )
+        service = PersonalizedCurriculumChatService(base, bundle_path=BUNDLE)
+        result = service.ask("편입생의 전공필수도 면제인가요?")
+        self.assertEqual(result.outcome.status, OutcomeStatus.INSUFFICIENT_EVIDENCE)
+        self.assertEqual(result.outcome.required_user_fields, ())
+        self.assertIn("VERIFIED 근거", result.outcome.message)
 
     def test_explicit_other_curriculum_is_out_of_scope_without_query(self):
         base = _ResponseService(ChatResponse.not_found("unused"))

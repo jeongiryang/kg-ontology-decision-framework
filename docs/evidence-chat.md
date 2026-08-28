@@ -8,11 +8,14 @@
 브라우저
 → Starlette POST /api/ask
 → 브라우저 UserProfile 검증·현재 메시지 정보 추출
+→ AgenticCurriculumChatService
+→ 대화 문맥 해석·제한된 도구 계획
 → PersonalizedCurriculumChatService → CurriculumChatService
 → 자연어 QueryPlan·동적 Cypher·SafetyPipeline
 → ResultValidator
 → 구조화 Claim·결정론적 한국어 답변
 → 승인 ChatResponse
+→ Claim 의미를 재검증한 자연어 표시 문장 또는 canonical fallback
 → 표시 전용 adapter·SSE
 → 상태·Citation·PDF 근거 UI
 ```
@@ -57,6 +60,7 @@ Starlette lifespan에서 다음 객체를 한 번 구성하고 `app.state`에 �
 - `NaturalLanguageQueryService`
 - `CurriculumChatService`
 - `PersonalizedCurriculumChatService` (request-local 사용자 진술과 다섯 outcome)
+- `AgenticCurriculumChatService` (bounded 대화 문맥·도구 계획·grounded narrative)
 - 동시 실행 제한기
 
 요청마다 driver나 모델 client를 다시 만들지 않는다. 종료 시 Neo4j driver만 닫으며 Ollama 프로세스는 종료하지 않는다. 기본 동시 LLM 요청은 1개다.
@@ -103,6 +107,14 @@ sealed 응답과 별도로 `profile_update version=1`과 `outcome version=1` SSE
 `OUT_OF_SCOPE`, `ADVISORY` 중 하나다. Fact·Citation을 다시 조립하지 않으며 기존
 8필드 소비자도 그대로 동작한다. 자세한 계약은
 [질의 정확도와 개인화](query-personalization.md)를 참고한다.
+
+다중 턴에서는 브라우저가 `ConversationContext version=1`을 함께 보내고 서버가
+`agent_trace version=1`, `conversation_update version=1`을 별도 envelope로 반환한다.
+프로필은 기존 `localStorage`, 채팅방과 메시지는 versioned `IndexedDB`에만 저장된다.
+새 채팅은 이전 채팅의 주제를 사용하지 않지만 프로필은 유지된다. 서버는 채팅 내용을
+영구 저장하지 않으며 이전 assistant 문장을 학교 규정 Evidence로 사용하지 않는다.
+도구·문맥·자연어 초안 검증의 상세 계약은
+[LLM 도구 호출형 다중 턴 GraphRAG](agentic-multiturn-graphrag.md)를 참고한다.
 
 되묻기 선택지는 sealed `ChatResponse`에 필드를 추가하지 않는다. 질문 분석이 실제로
 `CLARIFICATION_REQUIRED`로 끝났을 때만 별도 versioned SSE envelope를 보낸다.
