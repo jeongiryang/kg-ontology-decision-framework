@@ -457,8 +457,8 @@ class ClaimValidator:
                 or item.display_name != row.get("name_ko")
                 or item.course_code != row.get("course_code")
                 or item.credits != row.get("credits")
-                or item.grade_year != row.get("grade_year")
-                or item.semester != row.get("semester")
+                or item.grade_year != _freeze(row.get("grade_year"))
+                or item.semester != _freeze(row.get("semester"))
                 or item.completion_type != row.get("completion_type")
             ):
                 self._invalid("course list item differs from its fact")

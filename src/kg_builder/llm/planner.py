@@ -209,15 +209,24 @@ _COURSE_FIELD_HINTS: Mapping[str, re.Pattern[str]] = {
     "grade_year": re.compile(r"(?:학년|권장\s*시기)"),
     "semester": re.compile(r"(?:학기|개설\s*시기)"),
     "credits": re.compile(r"(?:몇\s*학점|\d+\s*학점|학점은|학점이|0학점)"),
-    "completion_type": re.compile(r"(?:이수구분|전공필수|전공선택|교양|전공으로)"),
+    "completion_type": re.compile(
+        r"(?:이수\s*구분|전공\s*필수|필수\s*전공|전공\s*선택|교양\s*선택|필수\s*과목|"
+        r"필수(?:가|인|인지|인가|이야|맞)|졸업)"
+    ),
 }
 _COURSE_LIST_HINT = re.compile(
     r"(?:과목(?:은|이|을|들|\s*목록)|어떤\s*과목|정확히\s*어떤|중\s*어떤|"
-    r"지정된\s*과목|빠뜨|순서)"
+    r"과목\s*중|지정된\s*과목|빠뜨|순서|둘\s*다|"
+    r"(?:중|가운데).{0,12}(?:하나|아무거나))"
 )
 _GENERAL_RULE_HINT = re.compile(
-    r"(?:이수요건|요건|기준|최소|최대|초과|면제|의무|대체|졸업\s*학점|잔여\s*학점|"
-    r"졸업까지|졸업하려|절반|반드시|가능|인정|충족|삭제|채워|들어야|이수해야|남은)"
+    r"(?:이수요건|요건|기준|최소|적어도|최대|초과|면제|의무|대체|균형교양|졸업\s*학점|잔여\s*학점|"
+    r"졸업까지|졸업하려|절반|반드시|가능|인정|충족|삭제|채워|들어야|이수해야|남은|"
+    r"모자라|부족|얼마나\s*남)"
+)
+_COURSE_IDENTITY_COMPARISON = re.compile(
+    r"(?:같은\s*과목|다른\s*과목|서로\s*다른|표기|이름.{0,12}다르|"
+    r"둘\s*다.{0,12}(?:신청|수강|들어))"
 )
 
 def planner_response_schema(catalog: SchemaCatalog) -> dict[str, Any]:
@@ -1644,6 +1653,8 @@ class LocalQueryPlanner:
         requested = [
             field for field, pattern in _COURSE_FIELD_HINTS.items() if pattern.search(question)
         ]
+        if _COURSE_IDENTITY_COMPARISON.search(question):
+            requested = list(dict.fromkeys([*requested, "name_ko", "course_code"]))
         if (
             not requested
             and len(mentions) < 2
@@ -1654,7 +1665,15 @@ class LocalQueryPlanner:
         ):
             return None
         if len(mentions) > 1 or _COURSE_LIST_HINT.search(question):
-            requested = list(COURSE_DETAIL_FIELDS)
+            # Preserve the fields the user explicitly requested.  A multi-course
+            # question asking for course codes must not silently become a generic
+            # offering list.  Structural fields needed by the Claim are added by
+            # normalisation and do not replace the requested values.
+            requested = list(
+                dict.fromkeys(
+                    [*(requested or list(COURSE_DETAIL_FIELDS)), "name_ko", "completion_type"]
+                )
+            )
             default = self.context.get("default_scope") or {}
             filters: dict[str, Any] = {
                 "academic_year": default.get("academic_year"),
@@ -1759,7 +1778,7 @@ class LocalQueryPlanner:
                 if "예술대학" not in dict(rows)[rule_id]
             ]
         elif "교양" in question and "전공" in question and re.search(
-            r"(?:영역별|나머지|잔여|졸업)", question
+            r"(?:영역별|나머지|잔여|졸업|부족|모자라|얼마나\s*남)", question
         ):
             take("일반 적용 대상", "교양", "최소")
             take("단일전공", "전공 합계")
@@ -1782,9 +1801,14 @@ class LocalQueryPlanner:
         elif "전공" in question and "졸업잔여" in question:
             take("단일전공", "전공 합계")
             take("단일전공", "졸업 잔여 기준")
-        elif "전공" in question and re.search(r"(?:전공\s*합계|최소\s*전공)", question):
+        elif "전공" in question and re.search(
+            r"(?:전공\s*(?:합계|기준)|최소\s*전공|부족|모자라|얼마나\s*남)",
+            question,
+        ):
             take("단일전공", "전공 합계")
-        elif "졸업" in question and re.search(r"(?:총\s*학점|몇\s*학점|절반)", question):
+        elif ("졸업" in question or "총" in question) and re.search(
+            r"(?:총\s*\d+(?:\.\d+)?\s*학점|몇\s*학점|절반)", question
+        ):
             take("단일전공", "졸업학점 기준")
         elif "잔여" in question and "학점" in question:
             take("단일전공", "졸업 잔여 기준")
@@ -1835,20 +1859,29 @@ class LocalQueryPlanner:
                 self.catalog,
             )
         if (
-            "전공필수" in question
+            re.search(r"(?:전공\s*필수|필수\s*전공)", question)
             and _COURSE_LIST_HINT.search(question)
             and not self.course_resolver.find_mentions(question)
         ):
             default = self.context.get("default_scope") or {}
+            grade_match = re.search(r"(?<!\d)([1-6])\s*학년", question)
+            semester_match = re.search(r"(?<!\d)([12])\s*학기", question)
+            filters = {
+                "academic_year": default.get("academic_year"),
+                "department_id": default.get("department_id"),
+                "completion_type": "MAJOR_REQUIRED",
+            }
+            if grade_match:
+                filters["grade_year"] = int(grade_match.group(1))
+            if semester_match:
+                filters["semester"] = (
+                    "FIRST" if semester_match.group(1) == "1" else "SECOND"
+                )
             return QueryPlan.from_dict(
                 {
                     "question": question,
                     "intent": "COURSE_LIST_BY_COMPLETION_TYPE",
-                    "filters": {
-                        "academic_year": default.get("academic_year"),
-                        "department_id": default.get("department_id"),
-                        "completion_type": "MAJOR_REQUIRED",
-                    },
+                    "filters": filters,
                     "requested_fields": list(COURSE_DETAIL_FIELDS),
                     "evidence_required": True,
                     "selection_mode": SelectionMode.COURSE_LIST.value,
@@ -1894,15 +1927,15 @@ class LocalQueryPlanner:
             raise QueryPlanError("question must be a non-empty string")
         question = question.strip()
         self._resolved = self._reconciled(self._accepted_resolved(question, resolved))
-        direct = self._deterministic_plan(question)
-        if direct is not None and not self._resolved:
-            return PlanningOutcome(status=PlanningStatus.READY, plan=direct)
         question_classification = classify_graduation_question(question)
         if question_classification is GraduationQuestionClass.FULL_PERSONAL_HISTORY:
             return PlanningOutcome(
                 status=PlanningStatus.UNSUPPORTED,
                 unsupported_reason=UnsupportedReason.PERSONAL_HISTORY,
             )
+        direct = self._deterministic_plan(question)
+        if direct is not None and not self._resolved:
+            return PlanningOutcome(status=PlanningStatus.READY, plan=direct)
         if _matches_review_required_rule(question, self.context):
             return PlanningOutcome(status=PlanningStatus.UNRESOLVED)
         if self._points_at_nothing(question):

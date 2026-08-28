@@ -190,6 +190,28 @@ class StructuredClaimGroundingTests(unittest.TestCase):
         with self.assertRaises(GroundingError):
             ClaimValidator().validate(swapped, rows, plan)
 
+    def test_course_list_normalizes_multi_value_grade_without_python_repr(self):
+        rows = [offering_row()]
+        plan = course_plan(
+            "name_ko", "grade_year", "semester", "credits", "completion_type",
+            selection="COURSE_LIST",
+        )
+        claims, answer = build_validate_render(rows, plan)
+        list_claim = next(claim for claim in claims if claim.field == "courses")
+        self.assertEqual(list_claim.value[0].grade_year, (2,))
+        self.assertIn("2학년", answer.answer_text)
+        self.assertNotIn("[2]학년", answer.answer_text)
+
+    def test_course_list_omits_empty_grade_and_renders_multiple_semesters(self):
+        rows = [offering_row(grade_year=[], semester=["FIRST", "SECOND"])]
+        plan = course_plan(
+            "name_ko", "grade_year", "semester", "credits", "completion_type",
+            selection="COURSE_LIST",
+        )
+        _, answer = build_validate_render(rows, plan)
+        self.assertNotIn("학년", answer.answer_text)
+        self.assertIn("1학기·2학기", answer.answer_text)
+
     def test_exemption_polarity_is_derived_from_verified_rule(self):
         rows = [
             rule_row(

@@ -323,8 +323,8 @@ class ClaimBuilder:
                     subject.display_name,
                     row.get("course_code"),
                     credits,
-                    row.get("grade_year"),
-                    row.get("semester"),
+                    _freeze(row.get("grade_year")),
+                    _freeze(row.get("semester")),
                     row.get("completion_type"),
                 )
             )

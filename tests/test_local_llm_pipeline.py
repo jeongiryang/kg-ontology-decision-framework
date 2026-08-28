@@ -376,6 +376,60 @@ class LocalLLMContractTests(unittest.TestCase):
         self.assertEqual(outcome.plan.selection_mode, SelectionMode.COURSE_LIST)
         self.assertEqual(len(outcome.plan.filters["course_codes"]), 2)
 
+    def test_multi_course_code_request_keeps_the_requested_identity_field(self) -> None:
+        outcome = LocalQueryPlanner(SequenceClient([])).plan(
+            "자료구조하고 이산수학 학수번호를 각각 알려줘"
+        )
+        self.assertEqual(outcome.status, PlanningStatus.READY)
+        self.assertEqual(outcome.plan.selection_mode, SelectionMode.COURSE_LIST)
+        self.assertEqual(len(outcome.plan.filters["course_codes"]), 2)
+        self.assertIn("course_code", outcome.plan.requested_fields)
+
+    def test_major_required_list_preserves_explicit_grade_and_semester_scope(self) -> None:
+        outcome = LocalQueryPlanner(SequenceClient([])).plan(
+            "3학년 1학기 전공필수 과목 중 우선순위를 알려줘"
+        )
+        self.assertEqual(outcome.status, PlanningStatus.READY)
+        self.assertEqual(outcome.plan.filters["completion_type"], "MAJOR_REQUIRED")
+        self.assertEqual(outcome.plan.filters["grade_year"], 3)
+        self.assertEqual(outcome.plan.filters["semester"], "FIRST")
+
+    def test_major_required_list_accepts_reversed_controlled_term_order(self) -> None:
+        outcome = LocalQueryPlanner(SequenceClient([])).plan(
+            "컴퓨터공학과 필수 전공은 총 몇 과목이고 몇 학점이야?"
+        )
+        self.assertEqual(outcome.status, PlanningStatus.READY)
+        self.assertEqual(outcome.plan.selection_mode, SelectionMode.COURSE_LIST)
+        self.assertEqual(outcome.plan.filters["completion_type"], "MAJOR_REQUIRED")
+
+    def test_minimum_credit_rule_accepts_natural_lower_bound_synonym(self) -> None:
+        outcome = LocalQueryPlanner(SequenceClient([])).plan(
+            "컴공 2026 교양은 적어도 몇 학점이어야 하나요?"
+        )
+        self.assertEqual(outcome.status, PlanningStatus.READY)
+        self.assertTrue(any(
+            "min-total-default" in value
+            for value in outcome.plan.filters["rule_ids"]
+        ))
+
+    def test_balanced_general_rule_does_not_need_a_model_for_same_area_question(self) -> None:
+        client = SequenceClient([])
+        outcome = LocalQueryPlanner(client).plan(
+            "균형교양을 같은 영역에서만 12학점 들으면 되는 거지?"
+        )
+        self.assertEqual(outcome.status, PlanningStatus.READY)
+        self.assertGreaterEqual(len(outcome.plan.filters["rule_ids"]), 2)
+        self.assertFalse(client.prompts)
+
+    def test_compact_credit_deficit_question_selects_general_and_major_rules(self) -> None:
+        outcome = LocalQueryPlanner(SequenceClient([])).plan(
+            "전공 51, 교양 29, 일선 14인데 영역별로 얼마나 부족해?"
+        )
+        self.assertEqual(outcome.status, PlanningStatus.READY)
+        rule_ids = set(outcome.plan.filters["rule_ids"])
+        self.assertTrue(any("min-total-default" in item for item in rule_ids))
+        self.assertTrue(any("major-total" in item for item in rule_ids))
+
     def test_generated_multi_rule_scaffold_passes_the_existing_validator(self) -> None:
         payload = {
             "question": "2026학년도 균형교양 이수요건은?",

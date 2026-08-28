@@ -75,6 +75,14 @@ class UserProfileTests(unittest.TestCase):
         self.assertEqual(corrected.profile.credits_by_category["major"], 45)
         self.assertEqual(corrected.conflicts, ())
 
+    def test_credit_correction_allows_category_particle_without_repeated_unit(self):
+        corrected = self.extractor.extract(
+            "전공은 42가 아니라 45학점이라고 정정할게. 얼마나 부족하지?",
+            UserProfile(),
+        )
+        self.assertEqual(corrected.profile.credits_by_category["major"], 45)
+        self.assertEqual(corrected.conflicts, ())
+
     def test_toeic_speaking_is_not_also_extracted_as_toeic(self):
         extracted = self.extractor.extract(
             "TOEIC Speaking 130점과 일반 TOEIC 700점이 있어.", UserProfile()
@@ -99,6 +107,25 @@ class UserProfileTests(unittest.TestCase):
         )
         self.assertEqual(extracted.conflicts, ())
         self.assertEqual(extracted.profile.credits_by_category, {"general": 31.0})
+
+    def test_compact_category_credit_list_uses_surrounding_unit_context(self):
+        extracted = self.extractor.extract(
+            "전공 51, 교양 29, 일선 14인데 영역별로 얼마나 부족해?",
+            UserProfile(),
+        )
+        self.assertEqual(
+            extracted.profile.credits_by_category,
+            {"major": 51.0, "general": 29.0, "free_elective": 14.0},
+        )
+
+    def test_negated_course_is_not_recorded_as_completed(self):
+        extracted = self.extractor.extract(
+            "운영체제는 듣지 않고 데이터통신을 이수했어.", UserProfile()
+        )
+        self.assertEqual(
+            tuple(item.name_ko for item in extracted.profile.completed_courses),
+            ("데이타통신",),
+        )
 
     def test_generic_programming_word_is_not_a_course_alias(self):
         matches = self.resolver.find_mentions("수학과 프로그래밍 실력이 부족해")
@@ -144,6 +171,41 @@ class PersonalizedOutcomeTests(unittest.TestCase):
         result = service.ask("AI 엔지니어가 되고 싶은데 어떤 과목을 추천해줘?")
         self.assertEqual(result.outcome.status, OutcomeStatus.ADVISORY)
         self.assertIn("단정해 추천하지 않습니다", result.outcome.message)
+        self.assertEqual(base.calls, 1)
+
+    def test_live_registration_question_stops_before_the_kg_query(self):
+        base = _ResponseService(ChatResponse.not_found("request"))
+        service = PersonalizedCurriculumChatService(base, bundle_path=BUNDLE)
+        result = service.ask("다음 학기 알고리즘 잔여석이 몇 개인지 알려줘")
+        self.assertEqual(result.outcome.status, OutcomeStatus.INSUFFICIENT_EVIDENCE)
+        self.assertIn("실시간", result.outcome.message)
+        self.assertEqual(base.calls, 0)
+
+    def test_nonacademic_recommendation_is_out_of_scope(self):
+        base = _ResponseService(ChatResponse.not_found("request"))
+        service = PersonalizedCurriculumChatService(base, bundle_path=BUNDLE)
+        result = service.ask("오늘 날씨에 맞는 식당을 추천해줘")
+        self.assertEqual(result.outcome.status, OutcomeStatus.OUT_OF_SCOPE)
+        self.assertEqual(base.calls, 0)
+
+    def test_curriculum_applicability_requests_only_scope_information(self):
+        base = _ResponseService(ChatResponse.not_found("request"))
+        service = PersonalizedCurriculumChatService(base, bundle_path=BUNDLE)
+        result = service.ask("내 학번에 적용되는 교육과정을 알려면 뭘 말해야 해?")
+        self.assertEqual(result.outcome.status, OutcomeStatus.NEEDS_USER_INFO)
+        self.assertEqual(
+            result.outcome.required_user_fields,
+            ("admission_year", "department_id"),
+        )
+        self.assertEqual(base.calls, 0)
+
+    def test_named_course_recommendation_is_advisory_without_generic_domain_word(self):
+        base = _ResponseService(ChatResponse.not_found("request"))
+        service = PersonalizedCurriculumChatService(base, bundle_path=BUNDLE)
+        result = service.ask(
+            "컴퓨터구조, 운영체제, 데이터통신을 어떤 순서로 추천할 수 있어?"
+        )
+        self.assertEqual(result.outcome.status, OutcomeStatus.ADVISORY)
         self.assertEqual(base.calls, 1)
 
     def test_existing_profile_value_is_not_requested_again(self):

@@ -228,6 +228,7 @@ _CREDIT_CATEGORIES = {
     "전공": "major",
     "일반선택": "free_elective",
     "자유선택": "free_elective",
+    "일선": "free_elective",
 }
 _TEST_PATTERNS = {
     "TOEIC": re.compile(
@@ -285,7 +286,7 @@ class ProfileExtractor:
             changed.add("credits.general")
         # Explicit correction wins over the earlier value in the same utterance.
         correction = re.search(
-            r"(총|전체|교양|전공|일반선택|자유선택)\s*학점(?:은|이)?\s*"
+            r"(총|전체|교양|전공|일반선택|자유선택|일선)\s*(?:학점)?(?:은|이|는)?\s*"
             r"(\d+(?:\.\d+)?)\s*(?:가|이)?\s*아니라\s*(\d+(?:\.\d+)?)\s*학점",
             question,
         )
@@ -296,7 +297,7 @@ class ProfileExtractor:
             changed.add(f"credits.{category}")
         observations: dict[str, set[float]] = {}
         for match in re.finditer(
-            r"(?<![가-힣])(총|전체|교양|전공|일반선택|자유선택)\s*(?:을|은|이)?\s*"
+            r"(?<![가-힣])(총|전체|교양|전공|일반선택|자유선택|일선)\s*(?:을|은|이)?\s*"
             r"(\d+(?:\.\d+)?)\s*학점",
             question,
         ):
@@ -306,6 +307,21 @@ class ProfileExtractor:
                 continue
             category = _CREDIT_CATEGORIES[match.group(1)]
             observations.setdefault(category, set()).add(float(match.group(2)))
+        # Students often give a compact list such as "전공 51, 교양 29, 일선 14"
+        # and put the unit only in the surrounding sentence.  Accept unitless
+        # category-number pairs only when at least two distinct categories appear;
+        # one isolated number remains ambiguous and is not converted to credits.
+        compact = list(
+            re.finditer(
+                r"(?<![가-힣])(총|전체|교양|전공|일반선택|자유선택|일선)\s*"
+                r"(\d+(?:\.\d+)?)(?!\s*(?:학번|년|학기|학년))",
+                question,
+            )
+        )
+        if len({_CREDIT_CATEGORIES[item.group(1)] for item in compact}) >= 2:
+            for match in compact:
+                category = _CREDIT_CATEGORIES[match.group(1)]
+                observations.setdefault(category, set()).add(float(match.group(2)))
         for category, values in observations.items():
             if len(values) > 1:
                 conflicts.add(f"credits.{category}")
@@ -329,6 +345,17 @@ class ProfileExtractor:
         }
         if re.search(r"(?:들었|수강했|이수했|들은\s*과목|이수\s*과목)", question):
             for course in self.course_resolver.find_mentions(question):
+                # A mentioned course is not necessarily a completed course.  Keep
+                # explicit negation local to that identity so "A는 듣지 않고 B를
+                # 이수했다" records B only.  This affects USER_ASSERTION state only;
+                # no academic fact is inferred here.
+                name = re.escape(course.name_ko)
+                if re.search(
+                    rf"{name}(?:을|를|은|는)?\s*(?:안\s*(?:들|수강|이수)|"
+                    rf"못\s*(?:들|수강|이수)|듣지|수강하지|이수하지)",
+                    question,
+                ):
+                    continue
                 course_map[course.course_code] = {
                     "course_code": course.course_code,
                     "name_ko": course.name_ko,
