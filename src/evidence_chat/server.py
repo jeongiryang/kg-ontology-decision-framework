@@ -146,6 +146,7 @@ PUBLISHED_FIELDS: dict[str, dict[str, str]] = {
         "relationships": "온톨로지가 선언한 관계 타입. 위와 같다",
         "node_label_count": "개수. 정수",
         "relationship_count": "개수. 정수",
+        "label_names_ko": "라벨의 한국어 표기. ontology_spec.json 의 name_ko 이며 공개 명세에 있는 값이다",
     },
     "CYPHER_GENERATION": {
         "candidate_generated": "후보 생성 여부. 불리언",
@@ -328,6 +329,16 @@ class InspectionCollector:
         if not isinstance(value, (list, tuple)):
             return []
         return sorted({item for item in value if isinstance(item, str) and len(item) <= 80})
+
+    @staticmethod
+    def _label_names_ko(labels: list[str]) -> dict[str, str]:
+        """Map each candidate label to its ontology name_ko, English when absent."""
+
+        try:
+            catalog = SchemaCatalog.from_generated()
+        except Exception:
+            return {}
+        return {label: catalog.label_ko(label) for label in labels}
 
     def _annotate_steps_ko(self, steps: list[dict[str, Any]]) -> None:
         """Attach a Korean sentence saying what each engine step actually checked."""
@@ -626,6 +637,9 @@ class InspectionCollector:
                 "relationships": relationships,
                 "node_label_count": len(labels),
                 "relationship_count": len(relationships),
+                # 처리 중 화면이 후보 노드를 한국어로 그린다. 표기는 온톨로지 명세의
+                # name_ko 에서만 오고, 없으면 영문 원형이 그대로 남는다.
+                "label_names_ko": self._label_names_ko(labels),
             }
         elif event.phase is ProgressPhase.CYPHER_GENERATION:
             summary = {

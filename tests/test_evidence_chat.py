@@ -807,6 +807,7 @@ class StarletteRouteTests(unittest.IsolatedAsyncioTestCase):
                 "relationships",
                 "node_label_count",
                 "relationship_count",
+                "label_names_ko",
             },
             "CYPHER_GENERATION": {
                 "candidate_generated",

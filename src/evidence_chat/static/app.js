@@ -461,6 +461,9 @@ function renderProgress(payload) {
     entry.error_code = payload.error_code || null;
   }
   renderTimelines();
+  // 단계 이벤트 자체가 그래프를 자라게 하는 신호다. inspection_update 가 따로
+  // 오지 않는 단계(실패·재시도 포함)에서도 그림이 그 자리에서 멈추도록 함께 갱신한다.
+  renderExplorationPanels();
 }
 
 function renderTimelines() {
@@ -1013,6 +1016,231 @@ function queryWillRun() {
   );
 }
 
+// ── 좁혀 가는 과정 그래프 ────────────────────────────────────────────────────
+// 이것은 "질의가 그래프를 밟는 순서"가 아니다. **시스템이 답을 좁혀 가는 과정**이다.
+// 파이프라인 9단계의 SSE 이벤트가 실제로 도착할 때마다, 그 단계가 보고한 값만으로
+// 그래프를 한 겹씩 자라게 한다. hop 단위 실시간 중계는 Neo4j 가 실행 중 진행 상황을
+// 주지 않아 불가능하지만(ADR 0013), 단계 단위 중계는 이벤트가 실재하므로 가능하다.
+//
+// 각 단계에서 그리는 것은 **그 단계가 실제로 보고한 값에서만** 온다. 구조 정보를
+// 새로 주지 않는 단계는 그림을 바꾸지 않고, 바꾸지 않는다는 사실을 문구로 적는다.
+const NARROWING_STAGES = [
+  {
+    key: "QUESTION_ANALYSIS",
+    label: "질문 분석",
+    note: "질문에서 무엇을 찾을지가 정해졌습니다. 찾을 자리만 표시합니다.",
+  },
+  {
+    key: "SCHEMA_SELECTION",
+    label: "스키마 선택",
+    note: "온톨로지에서 고른 후보 노드 종류입니다. 아직 어느 것을 쓸지 정해지지 않았습니다.",
+  },
+  {
+    key: "CYPHER_GENERATION",
+    label: "Cypher 생성",
+    // 이 단계는 후보 생성 사실만 보고한다. 어떤 노드를 쓰는지는 검증 전이라 공개되지
+    // 않는다. 그림을 바꿀 근거가 없으므로 바꾸지 않는다.
+    note: "질의 후보가 만들어졌습니다. 검증 전이라 어느 노드를 쓰는지는 아직 공개되지 않습니다.",
+  },
+  {
+    key: "STATIC_VALIDATION",
+    label: "정적 검증",
+    // 규칙 통과 여부만 보고한다. 경로는 EXPLAIN 까지 통과해야 승인된다.
+    note: "읽기 전용·온톨로지·파라미터 바인딩 검사를 통과했습니다. 경로는 실행계획 승인 뒤 공개됩니다.",
+  },
+  {
+    key: "NEO4J_EXPLAIN",
+    label: "실행계획 승인",
+    note: "질의가 실제로 쓰는 노드만 남았습니다. 선택되지 않은 후보는 사라지고, 간선에 순서가 붙습니다.",
+  },
+  {
+    key: "GRAPH_EXECUTION",
+    label: "그래프 실행",
+    note: "간선마다 실제로 통과한 행 수가 채워졌습니다.",
+  },
+  {
+    key: "RESULT_VALIDATION",
+    label: "결과 검증",
+    note: "승인된 행만 남았습니다.",
+  },
+  {
+    key: "CLAIM_BUILDING",
+    label: "주장 구성",
+    note: "라벨 종류명이 실제 노드 이름으로 바뀌고 근거가 붙었습니다.",
+  },
+  {
+    key: "ANSWER_RENDERING",
+    label: "답변 생성",
+    note: "최종 경로가 확정됐습니다.",
+  },
+];
+
+// 어느 단계까지 실제로 도착했는가. 실패하면 그 자리에서 멈춘다.
+function narrowingProgress() {
+  let index = 0;
+  let failed = null;
+  // **이어진 단계만** 센다. 되묻기처럼 조회가 없는 경로는 1단계 뒤 바로 답변 생성으로
+  // 건너뛰는데, 완료된 단계를 그냥 세면 그림은 자리표시 하나뿐인데 9/9 로 표시돼
+  // 밟지 않은 단계를 밟았다고 말하게 된다(2026-08-29 브라우저 실측).
+  for (let position = 0; position < NARROWING_STAGES.length; position += 1) {
+    const stage = NARROWING_STAGES[position];
+    const event = [...timelineEvents]
+      .reverse()
+      .find((item) => item.phase === stage.key);
+    if (!event) break;
+    if (event.state === "FAILED") {
+      failed = { position: position + 1, stage, event };
+      break;
+    }
+    if (event.state !== "COMPLETED") break;
+    index = position + 1;
+  }
+  // 지금 실행 중인 단계. Cypher 생성은 LLM 때문에 수십 초 걸리는데, 완료된 단계만
+  // 적으면 그 동안 화면이 앞 단계에 머물러 멈춘 것처럼 보인다. STARTED 이벤트는
+  // 실재하므로 그대로 쓴다.
+  let running = null;
+  for (let position = 0; position < NARROWING_STAGES.length; position += 1) {
+    const stage = NARROWING_STAGES[position];
+    const latest = [...timelineEvents]
+      .reverse()
+      .find((item) => item.phase === stage.key);
+    if (latest && latest.state === "STARTED") {
+      running = { position: position + 1, stage };
+      break;
+    }
+  }
+  return { index, failed, running, total: NARROWING_STAGES.length };
+}
+
+function narrowingNode(id, name, type, typeKo, order) {
+  return {
+    id: `ui:narrow:${id}`,
+    display_name: name,
+    node_type: type,
+    node_type_ko: typeKo || type,
+    verification_status: "SCHEMA_APPROVED",
+    visit_order: order,
+  };
+}
+
+// 단계별로 그릴 수 있는 것만 그린다. 아직 모르는 것은 그리지 않는다.
+function narrowingGraph(state, index) {
+  // 8단계부터는 승인된 통합 투영이 도착한다. 실제 노드 이름과 근거가 여기 있다.
+  if (index >= 8 && state.claims && state.claims.traversal_graph) {
+    return { graph: state.claims.traversal_graph, phase: "traversal" };
+  }
+  // 5단계에서 승인된 질의 구조가 공개된다. 좁혀진 경로와 순서가 여기 있다.
+  if (index >= 5 && state.explain && state.explain.query_graph) {
+    return { graph: state.explain.query_graph, phase: "structure" };
+  }
+  // 2~4단계. 후보 노드 종류만 안다. 간선은 아직 모르므로 그리지 않는다.
+  const labels =
+    state.schema && Array.isArray(state.schema.labels) ? state.schema.labels : [];
+  if (index >= 2 && labels.length) {
+    return {
+      graph: {
+        version: 1,
+        kind: "QUERY_STRUCTURE",
+        ordered: false,
+        nodes: labels
+          .slice(0, 40)
+          .map((label, position) =>
+            narrowingNode(
+              `label:${label}`,
+              schemaLabelKo(label),
+              label,
+              schemaLabelKo(label),
+              position + 1
+            )
+          ),
+        edges: [],
+      },
+      phase: "candidates",
+    };
+  }
+  // 1단계. 찾을 자리 하나.
+  if (index >= 1) {
+    return {
+      graph: {
+        version: 1,
+        kind: "QUERY_STRUCTURE",
+        ordered: false,
+        nodes: [narrowingNode("target", "찾을 대상", "Question", "질문", 1)],
+        edges: [],
+      },
+      phase: "target",
+    };
+  }
+  return null;
+}
+
+// 라벨의 한국어 표기는 서버가 보내 준 값에서만 찾는다. 없으면 영문 원형을 쓴다.
+function schemaLabelKo(label) {
+  const schema = latestInspection("SCHEMA_SELECTION");
+  const map = schema && schema.summary ? schema.summary.label_names_ko : null;
+  const value = map && typeof map === "object" ? map[label] : null;
+  return typeof value === "string" && value ? value : label;
+}
+
+// 처리 중 화면. 이벤트가 올 때마다 그래프가 한 겹씩 자란다.
+function renderNarrowingPanel(container, state) {
+  const progress = narrowingProgress();
+  const built = narrowingGraph(state, progress.index);
+  if (!built) {
+    if (queryWillRun()) {
+      renderExplorationWaiting(container);
+      return true;
+    }
+    container.hidden = true;
+    return true;
+  }
+  container.hidden = false;
+  container.replaceChildren();
+
+  const head = document.createElement("div");
+  head.className = "exploration-head";
+  const title = document.createElement("h3");
+  title.textContent = "답을 좁혀 가는 과정";
+  const description = document.createElement("p");
+  // 이 화면이 무엇인지 분명히 한다. 아래 결과 화면의 "지식그래프 탐색"과 다른 것이다.
+  description.textContent =
+    "질의가 그래프를 밟는 순서가 아니라, 시스템이 후보를 좁혀 답에 이르는 과정입니다. " +
+    "각 단계가 실제로 보고한 값만 그립니다.";
+  head.append(title, description);
+
+  const stage = document.createElement("p");
+  stage.className = "narrowing-stage";
+  if (progress.failed) {
+    stage.classList.add("is-failed");
+    const shown = NARROWING_STAGES[progress.failed.position - 1];
+    const code = progress.failed.event.error_code;
+    stage.textContent =
+      `${progress.failed.position}/${progress.total} ${shown.label} — ` +
+      `실패로 여기서 멈췄습니다` + (code ? ` (${code})` : "");
+  } else if (progress.running) {
+    stage.textContent =
+      `${progress.running.position}/${progress.total} ` +
+      `${progress.running.stage.label} 진행 중`;
+  } else {
+    const shown = NARROWING_STAGES[Math.max(0, progress.index - 1)];
+    stage.textContent =
+      `${progress.index}/${progress.total} ${shown.label} — ${shown.note}`;
+  }
+  head.append(stage);
+
+  const panel = document.createElement("div");
+  panel.id = `${container.id}-panel`;
+  panel.className = "exploration-panel";
+  // 처리 중 화면은 재생하지 않는다. 자라는 것 자체가 지금 일어나는 일이다.
+  renderGraphPanel(panel, "좁혀 가는 과정", built.graph, {
+    autoplay: false,
+    outcome: { failed: Boolean(progress.failed), label: "" },
+    live: true,
+  });
+  container.append(head, panel);
+  return true;
+}
+
 // 승인 전 자리표시. 어느 단계까지 왔는지 실제 타임라인에서 읽어 보여 준다.
 function renderExplorationWaiting(container) {
   container.hidden = false;
@@ -1068,27 +1296,9 @@ function renderExplorationPanel(container) {
   // 전부 "미사용" 으로 표시돼 오해를 부르고, 지금 보고 싶은 것은 노드 탐색이다.
   // 스키마·Cypher 탭은 결과 화면에서 확인한다.
   if (container === el.progressExploration) {
-    if (!availability.graph) {
-      if (queryWillRun()) {
-        renderExplorationWaiting(container);
-        return;
-      }
-      container.hidden = true;
-      return;
-    }
-    container.hidden = false;
-    const head = document.createElement("div");
-    head.className = "exploration-head";
-    const title = document.createElement("h3");
-    title.textContent = "지식그래프 탐색";
-    const description = document.createElement("p");
-    description.textContent = "승인된 질의가 그래프를 밟는 순서대로 재생합니다.";
-    head.append(title, description);
-    const panel = document.createElement("div");
-    panel.id = `${container.id}-panel`;
-    panel.className = "exploration-panel";
-    renderGraphTab(panel, state, true);
-    container.append(head, panel);
+    // 승인 그래프가 도착할 때까지 기다리지 않는다. 1단계부터 그리기 시작해
+    // 이벤트가 올 때마다 자라게 한다.
+    renderNarrowingPanel(container, state);
     return;
   }
   // 결과 화면도 조회 그래프 하나만 보여 준다. 선택 스키마와 승인 Cypher 는 아래
@@ -1890,10 +2100,12 @@ function startSimulation(svg, maxOrder, button) {
   const total = measuredTotalMs(plan);
   const note = svg.closest(".graph-panel")?.querySelector(".replay-note");
   if (note) {
-    note.textContent = slowed
-      ? `실측 ${total.toFixed(1)}ms · 사람이 볼 수 있도록 ${Math.round(factor)}배 느리게 재생 중`
-      : `실측 ${total.toFixed(1)}ms · 실제 속도로 재생 중`;
-    note.hidden = false;
+    // 배율 숫자는 화면에 적지 않는다. 실측값과 배수가 나란히 있으면 숫자 둘이
+    // 경쟁해 어느 쪽이 실제인지 흐려진다. 정직성은 실측값을 함께 보여 주는 것으로
+    // 충분하고, 늘려 재생한다는 사실은 재생 버튼 tooltip 에 적는다.
+    note.textContent = `실측 ${total.toFixed(1)}ms`;
+    // 진행 중 화면은 실측 그대로 재생하므로 안내 문구 자체가 필요 없다.
+    note.hidden = !slowed;
   }
   const tick = () => {
     step += 1;
@@ -1910,7 +2122,7 @@ function startSimulation(svg, maxOrder, button) {
       button.textContent = "▶ 순서대로 다시 훑어보기";
       if (note) {
         // 재생이 끝나도 실측값은 계속 보이게 둔다.
-        note.textContent = `실측 ${total.toFixed(1)}ms · 재생 완료`;
+        note.textContent = `실측 ${total.toFixed(1)}ms`;
       }
       return;
     }
@@ -1974,7 +2186,7 @@ function addSimulationControl(controls, svg, graph, { autoplay = false } = {}) {
   note.hidden = true;
   const totalMs = measuredTotalMs(svg._operatorPlan || []);
   note.textContent = `실측 ${totalMs.toFixed(1)}ms`;
-  note.hidden = false;
+  note.hidden = !svg._replaySlowed;
   controls.parentElement
     ? controls.parentElement.append(note)
     : controls.append(note);
@@ -1985,7 +2197,9 @@ function addSimulationControl(controls, svg, graph, { autoplay = false } = {}) {
   button.type = "button";
   button.className = "ghost compact graph-simulate";
   button.textContent = "▶ 순서대로 다시 훑어보기";
-  button.title = "엔진이 실행한 순서 그대로, 각 단계의 실측 시간만큼 다시 보여 줍니다";
+  button.title = svg._replaySlowed
+    ? "엔진이 실행한 순서 그대로 다시 보여 줍니다. 실제 조회는 수십 ms 안에 끝나므로 사람이 볼 수 있도록 늘려 재생합니다"
+    : "엔진이 실행한 순서 그대로, 각 단계의 실측 시간만큼 다시 보여 줍니다";
   button.addEventListener("click", () => {
     if (runningSimulations.has(svg)) {
       stopSimulation(svg);
@@ -2171,6 +2385,27 @@ function renderGraphPanel(container, title, graph, options = {}) {
       depthTop.set(level, cursorY);
       cursorY += (rowsAtDepth.get(level) || 1) * yGap;
     }
+    // 자식이 이미 다 놓인 노드는 리프로 취급돼 left=0 자리에 그대로 놓인다. 그래서
+    // 다른 갈래의 노드와 **같은 자리**에 겹치는 일이 생겼다(2026-08-29 실측:
+    // Department 와 EducationGoal 이 둘 다 (70,216)). 겹치면 그림이 한 노드처럼
+    // 보이고, 그 둘을 잇는 간선은 길이가 0이라 좌표가 NaN 이 돼 콘솔 오류 54건을
+    // 냈다. 같은 줄 안에서 자리를 오른쪽으로 밀어 겹침을 없앤다.
+    const rows = new Map();
+    positions.forEach((point, id) => {
+      const key = `${depth.get(id) || 0}:${shift.get(id) || 0}`;
+      if (!rows.has(key)) rows.set(key, []);
+      rows.get(key).push({ id, point });
+    });
+    rows.forEach((items) => {
+      items.sort((a, b) => a.point.x - b.point.x || a.id.localeCompare(b.id));
+      for (let index = 1; index < items.length; index += 1) {
+        const previous = items[index - 1].point.x;
+        if (items[index].point.x - previous < xGap) {
+          items[index].point.x = previous + xGap;
+        }
+      }
+    });
+
     const xs = [...positions.values()].map((p) => p.x);
     const minX = Math.min(...xs, 0);
     positions.forEach((p, id) => {
@@ -2224,7 +2459,11 @@ function renderGraphPanel(container, title, graph, options = {}) {
       const trim = (box) => {
         const tx = Math.abs(ux) < 1e-6 ? Infinity : box.w / 2 / Math.abs(ux);
         const ty = Math.abs(uy) < 1e-6 ? Infinity : box.h / 2 / Math.abs(uy);
-        return Math.min(tx, ty);
+        const value = Math.min(tx, ty);
+        // 두 노드가 같은 자리에 있으면 ux·uy 가 모두 0 이라 여기서 Infinity 가 되고,
+        // 0 * Infinity 가 NaN 이 돼 좌표 속성이 통째로 깨진다. 위 배치 보정으로
+        // 겹침 자체를 없앴지만, 남은 경우에도 그림이 깨지지 않게 막아 둔다.
+        return Number.isFinite(value) ? value : 0;
       };
       const ta = trim(boxOf(na)), tb = trim(boxOf(nb));
       const x1 = a.x + ux * ta, y1 = a.y + uy * ta;
@@ -2453,7 +2692,14 @@ function renderGraphPanel(container, title, graph, options = {}) {
     svg.dataset.graphKey = `${container.id || "panel"}:${graphKey}`;
     // 재생 단위가 operator 개수이므로 컨트롤을 만들기 전에 계획을 실어야 한다.
     svg._operatorPlan = operatorPlan();
-    addSimulationControl(controls, svg, graph, options);
+    if (!options.live) {
+      addSimulationControl(controls, svg, graph, options);
+    } else {
+      // 진행 중 화면은 알려진 데까지를 완료 상태로 보여 준다. 재생 버튼·배속·
+      // 안내 문구를 두지 않는다.
+      svg.classList.add("is-complete", "shows-state");
+      applySimulationStep(svg, (svg._operatorPlan || []).length);
+    }
     setScale(graphScales.get(graphKey) || 1);
     viewport.fitGraph = () => {
       if ((graphScales.get(graphKey) || 1) === 1) setScale(1);

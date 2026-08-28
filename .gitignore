@@ -13,3 +13,6 @@ logs/query-runs/
 # 테스트 커버리지 산출물
 .coverage
 .cache/
+
+# 브라우저 검증 스크린샷·로그 (저장소에 남기지 않는다)
+out/

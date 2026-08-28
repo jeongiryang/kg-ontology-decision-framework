@@ -808,6 +808,18 @@ kbd {
 
 /* 탐색이 끊긴 지점 --------------------------------------------------------- */
 .projection-note.is-failed { color: var(--graph-dead); font-weight: 600; }
+
+/* 처리 중 화면의 단계 표시. 지금 몇 번째 단계이고 그 단계가 그림에 무엇을 더했는지
+   한 줄로 적는다. 그림이 바뀌지 않는 단계에서는 바뀌지 않는 이유가 여기 적힌다. */
+.narrowing-stage {
+  flex-basis: 100%;
+  margin-top: 4px;
+  font-size: 0.82rem;
+  line-height: 1.5;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+.narrowing-stage.is-failed { color: var(--graph-dead); font-weight: 600; }
 .graph-node.is-dead-end .graph-node-circle {
   stroke: var(--graph-dead);
   stroke-width: 3;
