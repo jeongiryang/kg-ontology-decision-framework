@@ -122,6 +122,16 @@
 
         <details class="debug" id="timeline-section" hidden open>
           <summary>처리 과정 보기</summary>
+          <div class="trace-tools">
+            <button type="button" class="ghost compact" id="trace-expand-all">전체 보기</button>
+            <button type="button" class="ghost compact" id="trace-copy-text">텍스트로 복사</button>
+            <button type="button" class="ghost compact" id="trace-copy-json">JSON으로 복사</button>
+            <label class="trace-mask">
+              <input type="checkbox" id="trace-mask-personal" checked />
+              개인 데이터 가림
+            </label>
+            <span class="trace-copy-state" id="trace-copy-state" role="status"></span>
+          </div>
           <ol class="steps result-timeline" id="answer-progress-steps" aria-label="완료된 처리 단계"></ol>
         </details>
 

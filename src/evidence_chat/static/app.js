@@ -37,6 +37,11 @@ const el = {
   debugMeta: $("debug-meta"),
   timelineSection: $("timeline-section"),
   answerProgressSteps: $("answer-progress-steps"),
+  traceExpandAll: $("trace-expand-all"),
+  traceCopyText: $("trace-copy-text"),
+  traceCopyJson: $("trace-copy-json"),
+  traceMaskPersonal: $("trace-mask-personal"),
+  traceCopyState: $("trace-copy-state"),
   answerExploration: $("answer-exploration"),
   evidenceSection: $("evidence-section"),
   evidenceSummary: $("evidence-summary"),
@@ -68,6 +73,8 @@ let modalZoom = 1;
 let queryDetailsEnabled = false;
 let timelineEvents = [];
 let inspectionUpdates = new Map();
+// 추적 화면과 내보내기에 쓰는 이번 요청의 질문 원문.
+let lastQuestion = "";
 // 결과 화면 탐색 패널의 펼침 상태. 사용자가 펼쳐 두면 재렌더에도 유지한다.
 let explorationExpanded = false;
 let expandedStages = new Set();
@@ -239,6 +246,35 @@ el.progressBack.addEventListener("click", () => {
     showScreen("ask");
   }
 });
+// 전체 보기: 모든 단계를 한 번에 펼쳐 위에서 아래로 읽는다.
+if (el.traceExpandAll) {
+  el.traceExpandAll.addEventListener("click", () => {
+    const cards = [...el.answerProgressSteps.querySelectorAll("button.step-toggle")];
+    const anyClosed = cards.some((b) => b.getAttribute("aria-expanded") !== "true");
+    cards.forEach((b) => {
+      if (b.getAttribute("aria-expanded") !== String(anyClosed)) b.click();
+    });
+    el.traceExpandAll.textContent = anyClosed ? "전체 접기" : "전체 보기";
+  });
+}
+const wireCopy = (button, kind) => {
+  if (!button) return;
+  button.addEventListener("click", async () => {
+    const masked = !el.traceMaskPersonal || el.traceMaskPersonal.checked;
+    const ok = await copyTrace(kind, masked);
+    if (el.traceCopyState) {
+      el.traceCopyState.textContent = ok
+        ? `복사했습니다${masked ? " · 개인 데이터 가림" : ""}`
+        : "복사하지 못했습니다";
+      window.setTimeout(() => {
+        el.traceCopyState.textContent = "";
+      }, 4000);
+    }
+  });
+};
+wireCopy(el.traceCopyText, "text");
+wireCopy(el.traceCopyJson, "json");
+
 el.answerAgain.addEventListener("click", () => {
   el.question.value = "";
   autoGrow();
@@ -263,6 +299,7 @@ async function ask(question) {
   inFlight = true;
   el.submit.disabled = true;
   el.asked.textContent = question;
+  lastQuestion = question;
   el.answerQuestion.textContent = question;
   el.progressError.hidden = true;
   el.spinner.classList.remove("is-done");
@@ -510,7 +547,9 @@ function stageInspection(event) {
 
 function stageHasDetails(event) {
   const inspection = stageInspection(event);
-  if (!inspection || !inspection.summary || inspection.status === "FAILED") return false;
+  if (!inspection || !inspection.summary) return false;
+  // 실패한 단계야말로 왜 실패했는지 보여야 한다. 종전에는 상세를 아예 닫았다.
+  if (inspection.status === "FAILED") return true;
   const summary = inspection.summary;
   const allowed = {
     QUESTION_ANALYSIS: Boolean(summary.status || summary.query_plan),
@@ -649,14 +688,87 @@ function addFiveWOneH(container, phase, summary) {
   }
 }
 
+// 검증기가 내는 오류 코드의 한국어 설명. 코드 자체는 영어 원본을 함께 보여 준다.
+// 목록에 없는 코드는 코드만 표시하고 설명을 지어내지 않는다.
+const ERROR_CODE_KO = {
+  CYPHER_RETURN_FIELD_MISMATCH: "RETURN 별칭이 계약과 다릅니다. 요청한 필드·범위 필터·근거 항목이 정확히 일치해야 합니다",
+  CYPHER_FORBIDDEN_KEYWORD: "쓰기나 지원하지 않는 절이 들어 있습니다",
+  CYPHER_UNKNOWN_LABEL: "온톨로지에 선언되지 않은 노드 라벨을 썼습니다",
+  CYPHER_UNKNOWN_RELATIONSHIP: "온톨로지에 선언되지 않은 관계 타입을 썼습니다",
+  CYPHER_UNKNOWN_PROPERTY: "그 라벨에 선언되지 않은 속성을 참조했습니다",
+  CYPHER_LITERAL_VALUE: "VERIFIED 외의 문자열 값을 질의에 직접 넣었습니다",
+  CYPHER_EVIDENCE_PATH_REQUIRED: "사실에서 근거로 가는 직접 경로가 정확히 하나여야 합니다",
+  CYPHER_VERIFIED_FILTER_REQUIRED: "사실과 근거를 모두 VERIFIED 로 걸러야 합니다",
+  CYPHER_FILTER_BINDING: "필터가 선언된 라벨·속성에 묶이지 않았습니다",
+  CYPHER_PARAMETER_USAGE: "계획의 필터를 WHERE 에서 정확히 한 번씩 써야 합니다",
+  CYPHER_LIMIT_REQUIRED: "LIMIT 이 정수 리터럴이어야 합니다",
+  CYPHER_LIMIT_EXCEEDED: "LIMIT 이 허용 범위를 벗어났습니다",
+  CYPHER_CLAUSE_SEQUENCE: "절 순서가 허용된 형태가 아닙니다",
+  CYPHER_MATCH_PATTERN_UNSUPPORTED: "MATCH 는 방향과 타입이 있는 고정 길이 경로만 허용합니다",
+  CYPHER_SCOPE_IDENTITY_INVALID: "scope_identity 가 온톨로지 선언 속성이 아닙니다",
+  NEO4J_EXPLAIN_DANGEROUS_PLAN: "실행 계획에 전체 스캔이나 카테시안곱이 있어 막았습니다",
+  NEO4J_EXPLAIN_NOTIFICATION: "Neo4j 가 위험 신호를 보고했습니다",
+  RESULT_FIELD_NULL: "요청한 필드가 비어 있는 행이 있습니다",
+  RESULT_SCOPE_MISMATCH: "행의 값이 계획의 범위 필터와 다릅니다",
+  RESULT_FACT_NOT_VERIFIED: "VERIFIED 가 아닌 사실이 섞였습니다",
+  RESULT_EVIDENCE_NOT_VERIFIED: "VERIFIED 가 아닌 근거가 섞였습니다",
+  RESULT_COURSE_AMBIGUOUS: "같은 과목명에 학수번호가 여럿이라 하나로 좁히지 못했습니다",
+  LLM_PLAN_CONTRACT_INVALID: "계획 모델이 계약에 맞지 않는 결과를 냈습니다",
+  LLM_UNAVAILABLE: "로컬 모델에 연결하지 못했습니다",
+};
+
+function addErrorCode(container, code) {
+  if (!code) return;
+  const wrap = document.createElement("section");
+  wrap.className = "stage-error";
+  const head = document.createElement("p");
+  head.className = "stage-error-code";
+  head.textContent = code;
+  wrap.append(head);
+  const ko = ERROR_CODE_KO[code];
+  if (ko) {
+    const desc = document.createElement("p");
+    desc.className = "stage-error-desc";
+    desc.textContent = ko;
+    wrap.append(desc);
+  }
+  container.append(wrap);
+}
+
+// 값이 없을 때 빈칸으로 두지 않는다.
+function addNoticeIfEmpty(container, values, message) {
+  const filled = Object.values(values).some(
+    (value) => value !== null && value !== undefined && value !== ""
+  );
+  if (filled) return false;
+  const p = document.createElement("p");
+  p.className = "stage-empty";
+  p.textContent = message;
+  container.append(p);
+  return true;
+}
+
 function renderStageDetail(container, event, allowExplorationLinks) {
   const inspection = stageInspection(event);
   const summary = inspection ? inspection.summary : null;
   if (!summary) return;
+  if (inspection.status === "FAILED") {
+    addDetailFacts(container, { "결과": "이 단계에서 중단됨" });
+    addErrorCode(container, summary.error_code);
+    if (summary.discarded_cypher) {
+      const badge = document.createElement("p");
+      badge.className = "discard-badge";
+      badge.textContent = `실행되지 않음 · 검증 실패: ${summary.discard_reason || summary.error_code}`;
+      container.append(badge);
+      addInspectionItem(container, "버려진 후보 Cypher", summary.discarded_cypher);
+    }
+    return;
+  }
   addFiveWOneH(container, event.phase, summary);
 
   if (event.phase === "QUESTION_ANALYSIS") {
     addDetailFacts(container, {
+      "입력 원문": lastQuestion || "해당 없음",
       "계획 상태": summary.status,
       "학년도": summary.query_plan && summary.query_plan.filters
         ? summary.query_plan.filters.academic_year
@@ -724,7 +836,10 @@ function renderStageDetail(container, event, allowExplorationLinks) {
       addExplorationLink(container, "탐색 그래프 보기", "graph");
     }
   } else if (event.phase === "RESULT_VALIDATION") {
+    const execution = latestInspection("GRAPH_EXECUTION");
     addDetailFacts(container, {
+      "들어온 행": execution ? execution.summary.row_count : null,
+      "승인된 행": summary.row_count,
       "검증된 사실": summary.fact_count,
       "검증된 근거": summary.verified_evidence_count,
       "사실 상태 검사": summary.fact_status_verified,
@@ -732,14 +847,54 @@ function renderStageDetail(container, event, allowExplorationLinks) {
       "직접 provenance 검사": summary.direct_provenance_verified,
       "거부된 행": summary.rejected_row_count,
     });
+    // 결과 검증기는 첫 위반에서 즉시 중단한다(fail-fast). 그래서 "사유별 건수" 라는
+    // 값이 애초에 만들어지지 않는다. 없는 값을 0 으로 보여 주면 "검사했는데 하나도
+    // 안 걸렸다" 로 읽히므로 그 사실을 적는다.
+    const note = document.createElement("p");
+    note.className = "stage-empty";
+    note.textContent =
+      "사유별 거부 건수: 해당 없음 — 결과 검증기는 첫 위반에서 즉시 중단하므로 " +
+      "행을 끝까지 세지 않습니다. 위반이 있었다면 이 단계가 실패로 끝납니다.";
+    container.append(note);
   } else if (event.phase === "CLAIM_BUILDING") {
+    const graph = summary.traversal_graph;
+    if (graph) {
+      const nodes = new Map(graph.nodes.map((n) => [n.id, n]));
+      const pairs = graph.edges
+        .filter((e) => e.relationship === "SUPPORTED_BY")
+        .map((e) => `${nodes.get(e.source)?.display_name} ← ${nodes.get(e.target)?.display_name}`);
+      if (pairs.length) addInspectionItem(container, "사실과 근거의 대응", pairs);
+    }
     addDetailFacts(container, {
       "주장 수": summary.claim_count,
       "주장 유형": Array.isArray(summary.claim_types) ? summary.claim_types.join(", ") : null,
       "집계 주장": summary.aggregate,
       "인용 대상": summary.citation_target_count,
     });
+    // 근거 없는 주장은 여기까지 오지 못한다. ClaimValidator 가 승인하지 않으면
+    // 파이프라인이 SAFE_FAILURE 로 끝난다. 그 사실을 적는다.
+    const grounded = document.createElement("p");
+    grounded.className = "stage-empty";
+    grounded.textContent =
+      "근거 없는 주장: 해당 없음 — 근거가 붙지 않은 주장은 승인되지 않아 " +
+      "이 단계를 통과하지 못합니다. 통과했다면 모든 주장에 근거가 있습니다.";
+    container.append(grounded);
   } else if (event.phase === "ANSWER_RENDERING") {
+    if (lastResult && lastResult.response) {
+      const text = lastResult.response.answer_text || "";
+      if (text) addInspectionItem(container, "최종 문장", text);
+      const cites = (lastResult.response.citations || []).map(
+        (c) => `발췌 PDF ${c.excerpt_page}쪽 · ${(c.source_text || "").slice(0, 60)}`
+      );
+      if (cites.length) addInspectionItem(container, "인용", cites);
+      // 문장 단위 대응은 렌더러가 기록하지 않는다. 없는 것을 그리지 않는다.
+      const note = document.createElement("p");
+      note.className = "stage-empty";
+      note.textContent =
+        "문장별 인용 대응: 해당 없음 — 렌더러가 문장 단위 대응을 기록하지 않습니다. " +
+        "위 인용은 답변 전체가 근거로 삼은 목록입니다.";
+      container.append(note);
+    }
     addDetailFacts(container, {
       "결정론적 한국어 renderer": summary.deterministic_renderer,
       "인용 수": summary.citation_count,
@@ -1140,10 +1295,93 @@ function addInspectionItem(container, label, value, options = {}) {
   container.append(item);
 }
 
-// TODO(묶음 4): 전체 추적을 위에서 아래로 읽는 "전체 보기" 모드와 텍스트/JSON
-// 내보내기 버튼. 질문 원문·시각·단계별 값이 모두 담겨 이 기록만으로 재현 가능해야 한다.
-// TODO(묶음 4): 개인 데이터 유래 필드 표시와 내보내기 마스킹(기본 켬). PR #32 의
-// personalized_service.py 가 병합되면 학번·이수 이력이 추적 화면에 실릴 수 있다.
+// 개인 데이터에서 온 필드. 내보내기에서 기본으로 가린다.
+// PR #32 의 personalized_service.py 가 병합되면 학번·이수 이력이 추적 화면에 실릴 수
+// 있다. 그 필드 이름이 정해지면 여기에 더한다. 지금은 자리만 잡아 둔다.
+const PERSONAL_FIELDS = new Set([
+  "student_id",
+  "completed_courses",
+  "earned_credits",
+  "profile",
+]);
+
+function maskPersonal(value) {
+  if (typeof value !== "string") return value;
+  return value.replace(/\d{6,}/g, "<가림>");
+}
+
+// 추적 기록 한 벌. 이 기록만으로 나중에 재현할 수 있어야 한다.
+function buildTraceRecord({ maskPersonalData = true } = {}) {
+  const stages = timelineEvents
+    .filter((event) => event.state !== "STARTED")
+    .map((event) => {
+      const inspection = stageInspection(event);
+      const summary = inspection ? { ...inspection.summary } : null;
+      if (summary && maskPersonalData) {
+        Object.keys(summary).forEach((key) => {
+          if (PERSONAL_FIELDS.has(key)) summary[key] = "<가림>";
+          else if (typeof summary[key] === "string") summary[key] = maskPersonal(summary[key]);
+        });
+      }
+      return {
+        phase: event.phase,
+        state: event.state,
+        elapsed_ms: event.elapsed_ms,
+        error_code: event.error_code || null,
+        detail: summary,
+      };
+    });
+  return {
+    captured_at: new Date().toISOString(),
+    question: lastQuestion,
+    resolved: clarify ? clarify.resolved : {},
+    final_status: lastResult && lastResult.response ? lastResult.response.status : null,
+    answer_text: lastResult && lastResult.response ? lastResult.response.answer_text : null,
+    citations: lastResult && lastResult.response ? lastResult.response.citations : [],
+    personal_data_masked: maskPersonalData,
+    stages,
+  };
+}
+
+function traceRecordAsText(record) {
+  const lines = [
+    `질문: ${record.question}`,
+    `시각: ${record.captured_at}`,
+    `최종 상태: ${record.final_status ?? "해당 없음"}`,
+    `개인 데이터 마스킹: ${record.personal_data_masked ? "켬" : "끔"}`,
+    "",
+  ];
+  record.stages.forEach((stage) => {
+    lines.push(`[${stage.phase}] ${stage.state} · ${stage.elapsed_ms}ms`);
+    if (stage.error_code) lines.push(`  오류: ${stage.error_code}`);
+    if (stage.detail) {
+      Object.entries(stage.detail).forEach(([key, value]) => {
+        if (value === null || value === undefined || value === "") return;
+        const text = typeof value === "object" ? JSON.stringify(value) : String(value);
+        lines.push(`  ${key}: ${text.slice(0, 400)}`);
+      });
+    }
+    lines.push("");
+  });
+  if (record.answer_text) lines.push(`답변: ${record.answer_text}`);
+  (record.citations || []).forEach((c) => {
+    lines.push(`  인용 · 발췌 PDF ${c.excerpt_page}쪽: ${(c.source_text || "").slice(0, 200)}`);
+  });
+  return lines.join("\n");
+}
+
+async function copyTrace(kind, maskPersonalData) {
+  const record = buildTraceRecord({ maskPersonalData });
+  const text = kind === "json"
+    ? JSON.stringify(record, null, 2)
+    : traceRecordAsText(record);
+  try {
+    await navigator.clipboard.writeText(text);
+    return true;
+  } catch (error) {
+    return false;
+  }
+}
 
 const SVG_NS = "http://www.w3.org/2000/svg";
 

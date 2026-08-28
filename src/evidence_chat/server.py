@@ -498,10 +498,16 @@ class InspectionCollector:
                 ProgressPhase.NEO4J_EXPLAIN,
             }:
                 self._discard_candidate()
-            return self._update(
-                event,
-                {"error_code": self._safe_error_code(event)},
-            )
+            summary: dict[str, Any] = {"error_code": self._safe_error_code(event)}
+            # 버려진 후보 Cypher. 실행되지 않았다는 사실을 화면이 배지로 표시한다.
+            discarded = self._canonical_cypher(event.details.get("discarded_cypher"))
+            if discarded is None and isinstance(event.details.get("discarded_cypher"), str):
+                # 정규화에 실패한 후보(주석·백틱 등)도 무엇이 왔는지는 보여 준다.
+                discarded = self._mask_text(event.details["discarded_cypher"])[:2000]
+            if discarded:
+                summary["discarded_cypher"] = discarded[:2000]
+                summary["discard_reason"] = summary["error_code"]
+            return self._update(event, summary)
 
         if event.phase is ProgressPhase.STATIC_VALIDATION:
             if (
