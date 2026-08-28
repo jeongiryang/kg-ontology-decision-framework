@@ -188,3 +188,25 @@ label`로 바꾸고 `· 사용됨` / `· 미사용`을 표시했다.
 - 정이량에게 6.3(2026-08-18 결정 반전)과 6.4(RETURN 계약 확장) 확인 요청
 - `docs/environment-setup.md`에 두 가지 실측 기록: WSL `libcuda.so.1`이 ldconfig 캐시에
   없어 Ollama가 CPU로 떨어지는 문제, Windows Node로 JS 문법 검사가 가능하다는 사실
+
+---
+
+## 정정 (2026-08-29)
+
+**대상: 8.4 남아 있는 위험**
+
+> 뿌리 노드가 `CurriculumVersion`이 아닌 fact family에서는 `scope_identity`가 없어 조합
+> 이름으로 물러난다.
+
+이 서술은 사실이 아니다. 확인 방법과 결과는 다음과 같다.
+
+`build_syntax_scaffold()`가 `scope_identity`를 붙이는 조건은
+`aliases.get("CurriculumVersion") == "cv"` 하나다. `fact_families.EXTENDED_FAMILIES`의
+모든 항목과 기본 두 family(`CourseOffering`·`Rule`)의 alias 선언을 대조한 결과,
+**16개 `selection_mode` 전부가 `CurriculumVersion` 별칭 `cv`를 쓴다.** 따라서 조합 이름으로
+물러나는 fact family는 현재 하나도 없다.
+
+`_scoped_label()`의 폴백 경로는 남겨 둔다. 앞으로 `CurriculumVersion`을 거치지 않는
+family가 추가될 수 있고, 그때 이름이 비는 것보다 조합 이름이라도 나오는 편이 낫다.
+
+정정 사유: 담당자 지시로 실제 선언을 대조해 확인함. 8.4의 해당 항목은 위 내용으로 읽는다.
