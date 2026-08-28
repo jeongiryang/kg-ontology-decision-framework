@@ -16,6 +16,18 @@
   --skip: #8b95a1;
   --mark: #e5484d;
   --radius: 14px;
+  /* 그래프 탐색 상태 색. 그래프와 범례가 같은 값을 쓴다. 한쪽만 바뀌지 않게
+     여기서만 정의한다. */
+  --graph-visited: #2f855a;
+  --graph-visited-fill: #e6fffa;
+  --graph-frontier: #dd6b20;
+  --graph-frontier-soft: rgba(221, 107, 32, 0.10);
+  --graph-dead: #c53030;
+  --graph-node-line: #94a3b0;
+  --graph-role-context: #3b6fb0;
+  --graph-role-course: #7a52c0;
+  --graph-role-rule: #c9761f;
+  --graph-role-evidence: #1f8f68;
   --shadow: 0 1px 2px rgba(16, 24, 40, 0.05), 0 8px 24px rgba(16, 24, 40, 0.06);
   color-scheme: light;
 }
@@ -36,6 +48,16 @@
     --skip: #7c8794;
     --mark: #ff5b60;
     --shadow: 0 1px 2px rgba(0, 0, 0, 0.4), 0 12px 32px rgba(0, 0, 0, 0.35);
+    --graph-visited: #4fd1a5;
+    --graph-visited-fill: #12312a;
+    --graph-frontier: #f6ad55;
+    --graph-frontier-soft: rgba(246, 173, 85, 0.12);
+    --graph-dead: #fc8181;
+    --graph-node-line: #55707f;
+    --graph-role-context: #7aa7d9;
+    --graph-role-course: #b096e0;
+    --graph-role-rule: #e8a34f;
+    --graph-role-evidence: #4fd1a5;
     color-scheme: dark;
   }
 }
@@ -415,12 +437,14 @@ kbd {
 .graph-viewport:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 .graph-canvas { width: 100%; min-width: 0; margin: 0 auto; padding: 10px 14px; }
 .graph-viewport svg {
-  /* 기본은 항상 뷰포트 폭에 맞춘다. viewBox 가 비율을 지키므로 어느 쪽도 잘리지
-     않는다. 글자를 크게 보려면 확대 버튼을 쓰고, 그때만 가로 스크롤이 생긴다. */
-  display: block; height: auto; width: 100%; max-width: 100%;
+  /* 축소하지 않는다. 그래프가 뷰포트보다 넓으면 원래 크기를 유지하고 가로로
+     스크롤한다. 29노드처럼 넓은 트리를 폭에 맞추면 글자가 읽을 수 없을 만큼
+     작아진다(2026-08-29 실측). 좁은 그래프는 자연 크기 그대로 왼쪽 정렬된다. */
+  display: block; height: auto; max-width: none;
+  width: var(--graph-natural-width, 100%);
+  min-width: min(100%, var(--graph-natural-width, 100%));
   transform-origin: left top;
 }
-.graph-viewport.is-pannable svg { width: auto; max-width: none; }
 .graph-edge {
   fill: none; stroke: var(--muted); stroke-width: 1.5; opacity: 0.68;
   vector-effect: non-scaling-stroke;
@@ -586,57 +610,57 @@ kbd {
    순서는 승인된 MATCH 패턴이 쓰인 차례이며 Neo4j 내부 실행 순서가 아니다. */
 .graph-simulate { margin-left: auto; font-variant-numeric: tabular-nums; }
 
-.graph-canvas svg.is-simulating .graph-node,
-.graph-canvas svg.is-simulating .graph-edge,
-.graph-canvas svg.is-simulating .graph-edge-label-group {
+.graph-canvas svg.shows-state .graph-node,
+.graph-canvas svg.shows-state .graph-edge,
+.graph-canvas svg.shows-state .graph-edge-label-group {
   opacity: 0.22;
   transition: opacity 240ms ease, stroke 240ms ease, filter 240ms ease;
 }
 
-.graph-canvas svg.is-simulating .graph-node.is-visited,
-.graph-canvas svg.is-simulating .graph-edge.is-traversed,
-.graph-canvas svg.is-simulating .graph-edge-label-group.is-traversed {
+.graph-canvas svg.shows-state .graph-node.is-visited,
+.graph-canvas svg.shows-state .graph-edge.is-traversed,
+.graph-canvas svg.shows-state .graph-edge-label-group.is-traversed {
   opacity: 1;
 }
 
-.graph-canvas svg.is-simulating .graph-node.is-visited rect {
-  stroke: #2f855a;
+.graph-canvas svg.shows-state .graph-node.is-visited rect {
+  stroke: var(--graph-visited);
   stroke-width: 2.5;
-  fill: #e6fffa;
+  fill: var(--graph-visited-fill);
 }
 
-.graph-canvas svg.is-simulating .graph-edge.is-traversed {
-  stroke: #2f855a;
+.graph-canvas svg.shows-state .graph-edge.is-traversed {
+  stroke: var(--graph-visited);
   stroke-width: 2.6;
 }
 
-.graph-canvas svg.is-simulating .graph-edge.is-active {
-  stroke: #dd6b20;
+.graph-canvas svg.shows-state .graph-edge.is-active {
+  stroke: var(--graph-frontier);
   stroke-width: 3.4;
 }
 
-.graph-canvas svg.is-simulating .graph-edge-label-group.is-active rect {
+.graph-canvas svg.shows-state .graph-edge-label-group.is-active rect {
   fill: #fffaf0;
-  stroke: #dd6b20;
+  stroke: var(--graph-frontier);
 }
 
 @media (prefers-color-scheme: dark) {
-  .graph-canvas svg.is-simulating .graph-node.is-visited rect {
-    fill: #12312a;
-    stroke: #4fd1a5;
+  .graph-canvas svg.shows-state .graph-node.is-visited rect {
+    fill: var(--graph-visited-fill);
+    stroke: var(--graph-visited);
   }
-  .graph-canvas svg.is-simulating .graph-edge.is-traversed { stroke: #4fd1a5; }
-  .graph-canvas svg.is-simulating .graph-edge.is-active { stroke: #f6ad55; }
-  .graph-canvas svg.is-simulating .graph-edge-label-group.is-active rect {
+  .graph-canvas svg.shows-state .graph-edge.is-traversed { stroke: var(--graph-visited); }
+  .graph-canvas svg.shows-state .graph-edge.is-active { stroke: var(--graph-frontier); }
+  .graph-canvas svg.shows-state .graph-edge-label-group.is-active rect {
     fill: #3a2a12;
-    stroke: #f6ad55;
+    stroke: var(--graph-frontier);
   }
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .graph-canvas svg.is-simulating .graph-node,
-  .graph-canvas svg.is-simulating .graph-edge,
-  .graph-canvas svg.is-simulating .graph-edge-label-group { transition: none; }
+  .graph-canvas svg.shows-state .graph-node,
+  .graph-canvas svg.shows-state .graph-edge,
+  .graph-canvas svg.shows-state .graph-edge-label-group { transition: none; }
 }
 
 /* 왼쪽 그래프 · 오른쪽 방문 순서 ------------------------------------------- */
@@ -682,14 +706,14 @@ kbd {
   opacity: 0.45;
   transition: opacity 200ms ease, border-color 200ms ease, background 200ms ease;
 }
-.traversal-step.is-traversed { opacity: 1; border-color: #2f855a; }
+.traversal-step.is-traversed { opacity: 1; border-color: var(--graph-visited); }
 .traversal-step.is-active {
   opacity: 1;
-  border-color: #dd6b20;
+  border-color: var(--graph-frontier);
   background: rgba(221, 107, 32, 0.09);
 }
 /* 재생 전에는 전부 또렷하게 보여 준다. */
-.graph-split:not(:has(svg.is-simulating)) .traversal-step { opacity: 1; }
+.graph-split:not(:has(svg.shows-state)) .traversal-step { opacity: 1; }
 
 .traversal-mark {
   flex: 0 0 auto;
@@ -712,10 +736,10 @@ kbd {
 }
 
 @media (prefers-color-scheme: dark) {
-  .traversal-step.is-traversed { border-color: #4fd1a5; }
+  .traversal-step.is-traversed { border-color: var(--graph-visited); }
   .traversal-step.is-active {
-    border-color: #f6ad55;
-    background: rgba(246, 173, 85, 0.12);
+    border-color: var(--graph-frontier);
+    background: var(--graph-frontier-soft);
   }
 }
 
@@ -723,15 +747,15 @@ kbd {
    노드는 원, 원 안에는 방문 순서, 이름은 원 아래. 간선은 화살표와 ①② 번호. */
 .graph-node-circle {
   fill: #ffffff;
-  stroke: #94a3b0;
+  stroke: var(--graph-node-line);
   stroke-width: 2.5;
   transition: fill 200ms ease, stroke 200ms ease;
 }
-.graph-node[data-kind="context"] .graph-node-circle { stroke: #3b6fb0; }
-.graph-node[data-kind="course"]  .graph-node-circle { stroke: #7a52c0; }
-.graph-node[data-kind="rule"]    .graph-node-circle { stroke: #c9761f; }
+.graph-node[data-kind="context"] .graph-node-circle { stroke: var(--graph-role-context); }
+.graph-node[data-kind="course"]  .graph-node-circle { stroke: var(--graph-role-course); }
+.graph-node[data-kind="rule"]    .graph-node-circle { stroke: var(--graph-role-rule); }
 .graph-node[data-kind="evidence"].graph-node-circle,
-.graph-node[data-kind="evidence"] .graph-node-circle { stroke: #1f8f68; }
+.graph-node[data-kind="evidence"] .graph-node-circle { stroke: var(--graph-role-evidence); }
 
 .graph-node-order {
   font-size: 17px;
@@ -756,93 +780,93 @@ kbd {
 .graph-edge-label-bg { fill: #ffffff; stroke: none; }
 
 @media (prefers-color-scheme: dark) {
-  .graph-node-circle { fill: #1b242a; stroke: #55707f; }
+  .graph-node-circle { fill: #1b242a; stroke: var(--graph-node-line); }
   .graph-node-order { fill: #e6eef2; }
   .graph-edge-label-bg { fill: #131b1f; }
 }
 
 /* 재생 중 방문 표시 */
-.graph-canvas svg.is-simulating .graph-node.is-visited .graph-node-circle {
-  stroke: #2f855a;
+.graph-canvas svg.shows-state .graph-node.is-visited .graph-node-circle {
+  stroke: var(--graph-visited);
   stroke-width: 3.5;
-  fill: #e6fffa;
+  fill: var(--graph-visited-fill);
 }
-.graph-canvas svg.is-simulating .graph-edge-group { opacity: 0.22; }
-.graph-canvas svg.is-simulating .graph-edge-group.is-traversed { opacity: 1; }
-.graph-canvas svg.is-simulating .graph-edge-group.is-traversed .graph-edge { stroke: #2f855a; }
-.graph-canvas svg.is-simulating .graph-edge-group.is-active .graph-edge {
-  stroke: #dd6b20;
+.graph-canvas svg.shows-state .graph-edge-group { opacity: 0.22; }
+.graph-canvas svg.shows-state .graph-edge-group.is-traversed { opacity: 1; }
+.graph-canvas svg.shows-state .graph-edge-group.is-traversed .graph-edge { stroke: var(--graph-visited); }
+.graph-canvas svg.shows-state .graph-edge-group.is-active .graph-edge {
+  stroke: var(--graph-frontier);
   stroke-width: 3.4;
 }
 @media (prefers-color-scheme: dark) {
-  .graph-canvas svg.is-simulating .graph-node.is-visited .graph-node-circle {
-    fill: #12312a; stroke: #4fd1a5;
+  .graph-canvas svg.shows-state .graph-node.is-visited .graph-node-circle {
+    fill: var(--graph-visited-fill); stroke: var(--graph-visited);
   }
-  .graph-canvas svg.is-simulating .graph-edge-group.is-traversed .graph-edge { stroke: #4fd1a5; }
-  .graph-canvas svg.is-simulating .graph-edge-group.is-active .graph-edge { stroke: #f6ad55; }
+  .graph-canvas svg.shows-state .graph-edge-group.is-traversed .graph-edge { stroke: var(--graph-visited); }
+  .graph-canvas svg.shows-state .graph-edge-group.is-active .graph-edge { stroke: var(--graph-frontier); }
 }
 
 /* 탐색이 끊긴 지점 --------------------------------------------------------- */
-.projection-note.is-failed { color: #c53030; font-weight: 600; }
+.projection-note.is-failed { color: var(--graph-dead); font-weight: 600; }
 .graph-node.is-dead-end .graph-node-circle {
-  stroke: #c53030;
+  stroke: var(--graph-dead);
   stroke-width: 3;
   stroke-dasharray: 5 4;
 }
 .graph-node-fail {
   font-size: 20px;
   font-weight: 700;
-  fill: #c53030;
+  fill: var(--graph-dead);
   pointer-events: none;
 }
 @media (prefers-color-scheme: dark) {
-  .projection-note.is-failed { color: #fc8181; }
-  .graph-node.is-dead-end .graph-node-circle { stroke: #fc8181; }
-  .graph-node-fail { fill: #fc8181; }
+  .projection-note.is-failed { color: var(--graph-dead); }
+  .graph-node.is-dead-end .graph-node-circle { stroke: var(--graph-dead); }
+  .graph-node-fail { fill: var(--graph-dead); }
 }
 
 /* 노드 안에 이름, 간선에 순서 ---------------------------------------------- */
 .graph-node-box {
   fill: #ffffff;
-  stroke: #94a3b0;
+  stroke: var(--graph-node-line);
   stroke-width: 2;
   transition: fill 200ms ease, stroke 200ms ease;
 }
-.graph-node[data-kind="context"]  .graph-node-box { stroke: #3b6fb0; }
-.graph-node[data-kind="course"]   .graph-node-box { stroke: #7a52c0; }
-.graph-node[data-kind="rule"]     .graph-node-box { stroke: #c9761f; }
-.graph-node[data-kind="evidence"] .graph-node-box { stroke: #1f8f68; }
+.graph-node[data-kind="context"]  .graph-node-box { stroke: var(--graph-role-context); }
+.graph-node[data-kind="course"]   .graph-node-box { stroke: var(--graph-role-course); }
+.graph-node[data-kind="rule"]     .graph-node-box { stroke: var(--graph-role-rule); }
+.graph-node[data-kind="evidence"] .graph-node-box { stroke: var(--graph-role-evidence); }
 .graph-node .graph-node-name { font-size: 13px; font-weight: 600; fill: #16242b; }
 
-.graph-edge-badge { fill: #ffffff; stroke: #94a3b0; stroke-width: 2; }
+.graph-edge-badge { fill: #ffffff; stroke: var(--graph-node-line); stroke-width: 2; }
 .graph-edge-badge-text {
   font-size: 12px; font-weight: 700; fill: #16242b;
   font-variant-numeric: tabular-nums; pointer-events: none;
 }
 
 @media (prefers-color-scheme: dark) {
-  .graph-node-box { fill: #1b242a; stroke: #55707f; }
+  .graph-node-box { fill: #1b242a; stroke: var(--graph-node-line); }
   .graph-node .graph-node-name { fill: #e6eef2; }
-  .graph-edge-badge { fill: #131b1f; stroke: #55707f; }
+  .graph-edge-badge { fill: #131b1f; stroke: var(--graph-node-line); }
   .graph-edge-badge-text { fill: #e6eef2; }
 }
 
-.graph-canvas svg.is-simulating .graph-node.is-visited .graph-node-box {
-  stroke: #2f855a; stroke-width: 3; fill: #e6fffa;
+.graph-canvas svg.shows-state .graph-node.is-visited .graph-node-box {
+  stroke: var(--graph-visited); stroke-width: 3; fill: var(--graph-visited-fill);
 }
-.graph-canvas svg.is-simulating .graph-edge-group.is-active .graph-edge-badge {
-  stroke: #dd6b20; stroke-width: 2.6;
+.graph-canvas svg.shows-state .graph-edge-group.is-active .graph-edge-badge {
+  stroke: var(--graph-frontier); stroke-width: 2.6;
 }
 @media (prefers-color-scheme: dark) {
-  .graph-canvas svg.is-simulating .graph-node.is-visited .graph-node-box {
-    fill: #12312a; stroke: #4fd1a5;
+  .graph-canvas svg.shows-state .graph-node.is-visited .graph-node-box {
+    fill: var(--graph-visited-fill); stroke: var(--graph-visited);
   }
-  .graph-canvas svg.is-simulating .graph-edge-group.is-active .graph-edge-badge {
-    stroke: #f6ad55;
+  .graph-canvas svg.shows-state .graph-edge-group.is-active .graph-edge-badge {
+    stroke: var(--graph-frontier);
   }
 }
 .graph-node.is-dead-end .graph-node-box {
-  stroke: #c53030; stroke-width: 3; stroke-dasharray: 5 4;
+  stroke: var(--graph-dead); stroke-width: 3; stroke-dasharray: 5 4;
 }
 
 /* 노드 안 카테고리(온톨로지 라벨의 한국어 이름) */
@@ -853,16 +877,16 @@ kbd {
   fill: #64748b;
   pointer-events: none;
 }
-.graph-node[data-kind="context"]  .graph-node-category { fill: #3b6fb0; }
-.graph-node[data-kind="course"]   .graph-node-category { fill: #7a52c0; }
-.graph-node[data-kind="rule"]     .graph-node-category { fill: #c9761f; }
-.graph-node[data-kind="evidence"] .graph-node-category { fill: #1f8f68; }
+.graph-node[data-kind="context"]  .graph-node-category { fill: var(--graph-role-context); }
+.graph-node[data-kind="course"]   .graph-node-category { fill: var(--graph-role-course); }
+.graph-node[data-kind="rule"]     .graph-node-category { fill: var(--graph-role-rule); }
+.graph-node[data-kind="evidence"] .graph-node-category { fill: var(--graph-role-evidence); }
 @media (prefers-color-scheme: dark) {
-  .graph-node-category { fill: #94a3b0; }
-  .graph-node[data-kind="context"]  .graph-node-category { fill: #7aa7d9; }
-  .graph-node[data-kind="course"]   .graph-node-category { fill: #b096e0; }
-  .graph-node[data-kind="rule"]     .graph-node-category { fill: #e8a34f; }
-  .graph-node[data-kind="evidence"] .graph-node-category { fill: #4fd1a5; }
+  .graph-node-category { fill: var(--graph-node-line); }
+  .graph-node[data-kind="context"]  .graph-node-category { fill: var(--graph-role-context); }
+  .graph-node[data-kind="course"]   .graph-node-category { fill: var(--graph-role-course); }
+  .graph-node[data-kind="rule"]     .graph-node-category { fill: var(--graph-role-rule); }
+  .graph-node[data-kind="evidence"] .graph-node-category { fill: var(--graph-visited); }
 }
 
 /* 후보 스키마: 실제 사용 여부 구분 */
@@ -886,7 +910,7 @@ kbd {
   font-size: 10.5px; fill: #64748b; font-variant-numeric: tabular-nums;
   pointer-events: none;
 }
-@media (prefers-color-scheme: dark) { .graph-edge-measure { fill: #94a3b0; } }
+@media (prefers-color-scheme: dark) { .graph-edge-measure { fill: var(--graph-node-line); } }
 
 /* 결과 화면 탐색 패널 접기 */
 .exploration-fold > summary {
@@ -910,25 +934,30 @@ kbd {
 }
 .stage-5w1h .stage-facts dt { font-weight: 600; }
 
-/* ── BFS 파동 연출 ───────────────────────────────────────────────────────────
+/* ── 탐색 상태 표시 ──────────────────────────────────────────────────────────
+   진행 중(is-simulating)과 완료(is-complete) 모두 shows-state 를 함께 갖는다.
+   종전에는 상태 규칙이 전부 .is-simulating 하위였고 재생이 끝나며 그 클래스를
+   제거해, 완료 후 경로·순서·흐림이 통째로 사라졌다(2026-08-29 담당자 지적).
+
+   ── 이하 원래 주석 ── ───────────────────────────────────────────────────────────
    같은 층이 한 번에 켜지고, 막 도달한 층만 파동으로 강조된다. */
-.graph-canvas svg.is-simulating [data-depth] {
+.graph-canvas svg.shows-state [data-depth] {
   opacity: 0.18;
   transition: opacity 320ms cubic-bezier(.2,.7,.3,1);
 }
-.graph-canvas svg.is-simulating [data-depth].is-visited { opacity: 1; }
+.graph-canvas svg.shows-state [data-depth].is-visited { opacity: 1; }
 
-.graph-canvas svg.is-simulating .graph-node.is-frontier .graph-node-box {
-  stroke: #dd6b20;
+.graph-canvas svg.shows-state .graph-node.is-frontier .graph-node-box {
+  stroke: var(--graph-frontier);
   stroke-width: 3.4;
   filter: drop-shadow(0 0 7px rgba(221, 107, 32, 0.55));
 }
-.graph-canvas svg.is-simulating .graph-edge-group.is-frontier .graph-edge {
-  stroke: #dd6b20;
+.graph-canvas svg.shows-state .graph-edge-group.is-frontier .graph-edge {
+  stroke: var(--graph-frontier);
   stroke-width: 3.4;
 }
-.graph-canvas svg.is-simulating .graph-edge-group.is-frontier .graph-edge-badge {
-  stroke: #dd6b20; stroke-width: 2.6;
+.graph-canvas svg.shows-state .graph-edge-group.is-frontier .graph-edge-badge {
+  stroke: var(--graph-frontier); stroke-width: 2.6;
 }
 
 /* ── 그래프 시각 정리 ─────────────────────────────────────────────────────── */
@@ -954,11 +983,11 @@ kbd {
 }
 @media (prefers-color-scheme: dark) {
   .graph-node-box { filter: drop-shadow(0 1px 3px rgba(0,0,0,0.5)); }
-  .graph-canvas svg.is-simulating .graph-node.is-frontier .graph-node-box {
-    stroke: #f6ad55; filter: drop-shadow(0 0 9px rgba(246,173,85,0.5));
+  .graph-canvas svg.shows-state .graph-node.is-frontier .graph-node-box {
+    stroke: var(--graph-frontier); filter: drop-shadow(0 0 9px color-mix(in srgb, var(--graph-frontier) 50%, transparent));
   }
-  .graph-canvas svg.is-simulating .graph-edge-group.is-frontier .graph-edge { stroke: #f6ad55; }
-  .graph-canvas svg.is-simulating .graph-edge-group.is-frontier .graph-edge-badge { stroke: #f6ad55; }
+  .graph-canvas svg.shows-state .graph-edge-group.is-frontier .graph-edge { stroke: var(--graph-frontier); }
+  .graph-canvas svg.shows-state .graph-edge-group.is-frontier .graph-edge-badge { stroke: var(--graph-frontier); }
 }
 
 /* 승인 전 자리표시 — 지금 무슨 일이 진행 중인지 보이게 한다 */
@@ -999,40 +1028,48 @@ kbd {
 /* ── 노드가 하나씩 나타나는 재생 ─────────────────────────────────────────────
    엔진이 그 관계를 확장하기 전에는 노드도 간선도 화면에 없다. Expand 가 돌면
    그때 나타난다. 실제로 그 시점에 도달하기 때문이다. */
-.graph-canvas svg.is-simulating [data-reached-by],
-.graph-canvas svg.is-simulating [data-relationship] {
+.graph-canvas svg.shows-state [data-reached-by],
+.graph-canvas svg.shows-state [data-relationship] {
   opacity: 0;
   transition: opacity 260ms ease, transform 260ms cubic-bezier(.2,.8,.3,1);
 }
-.graph-canvas svg.is-simulating .graph-node[data-reached-by] { transform-box: fill-box; transform-origin: center; }
-.graph-canvas svg.is-simulating .graph-node[data-reached-by]:not(.is-visited) { transform: scale(0.82); }
-.graph-canvas svg.is-simulating [data-reached-by].is-visited,
-.graph-canvas svg.is-simulating [data-relationship].is-traversed {
+/* CSS transform 은 SVG transform **속성을 덮어쓴다.** <g transform="translate(x y)">
+   에 CSS transform 을 주면 그 노드가 좌표를 잃고 원점으로 튄다(2026-08-29 실측:
+   미방문 노드가 루트 위에 겹쳐 그려졌다). 그래서 그룹이 아니라 안쪽 상자에만
+   준다. 위치는 속성이, 크기 변화는 CSS 가 담당한다. */
+.graph-canvas svg.shows-state .graph-node .graph-node-box {
+  transform-box: fill-box;
+  transform-origin: center;
+}
+.graph-canvas svg.shows-state .graph-node[data-reached-by]:not(.is-visited) .graph-node-box {
+  transform: scale(0.9);
+}
+.graph-canvas svg.shows-state [data-reached-by].is-visited,
+.graph-canvas svg.shows-state [data-relationship].is-traversed {
   opacity: 1;
-  transform: none;
 }
 /* 지금 타고 있는 간선: 색이 바뀌고 선이 그려지듯 흐른다 */
-.graph-canvas svg.is-simulating .graph-edge-group.is-frontier .graph-edge {
-  stroke: #dd6b20;
+.graph-canvas svg.shows-state .graph-edge-group.is-frontier .graph-edge {
+  stroke: var(--graph-frontier);
   stroke-width: 3.6;
   stroke-dasharray: 9 7;
   animation: graph-edge-flow 700ms linear infinite;
 }
 @keyframes graph-edge-flow { to { stroke-dashoffset: -32; } }
-.graph-canvas svg.is-simulating .graph-node.is-frontier .graph-node-box {
-  stroke: #dd6b20; stroke-width: 3.4;
-  filter: drop-shadow(0 0 9px rgba(221,107,32,0.55));
+.graph-canvas svg.shows-state .graph-node.is-frontier .graph-node-box {
+  stroke: var(--graph-frontier); stroke-width: 3.4;
+  filter: drop-shadow(0 0 9px color-mix(in srgb, var(--graph-frontier) 55%, transparent));
 }
 @media (prefers-color-scheme: dark) {
-  .graph-canvas svg.is-simulating .graph-edge-group.is-frontier .graph-edge { stroke: #f6ad55; }
-  .graph-canvas svg.is-simulating .graph-node.is-frontier .graph-node-box {
-    stroke: #f6ad55; filter: drop-shadow(0 0 10px rgba(246,173,85,0.5));
+  .graph-canvas svg.shows-state .graph-edge-group.is-frontier .graph-edge { stroke: var(--graph-frontier); }
+  .graph-canvas svg.shows-state .graph-node.is-frontier .graph-node-box {
+    stroke: var(--graph-frontier); filter: drop-shadow(0 0 10px color-mix(in srgb, var(--graph-frontier) 50%, transparent));
   }
 }
 @media (prefers-reduced-motion: reduce) {
-  .graph-canvas svg.is-simulating [data-reached-by],
-  .graph-canvas svg.is-simulating [data-relationship] { transition: none; }
-  .graph-canvas svg.is-simulating .graph-edge-group.is-frontier .graph-edge { animation: none; }
+  .graph-canvas svg.shows-state [data-reached-by],
+  .graph-canvas svg.shows-state [data-relationship] { transition: none; }
+  .graph-canvas svg.shows-state .graph-edge-group.is-frontier .graph-edge { animation: none; }
 }
 
 /* operator 판독 목록 */
@@ -1041,14 +1078,102 @@ kbd {
   padding: 6px 9px; border-radius: 8px; border: 1px solid transparent;
   opacity: 0.42; transition: opacity 200ms ease, border-color 200ms ease, background 200ms ease;
 }
-.operator-step.is-done { opacity: 1; border-color: #2f855a33; }
+.operator-step.is-done { opacity: 1; border-color: var(--graph-visited)33; }
 .operator-step.is-current {
-  opacity: 1; border-color: #dd6b20; background: rgba(221,107,32,0.10);
+  opacity: 1; border-color: var(--graph-frontier); background: rgba(221,107,32,0.10);
 }
 .operator-name { margin: 0; font-size: 12.5px; font-weight: 600; }
 .operator-meta { margin: 1px 0 0; font-size: 11px; opacity: 0.7; font-variant-numeric: tabular-nums; }
 @media (prefers-color-scheme: dark) {
-  .operator-step.is-done { border-color: #4fd1a544; }
-  .operator-step.is-current { border-color: #f6ad55; background: rgba(246,173,85,0.12); }
+  .operator-step.is-done { border-color: var(--graph-visited)44; }
+  .operator-step.is-current { border-color: var(--graph-frontier); background: rgba(246,173,85,0.12); }
 }
 
+
+/* ── 노드 역할 위계 (B-1) ────────────────────────────────────────────────────
+   색만으로 구분하지 않는다. 크기·테두리 굵기·모서리 형태를 함께 쓴다. */
+.graph-node[data-role="root"] .graph-node-box {
+  stroke-width: 3.4;
+  filter: drop-shadow(0 2px 6px rgba(16, 24, 40, 0.16));
+}
+.graph-node[data-role="root"] .graph-node-name { font-size: 14px; }
+.graph-node[data-role="step"] .graph-node-box { stroke-width: 2; }
+/* 근거 노드는 점선 테두리로 형태를 달리한다. */
+.graph-node[data-role="evidence"] .graph-node-box {
+  stroke-width: 2.2;
+  stroke-dasharray: 6 4;
+}
+
+/* ── 간선: 배지는 상시, 이름은 hover (A-5 / B-3) ─────────────────────────── */
+.graph-edge-hover { opacity: 0; transition: opacity 140ms ease; pointer-events: none; }
+.graph-edge-group:hover .graph-edge-hover,
+.graph-edge-group:focus-within .graph-edge-hover { opacity: 1; }
+.graph-arrow { fill: var(--muted); }
+.graph-edge-group:hover .graph-edge { stroke-width: 3; }
+
+/* 노드에 올리면 연결된 간선만 진해진다 (B-5) */
+.graph-canvas svg.has-focus .graph-edge-group.is-unrelated { opacity: 0.15; }
+.graph-canvas svg.has-focus .graph-edge-group.is-related .graph-edge { stroke-width: 3.4; }
+
+/* ── 범례 (B-2) ─────────────────────────────────────────────────────────── */
+.graph-legend-bar {
+  list-style: none; margin: 0 0 10px; padding: 0;
+  display: flex; flex-wrap: wrap; gap: 6px 16px;
+  font-size: 12px; color: var(--muted);
+}
+.graph-legend-bar li { display: inline-flex; align-items: center; gap: 6px; }
+.legend-mark { width: 16px; height: 14px; border-radius: 7px; border: 2px solid var(--muted); }
+.graph-legend-bar li[data-key="visited"] .legend-mark { border-color: var(--graph-visited); background: var(--graph-visited-fill); }
+.graph-legend-bar li[data-key="frontier"] .legend-mark { border-color: var(--graph-frontier); border-style: dashed; }
+.graph-legend-bar li[data-key="pending"] .legend-mark { opacity: 0.35; }
+.graph-legend-bar li[data-key="root"] .legend-mark { border-width: 3px; width: 20px; }
+.graph-legend-bar li[data-key="evidence"] .legend-mark { border-style: dashed; border-color: var(--graph-role-evidence); }
+
+/* 오른쪽 목록에서 클릭으로 지목된 항목 (B-5 / B-6) */
+.operator-step.is-picked, .traversal-step.is-picked {
+  outline: 2px solid var(--accent); outline-offset: 1px;
+}
+
+@media (prefers-color-scheme: dark) {
+  .graph-node[data-role="root"] .graph-node-box { filter: drop-shadow(0 2px 7px rgba(0,0,0,0.55)); }
+  .graph-legend-bar li[data-key="visited"] .legend-mark { border-color: var(--graph-visited); background: var(--graph-visited-fill); }
+  .graph-legend-bar li[data-key="frontier"] .legend-mark { border-color: var(--graph-frontier); }
+  .graph-legend-bar li[data-key="evidence"] .legend-mark { border-color: var(--graph-visited); }
+}
+
+/* prefers-reduced-motion: 애니메이션 없이 최종 상태를 즉시. 배지는 유지한다. */
+@media (prefers-reduced-motion: reduce) {
+  .graph-canvas svg.shows-state [data-reached-by],
+  .graph-canvas svg.shows-state [data-relationship],
+  .graph-edge-hover { transition: none; }
+  .graph-canvas svg.shows-state .graph-edge-group.is-frontier .graph-edge { animation: none; }
+}
+
+/* 단계 이동 컨트롤 */
+.graph-step { min-width: 34px; font-variant-numeric: tabular-nums; }
+.graph-step[disabled] { opacity: 0.4; cursor: default; }
+.graph-step-readout {
+  font-size: 0.82rem; color: var(--muted);
+  font-variant-numeric: tabular-nums; min-width: 52px; text-align: center;
+}
+.graph-simulate { margin-left: auto; }
+.operator-step { cursor: pointer; }
+.operator-step:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+
+/* 완료 상태에서도 지나간 경로가 남는다. 현재 단계 강조만 뺀다. */
+.graph-canvas svg.is-complete .graph-edge-group.is-frontier .graph-edge {
+  animation: none;
+  stroke-dasharray: none;
+}
+
+/* 재생 안내와 단계 캡션 — 실측값과 재생 속도를 화면에서 구분한다 */
+.replay-note {
+  margin: 6px 0 0; font-size: 0.78rem; color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+.step-caption {
+  margin: 6px 0 0; padding: 7px 10px;
+  font-size: 0.82rem; line-height: 1.5;
+  color: var(--text); background: var(--panel-2);
+  border-left: 3px solid var(--graph-frontier); border-radius: 0 8px 8px 0;
+}

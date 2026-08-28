@@ -970,7 +970,8 @@ function renderExplorationPanel(container) {
     details.addEventListener("toggle", () => {
       explorationExpanded = details.open;
     });
-    details.append(head, panel);
+    // summary 를 붙이지 않으면 브라우저가 영어 기본 라벨("Details")을 보여 준다.
+    details.append(summary, head, panel);
     container.append(details);
   }
 }
@@ -1254,19 +1255,99 @@ function renderGraphFallback(container, graph) {
   container.append(fallback);
 }
 
-function nodeBoxWidth(lines) {
-  const longest = lines.reduce((max, line) => Math.max(max, line.length), 0);
-  return Math.max(96, Math.min(210, longest * 14 + 26));
+// 글자 수로 폭을 추정하면 한글·영문·숫자가 섞일 때 맞지 않는다. 실제 렌더 폭을
+// canvas 로 잰다. 측정은 결과를 캐시해 노드마다 반복하지 않는다.
+// CSS 가 시작 노드만 14px 로 키우므로(B-1) 측정도 역할별로 나눈다. 13px 로 재고
+// 14px 로 그리면 뿌리 노드 이름이 상자를 넘친다.
+const NODE_FONT_STACK = '"Pretendard", "Apple SD Gothic Neo", "Malgun Gothic", "Noto Sans KR", system-ui, sans-serif';
+const NODE_FONT_PX = { root: 14, step: 13, evidence: 13 };
+const NODE_FONT = `600 ${NODE_FONT_PX.step}px ${NODE_FONT_STACK}`;
+const NODE_MAX_LINE_PX = 190;   // 이 폭을 넘으면 줄을 바꾼다. 잘라내는 기준이 아니다.
+const NODE_MAX_LINES = 3;
+let _measureCtx = null;
+const _measureCache = new Map();
+
+function measureText(text, role = "step") {
+  const px = NODE_FONT_PX[role] || NODE_FONT_PX.step;
+  const key = `${px}\u0000${text}`;
+  if (_measureCache.has(key)) return _measureCache.get(key);
+  if (!_measureCtx) {
+    _measureCtx = document.createElement("canvas").getContext("2d");
+  }
+  let width;
+  if (_measureCtx) {
+    _measureCtx.font = `600 ${px}px ${NODE_FONT_STACK}`;
+    width = _measureCtx.measureText(text).width;
+  } else {
+    // canvas 를 못 쓰는 환경에서는 글자 수 추정으로 물러난다.
+    width = text.length * px;
+  }
+  _measureCache.set(key, width);
+  return width;
 }
 
-function graphLabelLines(value) {
+// 최대 세 줄까지 자연스럽게 줄을 바꾼다. 말줄임은 세 줄로도 안 될 때만 쓰고,
+// 그때도 전체 이름을 tooltip 에 남긴다.
+function graphLabelLines(value, role = "step") {
   const text = String(value || "").replace(/\s+/g, " ").trim();
-  if (text.length <= 13) return [text];
-  const remainder = text.slice(13);
-  return [
-    text.slice(0, 13),
-    remainder.length > 13 ? `${remainder.slice(0, 12)}…` : remainder,
-  ];
+  if (!text) return [""];
+  if (measureText(text, role) <= NODE_MAX_LINE_PX) return [text];
+
+  // 공백과 구분자(·, ,) 뒤를 우선 끊는다. 한국어 조사 경계를 억지로 끊지 않는다.
+  const tokens = text.match(/[^\s·,]+[\s·,]*/g) || [text];
+  const lines = [];
+  let current = "";
+  for (const token of tokens) {
+    const candidate = current + token;
+    if (current && measureText(candidate.trim(), role) > NODE_MAX_LINE_PX) {
+      lines.push(current.trim());
+      current = token;
+      if (lines.length === NODE_MAX_LINES) break;
+    } else {
+      current = candidate;
+    }
+  }
+  if (lines.length < NODE_MAX_LINES && current.trim()) lines.push(current.trim());
+
+  // 한 토큰이 한 줄보다 길면 그 토큰만 글자 단위로 쪼갠다.
+  const expanded = [];
+  for (const line of lines) {
+    if (measureText(line, role) <= NODE_MAX_LINE_PX || line.includes(" ")) {
+      expanded.push(line);
+      continue;
+    }
+    let chunk = "";
+    for (const ch of line) {
+      if (measureText(chunk + ch, role) > NODE_MAX_LINE_PX && chunk) {
+        expanded.push(chunk);
+        chunk = ch;
+      } else {
+        chunk += ch;
+      }
+    }
+    if (chunk) expanded.push(chunk);
+  }
+  const out = expanded.slice(0, NODE_MAX_LINES);
+  // 세 줄로도 못 담으면 마지막 줄만 말줄임한다. 전체 이름은 tooltip 에 있다.
+  if (expanded.length > NODE_MAX_LINES && out.length) {
+    const last = out[out.length - 1];
+    let trimmed = last;
+    while (trimmed && measureText(trimmed + "…", role) > NODE_MAX_LINE_PX) {
+      trimmed = trimmed.slice(0, -1);
+    }
+    out[out.length - 1] = `${trimmed}…`;
+  }
+  return out;
+}
+
+// 노드 폭·높이는 실제 렌더 폭과 줄 수에서 나온다.
+function nodeBoxWidth(lines, role = "step") {
+  const longest = lines.reduce((max, line) => Math.max(max, measureText(line, role)), 0);
+  return Math.max(112, Math.ceil(longest) + 34);
+}
+
+function nodeBoxHeight(lines, hasCategory) {
+  return 20 + lines.length * 18 + (hasCategory ? 16 : 0);
 }
 
 function graphEdgeGeometry(source, target, nodeWidth, nodeHeight, mobile, offset) {
@@ -1325,6 +1406,7 @@ function buildTraversalList(graph) {
     const item = document.createElement("li");
     item.className = "traversal-step";
     item.dataset.order = String(edge.traversal_order);
+    if (edge.relationship) item.dataset.relationship = edge.relationship;
     const mark = document.createElement("span");
     mark.className = "traversal-mark";
     mark.textContent = orderMark(edge.traversal_order) || edge.traversal_order;
@@ -1395,6 +1477,8 @@ function renderOperatorReadout(container, plan, step) {
   plan.forEach((item, index) => {
     const li = document.createElement("li");
     li.className = "operator-step";
+    // 노드 클릭 시 이 항목을 찾기 위한 대응 키. 번호가 아니라 관계 이름으로 맞춘다.
+    if (item.relationship_type) li.dataset.relationship = item.relationship_type;
     if (index < step) li.classList.add("is-done");
     if (index === step - 1) li.classList.add("is-current");
     const name = document.createElement("p");
@@ -1416,6 +1500,21 @@ function renderOperatorReadout(container, plan, step) {
       detail.textContent = item.detail;
       li.append(detail);
     }
+    // 목록 항목을 누르면 그 단계 상태로 이동한다.
+    li.tabIndex = 0;
+    li.setAttribute("role", "button");
+    li.setAttribute("aria-label", `${item.order}단계로 이동`);
+    const jump = () => {
+      const svg = container.closest(".graph-split")?.querySelector(".graph-canvas svg");
+      if (svg && typeof svg._setStep === "function") svg._setStep(item.order);
+    };
+    li.addEventListener("click", jump);
+    li.addEventListener("keydown", (event) => {
+      if (event.key === "Enter" || event.key === " ") {
+        event.preventDefault();
+        jump();
+      }
+    });
     list.append(li);
   });
   container.append(list);
@@ -1457,32 +1556,88 @@ function applySimulationStep(svg, step) {
   });
   const readout = svg.closest(".graph-panel")?.querySelector(".operator-readout");
   if (readout) renderOperatorReadout(readout, plan, step);
+
+  // 그래프 모양을 바꾸지 않는 단계(Filter/Limit/Projection 등)에서는 그 사실을 적는다.
+  // 적지 않으면 ◀▶ 로 옮겨도 화면이 그대로라 고장으로 읽힌다. 문구의 값은 그 단계가
+  // 실제로 보고한 것에서만 온다.
+  const caption = svg.closest(".graph-panel")?.querySelector(".step-caption");
+  if (caption) {
+    const item = plan[step - 1];
+    if (!item) {
+      caption.hidden = true;
+    } else if (item.relationship_type) {
+      caption.hidden = true;
+    } else {
+      caption.hidden = false;
+      caption.textContent =
+        `${item.order}단계 · ${item.explanation_ko || item.operator}` +
+        " — 그래프 구조는 바뀌지 않습니다";
+    }
+  }
+}
+
+// 결과 화면 재생 배율. 진행 중 화면은 1(실측 그대로), 결과 화면은 사람이 볼 수 있게
+// 늘린다. 비율은 유지하고, 늘렸다는 사실과 실측값을 화면에 함께 적는다.
+const REPLAY_MIN_STEP_MS = 400;
+
+function replayFactor(plan, slowed) {
+  if (!slowed) return 1;
+  const positives = plan
+    .map((item) => (Number.isFinite(item.share_ms) ? item.share_ms : 0))
+    .filter((value) => value > 0);
+  if (!positives.length) return 1;
+  return REPLAY_MIN_STEP_MS / Math.min(...positives);
+}
+
+function measuredTotalMs(plan) {
+  return plan.reduce(
+    (sum, item) => sum + (Number.isFinite(item.share_ms) ? item.share_ms : 0),
+    0
+  );
 }
 
 function startSimulation(svg, maxOrder, button) {
   stopSimulation(svg);
-  svg.classList.add("is-simulating");
+  svg.classList.add("is-simulating", "shows-state");
+  svg.classList.remove("is-complete");
   let step = 0;
   applySimulationStep(svg, step);
   button.textContent = "■ 정지";
   // 각 단계를 **그 단계의 실측 시간**만큼만 보여 준다. 늘리거나 줄이지 않는다.
   // 전체가 수십 ms 라 재생도 그만큼 짧게 끝난다. 실제와 같게 하는 것이 목적이다.
   const plan = svg._operatorPlan || [];
+  const slowed = Boolean(svg._replaySlowed);
+  const factor = replayFactor(plan, slowed);
+  const total = measuredTotalMs(plan);
+  const note = svg.closest(".graph-panel")?.querySelector(".replay-note");
+  if (note) {
+    note.textContent = slowed
+      ? `실측 ${total.toFixed(1)}ms · 사람이 볼 수 있도록 ${Math.round(factor)}배 느리게 재생 중`
+      : `실측 ${total.toFixed(1)}ms · 실제 속도로 재생 중`;
+    note.hidden = false;
+  }
   const tick = () => {
     step += 1;
     applySimulationStep(svg, step);
     if (step > maxOrder) {
       stopSimulation(svg);
+      // 완료 상태로 넘긴다. shows-state 를 유지하므로 경로·순서 번호·흐림이 남는다.
       svg.classList.remove("is-simulating");
+      svg.classList.add("is-complete", "shows-state");
+      applySimulationStep(svg, (svg._operatorPlan || []).length);
       svg.querySelectorAll(".is-active").forEach((element) =>
         element.classList.remove("is-active")
       );
-      button.textContent = "▶ 다시 재생";
+      button.textContent = "▶ 순서대로 다시 훑어보기";
+      if (note) {
+        // 재생이 끝나도 실측값은 계속 보이게 둔다.
+        note.textContent = `실측 ${total.toFixed(1)}ms · 재생 완료`;
+      }
       return;
     }
     const current = plan[step - 1];
     const realMs = current && Number.isFinite(current.share_ms) ? current.share_ms : 0;
-    runningSimulations.set(svg, setTimeout(tick, Math.max(0, realMs)));
+    runningSimulations.set(svg, setTimeout(tick, Math.max(0, realMs * factor)));
   };
   runningSimulations.set(svg, setTimeout(tick, 0));
 }
@@ -1495,23 +1650,71 @@ function addSimulationControl(controls, svg, graph, { autoplay = false } = {}) {
   // 재생 단위는 엔진이 실행한 operator 개수다. 지어낸 단위를 쓰지 않는다.
   const plan = svg._operatorPlan || [];
   const maxOrder = plan.length || Math.max(...orders);
-  // 실측 배분 시간의 합을 사람이 볼 수 있는 길이(단계당 최소 320ms)로 늘린 페이스.
-  const shares = (graph.edges || [])
-    .map((edge) => (Number.isFinite(edge.share_ms) ? edge.share_ms : 0));
-  const totalShare = shares.reduce((sum, value) => sum + value, 0);
-  const pace = totalShare > 0 ? Math.round((totalShare / maxOrder) * 60) : 0;
+  // 재생을 누르지 않아도 완료 상태가 처음부터 보인다. ▶ 는 순서를 다시 훑는 역할이다.
+  svg.classList.add("is-complete", "shows-state");
+  applySimulationStep(svg, maxOrder);
+
+  // ◀ / ▶ 단계 이동. 실행이 순식간에 끝나도 사람이 되짚어 읽을 수 있어야 한다.
+  let cursor = maxOrder;
+  const readout = document.createElement("span");
+  readout.className = "graph-step-readout";
+  const setCursor = (next) => {
+    cursor = Math.max(0, Math.min(maxOrder, next));
+    stopSimulation(svg);
+    svg.classList.remove("is-simulating");
+    svg.classList.add("is-complete", "shows-state");
+    // 이동은 애니메이션 없이 즉시 상태 전환한다.
+    applySimulationStep(svg, cursor);
+    readout.textContent = `${cursor} / ${maxOrder}`;
+    prev.disabled = cursor === 0;
+    next2.disabled = cursor === maxOrder;
+  };
+  const stepButton = (label, title, delta) => {
+    const b = document.createElement("button");
+    b.type = "button";
+    b.className = "ghost compact graph-step";
+    b.textContent = label;
+    b.title = title;
+    b.addEventListener("click", () => setCursor(cursor + delta));
+    return b;
+  };
+  // 결과 화면은 사람이 보라고 다시 그리는 것이므로 늘려 재생한다. 진행 중 화면은
+  // 실측 그대로 둔다. 어느 쪽인지는 autoplay 로 구분된다.
+  svg._replaySlowed = !autoplay;
+
+  const prev = stepButton("◀", "한 단계 뒤로", -1);
+  const next2 = stepButton("▶", "한 단계 앞으로", 1);
+  controls.append(prev, readout, next2);
+  const caption = document.createElement("p");
+  caption.className = "step-caption";
+  caption.hidden = true;
+  (controls.parentElement || controls).append(caption);
+
+  const note = document.createElement("p");
+  note.className = "replay-note";
+  note.hidden = true;
+  const totalMs = measuredTotalMs(svg._operatorPlan || []);
+  note.textContent = `실측 ${totalMs.toFixed(1)}ms`;
+  note.hidden = false;
+  controls.parentElement
+    ? controls.parentElement.append(note)
+    : controls.append(note);
+  setCursor(maxOrder);
+  svg._setStep = setCursor;
+
   const button = document.createElement("button");
   button.type = "button";
   button.className = "ghost compact graph-simulate";
-  button.textContent = "▶ 탐색 재생";
-  button.title = "승인된 질의가 그래프를 밟은 순서대로 재생합니다";
+  button.textContent = "▶ 순서대로 다시 훑어보기";
+  button.title = "엔진이 실행한 순서 그대로, 각 단계의 실측 시간만큼 다시 보여 줍니다";
   button.addEventListener("click", () => {
     if (runningSimulations.has(svg)) {
       stopSimulation(svg);
       svg.classList.remove("is-simulating");
-      svg.querySelectorAll("[data-order], [data-visit]").forEach((element) => {
-        element.classList.remove("is-traversed", "is-active", "is-visited");
-      });
+      // 정지해도 완료 상태로 되돌린다. 아무것도 안 보이는 상태로 두지 않는다.
+      svg.classList.remove("is-simulating");
+      svg.classList.add("is-complete", "shows-state");
+      applySimulationStep(svg, (svg._operatorPlan || []).length);
       const split = svg.closest(".graph-split");
       if (split) {
         split.querySelectorAll(".traversal-step").forEach((item) =>
@@ -1582,8 +1785,8 @@ function renderGraphPanel(container, title, graph, options = {}) {
     // CurriculumVersion -> CourseOffering) 일렬로 펴면 실제 구조가 사라진다.
     // 리프를 왼쪽부터 차례로 놓고 부모를 자식들의 가운데에 세우는 방식이다.
     const R = 27;
-    const xGap = mobile ? 150 : 235;
-    const yGap = mobile ? 110 : 124;
+    const xGap = mobile ? 170 : 275;
+    const yGap = mobile ? 132 : 158;
 
     const children = new Map();
     const indegree = new Map(graph.nodes.map((n) => [n.id, 0]));
@@ -1637,7 +1840,7 @@ function renderGraphPanel(container, title, graph, options = {}) {
     const width = Math.max(320, Math.max(...[...positions.values()].map((p) => p.x)) + 90);
     const height = Math.max(200, 58 + maxDepth * yGap + 118);
     svg.setAttribute("viewBox", `0 0 ${width} ${height}`);
-    svg.setAttribute("preserveAspectRatio", "xMidYMin meet");
+    svg.setAttribute("preserveAspectRatio", "xMinYMin meet");
     svg.style.aspectRatio = `${width} / ${height}`;
     // 자연 크기를 CSS 에 알려 준다. 뷰포트가 더 좁으면 축소 대신 가로 스크롤이 된다.
     svg.style.setProperty("--graph-natural-width", `${width}px`);
@@ -1673,6 +1876,8 @@ function renderGraphPanel(container, title, graph, options = {}) {
       }
       // 간선은 도착 노드와 같은 층에서 켜진다.
       group.dataset.relationship = edge.relationship || "";
+      group.dataset.fromId = edge.source;
+      group.dataset.toId = edge.target;
       const dx = b.x - a.x, dy = b.y - a.y;
       const len = Math.hypot(dx, dy) || 1;
       const ux = dx / len, uy = dy / len;
@@ -1689,10 +1894,11 @@ function renderGraphPanel(container, title, graph, options = {}) {
         d: `M${x1},${y1} L${x2},${y2}`,
         "marker-end": `url(#${markerId})`,
       }));
-      // 거쳐간 순서는 간선 위 배지로. 노드 안에는 이름만 둔다.
+      // 간선 위에는 원형 순서 배지만 상시로 둔다. 관계 이름과 실측치를 함께 그리면
+      // 상자가 겹쳐 읽기 어려웠다(2026-08-29 담당자 보고). 이름은 hover 로 내린다.
       const mx = (x1 + x2) / 2, my = (y1 + y2) / 2;
       if (Number.isInteger(edge.traversal_order)) {
-        group.append(svgNode("circle", { class: "graph-edge-badge", cx: mx, cy: my, r: 11 }));
+        group.append(svgNode("circle", { class: "graph-edge-badge", cx: mx, cy: my, r: 12 }));
         const bt = svgNode("text", {
           class: "graph-edge-badge-text", x: mx, y: my + 4, "text-anchor": "middle",
         });
@@ -1703,32 +1909,26 @@ function renderGraphPanel(container, title, graph, options = {}) {
       const measured = Number.isInteger(edge.db_hits)
         ? `${Number.isInteger(edge.rows) ? edge.rows + "행 · " : ""}DB ${edge.db_hits}회`
         : "";
-      const lw = Math.min(140, relText.length * 11.5 + 14);
-      group.append(svgNode("rect", {
+      // hover 때만 보이는 관계 이름 + 실측치. 겹침을 없애면서 정보는 남긴다.
+      const hoverText = measured ? `${relText} · ${measured}` : relText;
+      const lw = Math.ceil(measureText(hoverText)) + 18;
+      const hover = svgNode("g", { class: "graph-edge-hover" });
+      hover.append(svgNode("rect", {
         class: "graph-edge-label-bg",
-        x: mx - lw / 2, y: my - 30, width: lw, height: 18, rx: 5,
+        x: mx - lw / 2, y: my - 34, width: lw, height: 20, rx: 6,
       }));
       const label = svgNode("text", {
-        class: "graph-edge-label", x: mx, y: my - 17, "text-anchor": "middle",
+        class: "graph-edge-label", x: mx, y: my - 20, "text-anchor": "middle",
       });
-      label.textContent = relText;
-      if (measured) {
-        const mw = Math.min(150, measured.length * 8 + 14);
-        group.append(svgNode("rect", {
-          class: "graph-edge-label-bg",
-          x: mx - mw / 2, y: my + 14, width: mw, height: 16, rx: 5,
-        }));
-        const mt = svgNode("text", {
-          class: "graph-edge-measure", x: mx, y: my + 26, "text-anchor": "middle",
-        });
-        mt.textContent = measured;
-        group.append(mt);
-      }
+      label.textContent = hoverText;
+      hover.append(label);
+      group.append(hover);
       const title = svgNode("title");
       const share = Number.isFinite(edge.share_ms) ? ` · 배분 ${edge.share_ms}ms` : "";
       title.textContent =
         `${edge.traversal_order || ""} ${relText} (${edge.relationship})${measured ? " · " + measured : ""}${share}`.trim();
-      group.append(title, label);
+      group.append(title);
+      group.setAttribute("aria-label", title.textContent);
       edgeLayer.append(group);
     });
 
@@ -1741,12 +1941,23 @@ function renderGraphPanel(container, title, graph, options = {}) {
     );
     drawOrder.forEach((node) => {
       const pos = positions.get(node.id);
-      const lines = graphLabelLines(node.display_name);
+      // 역할을 먼저 정한다. CSS 가 시작 노드만 큰 글자를 쓰므로 측정도 그 폰트로
+      // 해야 상자가 넘치지 않는다.
+      const inboundEdge = graph.edges.find((e) => e.target === node.id);
+      const role = !inboundEdge
+        ? "root"
+        : node.node_type === "Evidence"
+        ? "evidence"
+        : "step";
+      const lines = graphLabelLines(node.display_name, role);
       // 카테고리 = 이 노드가 속한 온톨로지 라벨의 한국어 이름. 색만으로는 어느
       // 종류인지 알 수 없어 글로도 적는다.
       const category = node.node_type_ko || "";
-      const w = Math.max(nodeBoxWidth(lines), category.length * 11 + 26);
-      const h = (lines.length > 1 ? 54 : 40) + (category ? 16 : 0);
+      const w = Math.max(
+        nodeBoxWidth(lines, role),
+        Math.ceil(measureText(category, role)) + 34
+      );
+      const h = nodeBoxHeight(lines, Boolean(category));
       const group = svgNode("g", {
         class: "graph-node", tabindex: 0, role: "button",
         "aria-label": `${node.display_name}, ${node.node_type}, ${node.verification_status}`,
@@ -1757,8 +1968,10 @@ function renderGraphPanel(container, title, graph, options = {}) {
         group.dataset.visit = String(node.visit_order);
       }
       // 이 노드에 어느 관계를 타고 도달했는지. 루트는 빈 문자열이라 처음부터 켜진다.
-      const inbound = graph.edges.find((e) => e.target === node.id);
-      group.dataset.reachedBy = inbound ? inbound.relationship || "" : "";
+      group.dataset.reachedBy = inboundEdge ? inboundEdge.relationship || "" : "";
+      // 역할에 따라 크기·테두리·형태를 달리한다. 색만으로 구분하지 않는다.
+      group.dataset.role = role;
+      group.dataset.nodeId = node.id;
       const tip = svgNode("title");
       // 영어 라벨은 화면에 찍지 않고 tooltip 으로만 남긴다. 노드 아래에 같이 그리면
       // 간선 라벨과 겹쳐 오히려 읽기 어려웠다.
@@ -1775,23 +1988,95 @@ function renderGraphPanel(container, title, graph, options = {}) {
         cat.textContent = category;
         group.append(cat);
       }
+      // 카테고리 아래에서 시작해 줄 수만큼 아래로 흐른다. 상자 높이가 줄 수를
+      // 따라가므로 세 줄이어도 넘치지 않는다.
+      const textTop = -h / 2 + (category ? 30 : 14) + 12;
       const name = svgNode("text", {
-        class: "graph-node-name", x: 0,
-        y: (category ? 6 : 0) + (lines.length > 1 ? -2 : 5), "text-anchor": "middle",
+        class: "graph-node-name", x: 0, y: textTop, "text-anchor": "middle",
       });
       lines.forEach((line, i) => {
-        const ts = svgNode("tspan", { x: 0, dy: i === 0 ? 0 : 16 });
+        const ts = svgNode("tspan", { x: 0, dy: i === 0 ? 0 : 18 });
         ts.textContent = line;
         name.append(ts);
       });
       group.append(name);
-      group.addEventListener("click", () => {
+      const focusRelated = (on) => {
+        svg.classList.toggle("has-focus", on);
+        svg.querySelectorAll("[data-relationship]").forEach((edgeEl) => {
+          const related =
+            edgeEl.dataset.fromId === node.id || edgeEl.dataset.toId === node.id;
+          edgeEl.classList.toggle("is-related", on && related);
+          edgeEl.classList.toggle("is-unrelated", on && !related);
+        });
+      };
+      group.addEventListener("mouseenter", () => focusRelated(true));
+      group.addEventListener("mouseleave", () => focusRelated(false));
+      group.addEventListener("focus", () => focusRelated(true));
+      group.addEventListener("blur", () => focusRelated(false));
+      const select = () => {
         selected.textContent =
           `${node.display_name} · ${node.node_type} · ${node.verification_status}`;
+        // B-5: 오른쪽 목록의 대응 항목을 강조하고 스크롤한다.
+        // 인덱스로 맞추면 안 된다. `엔진이 실행한 순서`(operator 단계)와 노드의
+        // visit_order 는 서로 다른 수열이라 번호가 겹치지 않는다. 노드에 도달한
+        // 관계 이름으로 대응시킨다.
+        const side = svg.closest(".graph-split")?.querySelector(".traversal-side");
+        if (side) {
+          const reached = group.dataset.reachedBy || "";
+          side.querySelectorAll("[data-relationship]").forEach((item) => {
+            const hit = Boolean(reached) && item.dataset.relationship === reached;
+            item.classList.toggle("is-picked", hit);
+            if (hit) item.scrollIntoView({ block: "nearest", behavior: "smooth" });
+          });
+        }
+      };
+      group.addEventListener("click", select);
+      group.addEventListener("keydown", (event) => {
+        if (event.key === "Enter" || event.key === " ") {
+          event.preventDefault();
+          select();
+        }
       });
       nodeLayer.append(group);
     });
     svg.append(edgeLayer, nodeLayer);
+
+    // 계산한 width/height 는 노드 중심 기준이라 절반 폭과 간선 배지가 경계를
+    // 넘어간다. 다 그린 뒤 실제 경계를 재서 사방에 여백을 두고 다시 잡는다.
+    // 축소하지 않는다. 넘치면 가로 스크롤로 본다.
+    // 접힌 <details> 안에서는 getBBox 가 0 을 주거나 던진다. 그러면 자연 폭이 낡은
+    // 값으로 남아 펼쳤을 때 잘린다. 펼침·크기 변화에서 다시 잰다.
+    const refitViewBox = () => {
+      try {
+        const box = svg.getBBox();
+        if (!box || !Number.isFinite(box.width) || box.width <= 0) return;
+        const pad = 28;
+        const vw = Math.ceil(box.width + pad * 2);
+        const vh = Math.ceil(box.height + pad * 2);
+        svg.setAttribute(
+          "viewBox",
+          `${Math.floor(box.x - pad)} ${Math.floor(box.y - pad)} ${vw} ${vh}`
+        );
+        svg.style.aspectRatio = `${vw} / ${vh}`;
+        svg.style.setProperty("--graph-natural-width", `${vw}px`);
+      } catch (error) {
+        // 화면에 붙기 전에는 던질 수 있다. 그때는 계산값을 그대로 쓰고 다음 기회에 다시 잰다.
+      }
+    };
+    svg._refitViewBox = refitViewBox;
+    requestAnimationFrame(refitViewBox);
+    const fold = viewport.closest("details.exploration-fold");
+    if (fold && !fold._refitBound) {
+      fold._refitBound = true;
+      fold.addEventListener("toggle", () => {
+        if (!fold.open) return;
+        fold.querySelectorAll(".graph-canvas svg").forEach((node) => {
+          if (typeof node._refitViewBox === "function") {
+            requestAnimationFrame(node._refitViewBox);
+          }
+        });
+      });
+    }
     canvas.append(svg);
     viewport.append(canvas);
 
@@ -1826,30 +2111,60 @@ function renderGraphPanel(container, title, graph, options = {}) {
       })
     );
     svg.dataset.graphKey = `${container.id || "panel"}:${graphKey}`;
+    // 재생 단위가 operator 개수이므로 컨트롤을 만들기 전에 계획을 실어야 한다.
+    svg._operatorPlan = operatorPlan();
     addSimulationControl(controls, svg, graph, options);
     setScale(graphScales.get(graphKey) || 1);
     viewport.fitGraph = () => {
       if ((graphScales.get(graphKey) || 1) === 1) setScale(1);
+      // 폭이 바뀌면 경계도 바뀐다. 접혀 있다가 펼쳐진 경우도 여기로 온다.
+      if (typeof svg._refitViewBox === "function") {
+        requestAnimationFrame(svg._refitViewBox);
+      }
     };
     if (graphResizeObserver) graphResizeObserver.observe(viewport);
 
     const legend = document.createElement("ul");
     legend.className = "graph-legend";
     [
-      ["context", "Curriculum·Department"],
-      ["course", "Course·CourseOffering"],
-      ["rule", "Rule·Requirement"],
-      ["evidence", "Evidence"],
-    ].forEach(([kind, label]) => {
+      // 화면에는 한국어만 둔다. 영어 원본 라벨은 tooltip 으로 남긴다.
+      ["context", "교육과정·학과", "Curriculum · Department"],
+      ["course", "교과목·편성", "Course · CourseOffering"],
+      ["rule", "학사규칙·요건", "Rule · Requirement"],
+      ["evidence", "원문 근거", "Evidence"],
+    ].forEach(([kind, label, original]) => {
       const item = document.createElement("li");
+      item.title = original;
       item.append(span(`legend-dot is-${kind}`, ""), span("", label));
       legend.append(item);
     });
+    // B-2 범례. 색만으로 구분하지 않도록 각 항목에 형태 표식을 함께 둔다.
+    const legendBar = document.createElement("ul");
+    legendBar.className = "graph-legend-bar";
+    [
+      ["state", "visited", "방문함"],
+      ["state", "frontier", "지금 타는 중"],
+      ["state", "pending", "미방문"],
+      ["role", "root", "시작 노드"],
+      ["role", "step", "경유 노드"],
+      ["role", "evidence", "근거(Evidence)"],
+    ].forEach(([kind, key, text]) => {
+      const item = document.createElement("li");
+      item.dataset.kind = kind;
+      item.dataset.key = key;
+      const mark = document.createElement("span");
+      mark.className = "legend-mark";
+      mark.setAttribute("aria-hidden", "true");
+      const label = document.createElement("span");
+      label.textContent = text;
+      item.append(mark, label);
+      legendBar.append(item);
+    });
+
     const split = document.createElement("div");
     split.className = "graph-split";
     split.append(viewport);
-    const plan = operatorPlan();
-    svg._operatorPlan = plan;
+    const plan = svg._operatorPlan || [];
     const side = document.createElement("aside");
     side.className = "traversal-side";
     const sideHead = document.createElement("h5");
@@ -1865,7 +2180,7 @@ function renderGraphPanel(container, title, graph, options = {}) {
       if (traversal) side.append(traversal);
     }
     split.append(side);
-    panel.append(controls, split, selected, legend);
+    panel.append(controls, legendBar, split, selected, legend);
   } catch (_) {
     renderGraphFallback(panel, graph);
   }
