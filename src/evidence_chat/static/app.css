@@ -413,13 +413,14 @@ kbd {
 }
 .graph-viewport.is-pannable { overflow: auto; }
 .graph-viewport:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
-.graph-canvas { width: 100%; min-width: 0; margin: 0 auto; }
+.graph-canvas { width: 100%; min-width: 0; margin: 0 auto; padding: 10px 14px; }
 .graph-viewport svg {
-  display: block; height: auto; max-width: none; transform-origin: left top;
-  /* 뷰포트보다 넓으면 줄이지 않고 가로 스크롤로 보여 준다. 억지로 100% 에 맞추면
-     글자가 뭉개져 읽을 수 없다. */
-  width: max(100%, var(--graph-natural-width, 100%));
+  /* 기본은 항상 뷰포트 폭에 맞춘다. viewBox 가 비율을 지키므로 어느 쪽도 잘리지
+     않는다. 글자를 크게 보려면 확대 버튼을 쓰고, 그때만 가로 스크롤이 생긴다. */
+  display: block; height: auto; width: 100%; max-width: 100%;
+  transform-origin: left top;
 }
+.graph-viewport.is-pannable svg { width: auto; max-width: none; }
 .graph-edge {
   fill: none; stroke: var(--muted); stroke-width: 1.5; opacity: 0.68;
   vector-effect: non-scaling-stroke;
@@ -886,3 +887,168 @@ kbd {
   pointer-events: none;
 }
 @media (prefers-color-scheme: dark) { .graph-edge-measure { fill: #94a3b0; } }
+
+/* 결과 화면 탐색 패널 접기 */
+.exploration-fold > summary {
+  cursor: pointer; font-weight: 600; font-size: 0.95rem;
+  padding: 4px 0; list-style: revert;
+}
+.exploration-fold > summary:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.exploration-fold[open] > summary { margin-bottom: 12px; }
+
+/* 단계별 육하원칙 요약 */
+.stage-5w1h {
+  margin: 0 0 12px;
+  padding: 10px 12px;
+  border-left: 3px solid var(--accent);
+  background: var(--accent-soft);
+  border-radius: 0 8px 8px 0;
+}
+.stage-5w1h h5 {
+  margin: 0 0 6px; font-size: 0.8rem; font-weight: 700;
+  letter-spacing: 0.02em; color: var(--accent);
+}
+.stage-5w1h .stage-facts dt { font-weight: 600; }
+
+/* ── BFS 파동 연출 ───────────────────────────────────────────────────────────
+   같은 층이 한 번에 켜지고, 막 도달한 층만 파동으로 강조된다. */
+.graph-canvas svg.is-simulating [data-depth] {
+  opacity: 0.18;
+  transition: opacity 320ms cubic-bezier(.2,.7,.3,1);
+}
+.graph-canvas svg.is-simulating [data-depth].is-visited { opacity: 1; }
+
+.graph-canvas svg.is-simulating .graph-node.is-frontier .graph-node-box {
+  stroke: #dd6b20;
+  stroke-width: 3.4;
+  filter: drop-shadow(0 0 7px rgba(221, 107, 32, 0.55));
+}
+.graph-canvas svg.is-simulating .graph-edge-group.is-frontier .graph-edge {
+  stroke: #dd6b20;
+  stroke-width: 3.4;
+}
+.graph-canvas svg.is-simulating .graph-edge-group.is-frontier .graph-edge-badge {
+  stroke: #dd6b20; stroke-width: 2.6;
+}
+
+/* ── 그래프 시각 정리 ─────────────────────────────────────────────────────── */
+.graph-node-box {
+  filter: drop-shadow(0 1px 2px rgba(16, 24, 40, 0.10));
+}
+.graph-node:hover .graph-node-box,
+.graph-node:focus-visible .graph-node-box {
+  stroke-width: 3;
+  filter: drop-shadow(0 2px 8px rgba(16, 24, 40, 0.18));
+}
+.graph-node { cursor: pointer; }
+.graph-edge {
+  stroke-linecap: round;
+  opacity: 0.8;
+}
+.graph-edge-label { font-weight: 600; }
+.graph-viewport {
+  background:
+    radial-gradient(circle at 1px 1px, rgba(127,127,127,0.16) 1px, transparent 0)
+    0 0 / 22px 22px,
+    var(--panel);
+}
+@media (prefers-color-scheme: dark) {
+  .graph-node-box { filter: drop-shadow(0 1px 3px rgba(0,0,0,0.5)); }
+  .graph-canvas svg.is-simulating .graph-node.is-frontier .graph-node-box {
+    stroke: #f6ad55; filter: drop-shadow(0 0 9px rgba(246,173,85,0.5));
+  }
+  .graph-canvas svg.is-simulating .graph-edge-group.is-frontier .graph-edge { stroke: #f6ad55; }
+  .graph-canvas svg.is-simulating .graph-edge-group.is-frontier .graph-edge-badge { stroke: #f6ad55; }
+}
+
+/* 승인 전 자리표시 — 지금 무슨 일이 진행 중인지 보이게 한다 */
+.graph-skeleton {
+  display: flex; flex-direction: column; align-items: center; gap: 14px;
+  padding: 26px 16px;
+  border: 1px dashed var(--line); border-radius: 10px; background: var(--panel-2);
+}
+.graph-skeleton-node {
+  width: min(230px, 70%); height: 42px; border-radius: 21px;
+  background: linear-gradient(90deg,
+    rgba(127,127,127,0.10) 25%, rgba(127,127,127,0.20) 37%, rgba(127,127,127,0.10) 63%);
+  background-size: 400% 100%;
+  animation: graph-skeleton-pulse 1.4s ease-in-out infinite;
+}
+.graph-skeleton-node:nth-child(2) { width: min(190px, 60%); }
+.graph-skeleton-node:nth-child(3) { width: min(150px, 48%); }
+@keyframes graph-skeleton-pulse {
+  0% { background-position: 100% 50%; }
+  100% { background-position: 0 50%; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .graph-skeleton-node { animation: none; }
+}
+
+/* ── 잘림 근본 차단 ─────────────────────────────────────────────────────────
+   그리드 자식은 기본 min-width:auto 라 내용이 길면 칸을 밀어내 컨테이너를 넘긴다.
+   가로로 넘치면 페이지 전체가 옆으로 밀려 왼쪽이 잘린다. */
+.graph-split { min-width: 0; max-width: 100%; }
+.graph-split > * { min-width: 0; max-width: 100%; }
+.exploration, .exploration-panel, .graph-panel { min-width: 0; max-width: 100%; overflow: hidden; }
+.operator-detail {
+  display: block; margin-top: 4px; font-size: 10.5px; line-height: 1.5;
+  opacity: 0.75; overflow-wrap: anywhere; word-break: break-word;
+}
+.graph-controls { flex-wrap: wrap; }
+
+/* ── 노드가 하나씩 나타나는 재생 ─────────────────────────────────────────────
+   엔진이 그 관계를 확장하기 전에는 노드도 간선도 화면에 없다. Expand 가 돌면
+   그때 나타난다. 실제로 그 시점에 도달하기 때문이다. */
+.graph-canvas svg.is-simulating [data-reached-by],
+.graph-canvas svg.is-simulating [data-relationship] {
+  opacity: 0;
+  transition: opacity 260ms ease, transform 260ms cubic-bezier(.2,.8,.3,1);
+}
+.graph-canvas svg.is-simulating .graph-node[data-reached-by] { transform-box: fill-box; transform-origin: center; }
+.graph-canvas svg.is-simulating .graph-node[data-reached-by]:not(.is-visited) { transform: scale(0.82); }
+.graph-canvas svg.is-simulating [data-reached-by].is-visited,
+.graph-canvas svg.is-simulating [data-relationship].is-traversed {
+  opacity: 1;
+  transform: none;
+}
+/* 지금 타고 있는 간선: 색이 바뀌고 선이 그려지듯 흐른다 */
+.graph-canvas svg.is-simulating .graph-edge-group.is-frontier .graph-edge {
+  stroke: #dd6b20;
+  stroke-width: 3.6;
+  stroke-dasharray: 9 7;
+  animation: graph-edge-flow 700ms linear infinite;
+}
+@keyframes graph-edge-flow { to { stroke-dashoffset: -32; } }
+.graph-canvas svg.is-simulating .graph-node.is-frontier .graph-node-box {
+  stroke: #dd6b20; stroke-width: 3.4;
+  filter: drop-shadow(0 0 9px rgba(221,107,32,0.55));
+}
+@media (prefers-color-scheme: dark) {
+  .graph-canvas svg.is-simulating .graph-edge-group.is-frontier .graph-edge { stroke: #f6ad55; }
+  .graph-canvas svg.is-simulating .graph-node.is-frontier .graph-node-box {
+    stroke: #f6ad55; filter: drop-shadow(0 0 10px rgba(246,173,85,0.5));
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .graph-canvas svg.is-simulating [data-reached-by],
+  .graph-canvas svg.is-simulating [data-relationship] { transition: none; }
+  .graph-canvas svg.is-simulating .graph-edge-group.is-frontier .graph-edge { animation: none; }
+}
+
+/* operator 판독 목록 */
+.operator-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 6px; }
+.operator-step {
+  padding: 6px 9px; border-radius: 8px; border: 1px solid transparent;
+  opacity: 0.42; transition: opacity 200ms ease, border-color 200ms ease, background 200ms ease;
+}
+.operator-step.is-done { opacity: 1; border-color: #2f855a33; }
+.operator-step.is-current {
+  opacity: 1; border-color: #dd6b20; background: rgba(221,107,32,0.10);
+}
+.operator-name { margin: 0; font-size: 12.5px; font-weight: 600; }
+.operator-meta { margin: 1px 0 0; font-size: 11px; opacity: 0.7; font-variant-numeric: tabular-nums; }
+@media (prefers-color-scheme: dark) {
+  .operator-step.is-done { border-color: #4fd1a544; }
+  .operator-step.is-current { border-color: #f6ad55; background: rgba(246,173,85,0.12); }
+}
+

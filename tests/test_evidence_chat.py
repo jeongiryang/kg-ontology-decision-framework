@@ -940,7 +940,11 @@ class StarletteRouteTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("Number.isFinite(event.elapsed_ms)", script)
         self.assertIn('setAttribute("aria-expanded"', script)
         self.assertIn('setAttribute("aria-controls"', script)
-        self.assertIn('setAttribute("role", "tablist"', script)
+        # 2026-08-29 담당자 지시로 탐색 패널의 탭(선택 스키마·승인 Cypher·조회 그래프)을
+        # 없애고 조회 그래프 하나만 보여 준다. 스키마와 Cypher 는 `처리 과정 보기` 의
+        # 해당 단계 상세에 그대로 남아 있다.
+        self.assertNotIn('setAttribute("role", "tablist"', script)
+        self.assertIn("renderGraphTab", script)
         # 2026-08-18 에는 처리 중 화면에 그래프를 두지 않기로 하고 그 부재를 여기서
         # 고정했다. 2026-08-28 담당자 지시로 "탐색 중에도 뜨고 결과창에도 같은 것이
         # 보여야 한다"로 바뀌어, 이제는 컨테이너가 **있어야** 한다.

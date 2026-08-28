@@ -40,6 +40,9 @@ class TraversalStep:
     end_variable: str | None
     rows: int
     db_hits: int
+    # 이 operator 가 무엇을 했는지 엔진이 적은 설명. 값은 그대로 쓰되 화면에서
+    # 파라미터 이름 같은 내부 표기는 다듬는다.
+    detail: str = ""
 
 
 @dataclass(frozen=True, slots=True)
@@ -70,7 +73,10 @@ def _profile_steps(profile: Any) -> tuple[TraversalStep, ...]:
     steps: list[TraversalStep] = []
     for node in collected:
         operator = str(node.get("operatorType", "")).split("@", 1)[0]
-        if not operator.startswith(("Expand", "NodeIndexSeek", "NodeByLabelScan", "NodeUniqueIndexSeek")):
+        # 엔진이 실제로 실행한 operator 를 **전부** 남긴다. 종전에는 확장·탐색만
+        # 골라내 Filter 가 37행을 9행으로 줄이는 구간이 화면에서 사라졌다. 그 구간이
+        # 곧 "어디서 좁혀졌는가" 이므로 빼면 실제 동작과 달라진다.
+        if not operator:
             continue
         detail = str((node.get("args") or {}).get("Details", ""))
         match = EXPAND_DETAIL.search(detail)
@@ -89,6 +95,7 @@ def _profile_steps(profile: Any) -> tuple[TraversalStep, ...]:
                 end_variable=end,
                 rows=rows if isinstance(rows, int) else 0,
                 db_hits=hits if isinstance(hits, int) else 0,
+                detail=detail[:160],
             )
         )
     return tuple(steps)

@@ -68,10 +68,10 @@ let modalZoom = 1;
 let queryDetailsEnabled = false;
 let timelineEvents = [];
 let inspectionUpdates = new Map();
-let explorationTabTouched = false;
+// 결과 화면 탐색 패널의 펼침 상태. 사용자가 펼쳐 두면 재렌더에도 유지한다.
+let explorationExpanded = false;
 let expandedStages = new Set();
 let graphScales = new Map();
-let activeExplorationTab = "schema";
 let lastResult = null;
 let clarificationPresentation = null;
 const graphResizeObserver = typeof window.ResizeObserver === "function"
@@ -274,8 +274,7 @@ async function ask(question) {
   graphScales = new Map();
   // 새 질문은 처음부터 다시 재생한다.
   autoplayedGraphs.clear();
-  activeExplorationTab = "schema";
-  explorationTabTouched = false;
+  explorationExpanded = false;
   lastResult = null;
   clarificationPresentation = null;
   renderTimelines();
@@ -540,10 +539,119 @@ function addDetailFacts(container, values) {
   if (list.childElementCount) container.append(list);
 }
 
+// 각 단계를 육하원칙으로 요약한다. 값은 모두 그 단계가 실제로 보고한 것에서만 온다.
+// 보고되지 않은 항목은 만들지 않고 빈 칸으로 둔다.
+const STAGE_5W1H = {
+  QUESTION_ANALYSIS: (s) => ({
+    누가: "로컬 계획 모델",
+    무엇을: "질문에서 조회 계획을 세움",
+    어떻게: s.query_plan && s.query_plan.selection_mode
+      ? `선택 모드 ${s.query_plan.selection_mode}`
+      : "선택 모드 미확정",
+    왜: s.status === "READY" ? "조회에 필요한 범위가 모두 정해짐" : "범위가 덜 정해져 되물음",
+    어디서: "적재된 사실 색인",
+  }),
+  SCHEMA_SELECTION: (s) => ({
+    누가: "스키마 선택기",
+    무엇을: `후보 라벨 ${s.node_label_count ?? 0}개 · 관계 ${s.relationship_count ?? 0}개를 추림`,
+    어떻게: "계획의 필드와 Evidence 경로에 닿는 구조만 남김",
+    왜: "모델이 온톨로지 밖 라벨을 쓰지 못하게 하기 위해",
+    어디서: "ontology_spec.json",
+  }),
+  CYPHER_GENERATION: (s) => ({
+    누가: "로컬 생성 모델",
+    무엇을: "후보 Cypher 작성",
+    어떻게: s.retry ? `재시도 ${s.candidate_attempt}회차` : "첫 시도",
+    왜: "계획을 그래프 질의로 옮기기 위해",
+    어디서: "후보 스키마 안에서만",
+  }),
+  STATIC_VALIDATION: (s) => ({
+    누가: "Cypher 검증기",
+    무엇을: "읽기 전용·온톨로지·파라미터 바인딩 검사",
+    어떻게: `LIMIT ${s.limit ?? "-"} 확인, 주석 제거 정규화`,
+    왜: "쓰기·미선언 라벨·값 삽입을 원천 차단",
+    어디서: "DB 접속 이전 정적 단계",
+  }),
+  NEO4J_EXPLAIN: (s) => ({
+    누가: "Neo4j 실행계획기",
+    무엇을: "실행 없이 계획만 확인",
+    어떻게: `연산자 ${(s.operators || []).join(", ") || "-"}`,
+    왜: "전체 스캔·카테시안곱 같은 위험한 계획을 미리 거름",
+    어디서: "읽기 전용 계정",
+  }),
+  GRAPH_EXECUTION: (s) => ({
+    누가: "읽기 전용 실행기",
+    무엇을: `${s.row_count ?? 0}행 조회`,
+    어떻게: (s.traversal_steps || []).length
+      ? `${s.traversal_steps.length}단계 탐색 · ${s.traversal_steps.reduce((a, t) => a + (t.db_hits || 0), 0)}회 DB 접근`
+      : "PROFILE 미보고",
+    왜: "승인된 경로로만 사실을 가져오기 위해",
+    언제: s.query_elapsed_ms != null ? `${s.query_elapsed_ms}ms 소요` : "",
+  }),
+  RESULT_VALIDATION: (s) => ({
+    누가: "결과 검증기",
+    무엇을: `Fact ${s.fact_count ?? 0} · Evidence ${s.verified_evidence_count ?? 0} 확인`,
+    어떻게: "행마다 VERIFIED 상태와 직접 provenance 재검사",
+    왜: "검증되지 않은 값이 답에 들어가지 못하게",
+    어디서: "조회된 행 위에서",
+  }),
+  CLAIM_BUILDING: (s) => ({
+    누가: "Claim 검증기",
+    무엇을: `Claim ${s.claim_count ?? 0}건 구성`,
+    어떻게: `유형 ${(s.claim_types || []).join(", ") || "-"}`,
+    왜: "문장으로 옮기기 전에 근거와 값을 묶어 두기 위해",
+    어디서: "승인된 행에서만",
+  }),
+  ANSWER_RENDERING: (s) => ({
+    누가: "결정론적 한국어 렌더러",
+    무엇을: `인용 ${s.citation_count ?? 0}건과 함께 문장 생성`,
+    어떻게: `최종 답변 LLM 호출 ${s.final_answer_llm_calls ?? 0}회`,
+    왜: "모델이 값을 바꿔 쓰지 못하게 하기 위해",
+    어디서: "검증된 Claim 위에서",
+  }),
+  COMPLETED: (s) => ({
+    무엇을: `최종 상태 ${s.final_status ?? "-"}`,
+    언제: s.total_elapsed_ms != null ? `전체 ${s.total_elapsed_ms}ms` : "",
+    어떻게: `재시도 ${s.retry_count ?? 0}회`,
+    왜: "모든 관문을 통과함",
+  }),
+};
+
+function addFiveWOneH(container, phase, summary) {
+  const build = STAGE_5W1H[phase];
+  if (!build || !summary) return;
+  let facts;
+  try {
+    facts = build(summary);
+  } catch (error) {
+    return;
+  }
+  const section = document.createElement("section");
+  section.className = "stage-5w1h";
+  const heading = document.createElement("h5");
+  heading.textContent = "이 단계를 육하원칙으로";
+  section.append(heading);
+  const list = document.createElement("dl");
+  list.className = "stage-facts";
+  Object.entries(facts).forEach(([label, value]) => {
+    if (!value) return;
+    const term = document.createElement("dt");
+    term.textContent = label;
+    const detail = document.createElement("dd");
+    detail.textContent = String(value);
+    list.append(term, detail);
+  });
+  if (list.childElementCount) {
+    section.append(list);
+    container.append(section);
+  }
+}
+
 function renderStageDetail(container, event, allowExplorationLinks) {
   const inspection = stageInspection(event);
   const summary = inspection ? inspection.summary : null;
   if (!summary) return;
+  addFiveWOneH(container, event.phase, summary);
 
   if (event.phase === "QUESTION_ANALYSIS") {
     addDetailFacts(container, {
@@ -570,7 +678,7 @@ function renderStageDetail(container, event, allowExplorationLinks) {
     addInspectionItem(container, "선택 node label", summary.labels || []);
     addInspectionItem(container, "선택 relationship type", summary.relationships || []);
     if (allowExplorationLinks) {
-      addExplorationLink(container, "선택 스키마 보기", "schema");
+      addExplorationLink(container, "탐색 그래프 보기", "graph");
     }
   } else if (event.phase === "CYPHER_GENERATION") {
     addDetailFacts(container, {
@@ -596,7 +704,7 @@ function renderStageDetail(container, event, allowExplorationLinks) {
       "LIMIT": summary.limit,
     });
     if (allowExplorationLinks) {
-      addExplorationLink(container, "승인 Cypher 보기", "cypher");
+      addExplorationLink(container, "탐색 그래프 보기", "graph");
     }
   } else if (event.phase === "GRAPH_EXECUTION") {
     const validation = latestInspection("RESULT_VALIDATION");
@@ -611,7 +719,7 @@ function renderStageDetail(container, event, allowExplorationLinks) {
         : null,
     });
     if (allowExplorationLinks) {
-      addExplorationLink(container, "조회 그래프 보기", "graph");
+      addExplorationLink(container, "탐색 그래프 보기", "graph");
     }
   } else if (event.phase === "RESULT_VALIDATION") {
     addDetailFacts(container, {
@@ -702,14 +810,20 @@ function renderInspectionUpdate(update) {
   renderExplorationPanels();
 }
 
+// 탭이 사라졌으므로 이 버튼은 탐색 그래프로 스크롤만 한다.
 function addExplorationLink(container, label, tab) {
+  void tab;
+  if (!el.answerExploration || el.answerExploration.hidden) return;
   const button = document.createElement("button");
   button.type = "button";
   button.className = "stage-jump";
   button.textContent = label;
   button.addEventListener("click", () => {
-    activeExplorationTab = tab;
-    renderExplorationPanels();
+    const fold = el.answerExploration.querySelector("details.exploration-fold");
+    if (fold) {
+      fold.open = true;
+      explorationExpanded = true;
+    }
     el.answerExploration.scrollIntoView({ behavior: "smooth", block: "start" });
   });
   container.append(button);
@@ -728,6 +842,38 @@ function explorationState() {
 
 // 처리 중 화면과 결과 화면에 같은 그래프가 떠야 한다. 두 컨테이너를 항상 함께
 // 갱신해, 어느 화면으로 넘어가도 같은 것이 보이게 한다.
+// 조회가 실제로 진행될 요청인지. 계획이 READY 로 끝났거나 이후 단계가 시작됐으면
+// 곧 그래프가 생긴다.
+function queryWillRun() {
+  const analysis = latestInspection("QUESTION_ANALYSIS");
+  if (analysis && analysis.summary && analysis.summary.status &&
+      analysis.summary.status !== "READY") {
+    return false;
+  }
+  return timelineEvents.some((event) =>
+    ["SCHEMA_SELECTION", "CYPHER_GENERATION", "STATIC_VALIDATION", "NEO4J_EXPLAIN",
+     "GRAPH_EXECUTION"].includes(event.phase)
+  );
+}
+
+// 승인 전 자리표시. 어느 단계까지 왔는지 실제 타임라인에서 읽어 보여 준다.
+function renderExplorationWaiting(container) {
+  container.hidden = false;
+  container.replaceChildren();
+  const head = document.createElement("div");
+  head.className = "exploration-head";
+  const title = document.createElement("h3");
+  title.textContent = "지식그래프 탐색";
+  const description = document.createElement("p");
+  const running = [...timelineEvents].reverse().find((e) => e.state === "STARTED");
+  description.textContent = running
+    ? `${running.message} 승인되면 여기에 탐색 경로가 나타납니다.`
+    : "질의가 승인되면 여기에 탐색 경로가 나타납니다.";
+  head.append(title, description);
+  // 큰 자리표시 상자는 오히려 방해가 됐다. 한 줄 상태만 남긴다.
+  container.append(head);
+}
+
 function renderExplorationPanels() {
   [el.progressExploration, el.answerExploration].forEach((container) => {
     if (container) renderExplorationPanel(container);
@@ -761,20 +907,40 @@ function renderExplorationPanel(container) {
     ),
   };
   const availableTabs = Object.keys(availability).filter((key) => availability[key]);
-  // 보여 줄 승인 정보가 하나도 없으면 상자 자체를 내린다. 되묻기처럼 조회가
-  // 실행되지 않은 요청에서 비활성 탭과 "없습니다" 문구만 남은 빈 껍데기가
-  // 화면을 차지하던 문제를 없앤다.
-  if (!availableTabs.length) {
+  // 처리 중 화면은 **탐색 그래프만** 보여 준다. 후보 스키마 목록은 승인 전이라
+  // 전부 "미사용" 으로 표시돼 오해를 부르고, 지금 보고 싶은 것은 노드 탐색이다.
+  // 스키마·Cypher 탭은 결과 화면에서 확인한다.
+  if (container === el.progressExploration) {
+    if (!availability.graph) {
+      if (queryWillRun()) {
+        renderExplorationWaiting(container);
+        return;
+      }
+      container.hidden = true;
+      return;
+    }
+    container.hidden = false;
+    const head = document.createElement("div");
+    head.className = "exploration-head";
+    const title = document.createElement("h3");
+    title.textContent = "지식그래프 탐색";
+    const description = document.createElement("p");
+    description.textContent = "승인된 질의가 그래프를 밟는 순서대로 재생합니다.";
+    head.append(title, description);
+    const panel = document.createElement("div");
+    panel.id = `${container.id}-panel`;
+    panel.className = "exploration-panel";
+    renderGraphTab(panel, state, true);
+    container.append(head, panel);
+    return;
+  }
+  // 결과 화면도 조회 그래프 하나만 보여 준다. 선택 스키마와 승인 Cypher 는 아래
+  // `처리 과정 보기` 의 해당 단계 상세에 그대로 있으므로 탭으로 나눌 이유가 없었다.
+  if (!availability.graph) {
     container.hidden = true;
     return;
   }
-  // 탐색이 있었으면 그림이 먼저 보여야 한다. 종전 기본값이 "선택 스키마" 라서
-  // 경로 그래프가 있어도 사용자가 탭을 눌러야 나왔다.
-  if (!explorationTabTouched && availability.graph) {
-    activeExplorationTab = "graph";
-  } else if (!availability[activeExplorationTab]) {
-    activeExplorationTab = availableTabs[0];
-  }
+  container.hidden = false;
 
   const head = document.createElement("div");
   head.className = "exploration-head";
@@ -782,66 +948,29 @@ function renderExplorationPanel(container) {
   title.textContent = "지식그래프 탐색";
   const description = document.createElement("p");
   description.textContent =
-    "처리가 끝난 뒤 실제 파이프라인에서 승인된 정적 조회 정보만 표시합니다.";
+    "엔진이 실제로 실행한 순서와 단계별 실측 시간 그대로 재생합니다. " +
+    "실제 조회가 수십 ms 안에 끝나므로 재생도 그만큼 짧습니다.";
   head.append(title, description);
-
-  const tabs = document.createElement("div");
-  tabs.className = "exploration-tabs";
-  tabs.setAttribute("role", "tablist");
-  tabs.setAttribute("aria-label", "질의 추적 상세");
-  const labels = {
-    schema: "선택 스키마",
-    cypher: "승인 Cypher",
-    graph: "조회 그래프",
-  };
-  Object.entries(labels).forEach(([key, label]) => {
-    const button = document.createElement("button");
-    button.type = "button";
-    button.id = `${container.id}-tab-${key}`;
-    button.setAttribute("role", "tab");
-    button.setAttribute("aria-selected", String(activeExplorationTab === key));
-    button.setAttribute("aria-controls", `${container.id}-panel`);
-    button.disabled = !availability[key];
-    button.title = availability[key]
-      ? `${label} 보기`
-      : "아직 해당 단계가 완료되지 않았습니다";
-    button.textContent = label;
-    button.addEventListener("click", () => {
-      activeExplorationTab = key;
-      explorationTabTouched = true;
-      renderExplorationPanels();
-    });
-    tabs.append(button);
-  });
-
-  const pending = document.createElement("p");
-  pending.className = "exploration-pending";
-  pending.setAttribute("role", "status");
-  const waiting = Object.entries(labels)
-    .filter(([key]) => !availability[key])
-    .map(([, label]) => label);
-  pending.textContent = waiting.length
-    ? `${waiting.join(" · ")}: 아직 해당 단계가 완료되지 않았습니다.`
-    : "모든 추적 정보가 실제 승인 단계까지 완료되었습니다.";
 
   const panel = document.createElement("div");
   panel.id = `${container.id}-panel`;
   panel.className = "exploration-panel";
-  panel.setAttribute("role", "tabpanel");
-  panel.setAttribute("aria-labelledby", `${container.id}-tab-${activeExplorationTab}`);
-  if (!availableTabs.length) {
-    const empty = document.createElement("p");
-    empty.className = "exploration-empty";
-    empty.textContent = "안전하게 공개할 수 있는 승인 정보가 없습니다.";
-    panel.append(empty);
-  } else if (activeExplorationTab === "schema") {
-    renderSchemaTab(panel, state.schema);
-  } else if (activeExplorationTab === "cypher") {
-    renderCypherTab(panel, state.explain);
-  } else {
-    renderGraphTab(panel, state, container === el.progressExploration);
+  renderGraphTab(panel, state, false);
+
+  if (collapsible) {
+    const details = document.createElement("details");
+    details.className = "exploration-fold";
+    details.open = explorationExpanded;
+    const summary = document.createElement("summary");
+    summary.textContent = "탐색 과정 보기";
+    details.addEventListener("toggle", () => {
+      explorationExpanded = details.open;
+    });
+    details.append(head, panel);
+    container.append(details);
+    return;
   }
-  container.append(head, tabs, pending, panel);
+  container.append(head, panel);
 }
 
 function addBadges(container, title, values, kind, usedSet) {
@@ -930,6 +1059,13 @@ function traversalOutcome() {
     };
   }
   return { failed: false, label: "" };
+}
+
+// 엔진 실행 계획(PROFILE 실측). 그래프와 같은 요청에서 온 것만 쓴다.
+function operatorPlan() {
+  const execution = latestInspection("GRAPH_EXECUTION");
+  const steps = execution && execution.summary ? execution.summary.traversal_steps : null;
+  return Array.isArray(steps) ? steps : [];
 }
 
 function renderGraphTab(container, state, autoplay = false) {
@@ -1161,7 +1297,7 @@ const autoplayedGraphs = new Set();
 function stopSimulation(svg) {
   const timer = runningSimulations.get(svg);
   if (timer) {
-    clearInterval(timer);
+    clearTimeout(timer);
     runningSimulations.delete(svg);
   }
 }
@@ -1228,6 +1364,56 @@ function buildTraversalList(graph) {
   return list.childElementCount ? list : null;
 }
 
+// 엔진이 실제로 실행한 operator 순서 그대로 재생한다. Neo4j 는 BFS 로 돌지 않는다.
+// NodeIndexSeek 로 시작해 Expand 와 Filter 를 번갈아 흘려보내는 파이프라인이며,
+// 행 수가 늘었다 줄어드는 지점이 곧 "어디서 좁혀졌는가" 다. 층 단위 파동은 실제
+// 동작이 아니라서 걷어냈다.
+// 지금 어느 operator 가 도는지 글로 보여 준다. 값은 전부 PROFILE 실측이다.
+const OPERATOR_KO = {
+  NodeIndexSeek: "인덱스로 시작 노드 찾기",
+  NodeUniqueIndexSeek: "고유 인덱스로 시작 노드 찾기",
+  NodeByLabelScan: "라벨로 노드 훑기",
+  "Expand(All)": "관계 타고 확장",
+  Filter: "조건으로 거르기",
+  Limit: "개수 제한",
+  Projection: "필요한 값만 뽑기",
+  ProduceResults: "결과 내보내기",
+  EagerAggregation: "집계",
+};
+
+function renderOperatorReadout(container, plan, step) {
+  container.replaceChildren();
+  const list = document.createElement("ol");
+  list.className = "operator-list";
+  plan.forEach((item, index) => {
+    const li = document.createElement("li");
+    li.className = "operator-step";
+    if (index < step) li.classList.add("is-done");
+    if (index === step - 1) li.classList.add("is-current");
+    const name = document.createElement("p");
+    name.className = "operator-name";
+    // 서버가 붙인 한국어 설명이 있으면 그것을 쓴다. 무엇을 확인했는지가 드러난다.
+    name.textContent = item.explanation_ko
+      ? `${item.order}. ${item.explanation_ko}`
+      : `${item.order}. ${OPERATOR_KO[item.operator] || item.operator}`;
+    const meta = document.createElement("p");
+    meta.className = "operator-meta";
+    const bits = [OPERATOR_KO[item.operator] || item.operator];
+    if (Number.isInteger(item.rows)) bits.push(`${item.rows}행`);
+    if (Number.isInteger(item.db_hits)) bits.push(`DB ${item.db_hits}회`);
+    meta.textContent = bits.join(" · ");
+    li.append(name, meta);
+    if (item.detail) {
+      const detail = document.createElement("code");
+      detail.className = "operator-detail";
+      detail.textContent = item.detail;
+      li.append(detail);
+    }
+    list.append(li);
+  });
+  container.append(list);
+}
+
 function applySimulationStep(svg, step) {
   const split = svg.closest(".graph-split");
   if (split) {
@@ -1242,22 +1428,40 @@ function applySimulationStep(svg, step) {
     element.classList.toggle("is-traversed", order <= step);
     element.classList.toggle("is-active", order === step);
   });
-  svg.querySelectorAll("[data-visit]").forEach((element) => {
-    // 간선 n 을 타면 그 끝점까지 방문한 것이므로 노드는 step+1 까지 켠다.
-    element.classList.toggle("is-visited", Number(element.dataset.visit) <= step + 1);
+  // operator 순서에 대응하는 관계를 켠다. 대응이 없는 operator(Filter/Limit 등)는
+  // 그래프 모양을 바꾸지 않으므로 직전까지의 강조를 유지한다.
+  const plan = svg._operatorPlan || [];
+  const reached = new Set();
+  let current = null;
+  plan.slice(0, step).forEach((item) => {
+    if (item.relationship_type) reached.add(item.relationship_type);
   });
+  const now = plan[step - 1];
+  if (now && now.relationship_type) current = now.relationship_type;
+  svg.querySelectorAll("[data-relationship]").forEach((element) => {
+    const rel = element.dataset.relationship;
+    element.classList.toggle("is-traversed", reached.has(rel));
+    element.classList.toggle("is-frontier", rel === current);
+  });
+  svg.querySelectorAll("[data-reached-by]").forEach((element) => {
+    const rel = element.dataset.reachedBy;
+    element.classList.toggle("is-visited", rel === "" || reached.has(rel));
+    element.classList.toggle("is-frontier", rel === current);
+  });
+  const readout = svg.closest(".graph-panel")?.querySelector(".operator-readout");
+  if (readout) renderOperatorReadout(readout, plan, step);
 }
 
-function startSimulation(svg, maxOrder, button, paceMs) {
+function startSimulation(svg, maxOrder, button) {
   stopSimulation(svg);
   svg.classList.add("is-simulating");
   let step = 0;
   applySimulationStep(svg, step);
   button.textContent = "■ 정지";
-  // 실제 실행 시간은 ms 단위라 그대로 재생하면 눈으로 볼 수 없다. 단계별 배분값의
-  // **비율**을 유지한 채 전체를 사람이 볼 수 있는 길이로 늘린다. 비율이 곧 어느
-  // 단계가 무거웠는지를 보여 준다.
-  const timer = setInterval(() => {
+  // 각 단계를 **그 단계의 실측 시간**만큼만 보여 준다. 늘리거나 줄이지 않는다.
+  // 전체가 수십 ms 라 재생도 그만큼 짧게 끝난다. 실제와 같게 하는 것이 목적이다.
+  const plan = svg._operatorPlan || [];
+  const tick = () => {
     step += 1;
     applySimulationStep(svg, step);
     if (step > maxOrder) {
@@ -1267,9 +1471,13 @@ function startSimulation(svg, maxOrder, button, paceMs) {
         element.classList.remove("is-active")
       );
       button.textContent = "▶ 다시 재생";
+      return;
     }
-  }, Math.max(320, Math.min(2200, paceMs || SIMULATION_STEP_MS)));
-  runningSimulations.set(svg, timer);
+    const current = plan[step - 1];
+    const realMs = current && Number.isFinite(current.share_ms) ? current.share_ms : 0;
+    runningSimulations.set(svg, setTimeout(tick, Math.max(0, realMs)));
+  };
+  runningSimulations.set(svg, setTimeout(tick, 0));
 }
 
 function addSimulationControl(controls, svg, graph, { autoplay = false } = {}) {
@@ -1277,7 +1485,9 @@ function addSimulationControl(controls, svg, graph, { autoplay = false } = {}) {
     .map((edge) => edge.traversal_order)
     .filter((value) => Number.isInteger(value));
   if (!graph.ordered || !orders.length) return;
-  const maxOrder = Math.max(...orders);
+  // 재생 단위는 엔진이 실행한 operator 개수다. 지어낸 단위를 쓰지 않는다.
+  const plan = svg._operatorPlan || [];
+  const maxOrder = plan.length || Math.max(...orders);
   // 실측 배분 시간의 합을 사람이 볼 수 있는 길이(단계당 최소 320ms)로 늘린 페이스.
   const shares = (graph.edges || [])
     .map((edge) => (Number.isFinite(edge.share_ms) ? edge.share_ms : 0));
@@ -1304,7 +1514,7 @@ function addSimulationControl(controls, svg, graph, { autoplay = false } = {}) {
       button.textContent = "▶ 탐색 재생";
       return;
     }
-    startSimulation(svg, maxOrder, button, pace);
+    startSimulation(svg, maxOrder, button);
   });
   controls.append(button);
   // 처리 중 화면은 사용자가 누르지 않아도 한 번 재생한다. 그 화면의 목적이
@@ -1312,7 +1522,7 @@ function addSimulationControl(controls, svg, graph, { autoplay = false } = {}) {
   // 누를 때만 재생한다.
   if (autoplay && !autoplayedGraphs.has(svg.dataset.graphKey)) {
     autoplayedGraphs.add(svg.dataset.graphKey);
-    startSimulation(svg, maxOrder, button, pace);
+    startSimulation(svg, maxOrder, button);
   }
 }
 
@@ -1454,6 +1664,8 @@ function renderGraphPanel(container, title, graph, options = {}) {
       if (Number.isInteger(edge.traversal_order)) {
         group.dataset.order = String(edge.traversal_order);
       }
+      // 간선은 도착 노드와 같은 층에서 켜진다.
+      group.dataset.relationship = edge.relationship || "";
       const dx = b.x - a.x, dy = b.y - a.y;
       const len = Math.hypot(dx, dy) || 1;
       const ux = dx / len, uy = dy / len;
@@ -1537,6 +1749,9 @@ function renderGraphPanel(container, title, graph, options = {}) {
       if (Number.isInteger(node.visit_order)) {
         group.dataset.visit = String(node.visit_order);
       }
+      // 이 노드에 어느 관계를 타고 도달했는지. 루트는 빈 문자열이라 처음부터 켜진다.
+      const inbound = graph.edges.find((e) => e.target === node.id);
+      group.dataset.reachedBy = inbound ? inbound.relationship || "" : "";
       const tip = svgNode("title");
       // 영어 라벨은 화면에 찍지 않고 tooltip 으로만 남긴다. 노드 아래에 같이 그리면
       // 간선 라벨과 겹쳐 오히려 읽기 어려웠다.
@@ -1626,15 +1841,23 @@ function renderGraphPanel(container, title, graph, options = {}) {
     const split = document.createElement("div");
     split.className = "graph-split";
     split.append(viewport);
-    const traversal = buildTraversalList(graph);
-    if (traversal) {
-      const side = document.createElement("aside");
-      side.className = "traversal-side";
-      const sideHead = document.createElement("h5");
-      sideHead.textContent = "방문 순서";
-      side.append(sideHead, traversal);
-      split.append(side);
+    const plan = operatorPlan();
+    svg._operatorPlan = plan;
+    const side = document.createElement("aside");
+    side.className = "traversal-side";
+    const sideHead = document.createElement("h5");
+    sideHead.textContent = plan.length ? "엔진이 실행한 순서" : "방문 순서";
+    side.append(sideHead);
+    if (plan.length) {
+      const readout = document.createElement("div");
+      readout.className = "operator-readout";
+      renderOperatorReadout(readout, plan, plan.length);
+      side.append(readout);
+    } else {
+      const traversal = buildTraversalList(graph);
+      if (traversal) side.append(traversal);
     }
+    split.append(side);
     panel.append(controls, split, selected, legend);
   } catch (_) {
     renderGraphFallback(panel, graph);

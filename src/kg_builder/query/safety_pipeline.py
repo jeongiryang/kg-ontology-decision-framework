@@ -247,6 +247,7 @@ class SafetyPipeline:
                         "end_variable": step.end_variable,
                         "rows": step.rows,
                         "db_hits": step.db_hits,
+                        "detail": step.detail,
                         "share_ms": round(
                             elapsed_ms
                             * (step.db_hits / max(1, sum(s.db_hits for s in steps))),

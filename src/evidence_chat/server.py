@@ -50,12 +50,14 @@ from kg_builder.query.query_explainer import QueryExplainer
 from kg_builder.query.query_plan import MAX_QUESTION_LENGTH
 from kg_builder.query.query_trace import EMAIL_PATTERN, PHONE_PATTERN, STUDENT_ID_PATTERN
 from kg_builder.query.safety_pipeline import SafetyPipeline
+from kg_builder.query.schema_catalog import SchemaCatalog
 from kg_builder.query.schema_selector import QuerySchemaSelector
 
 from . import pdf_evidence
 from .chat_adapter import ChatResponseAdapter
 from .graph_projection import (
     build_provenance_projection,
+    describe_operator_ko,
     build_traversal_projection,
     build_query_structure_projection,
 )
@@ -72,6 +74,7 @@ MAX_RESOLVED_ENTRIES = 8
 # 승인된 MATCH 경로의 최대 hop 수. 검증기가 허용하는 경로보다 넉넉하다.
 MAX_PATH_EDGES = 32
 _SAFE_TYPE_NAME = re.compile(r"[A-Za-z][A-Za-z0-9_]{0,79}\Z")
+_AUTOSTRING = re.compile(r"\$autostring_\d+|\$autoint_\d+")
 
 EXAMPLE_QUESTIONS = (
     "2026학년도 교양 최소 이수학점은?",
@@ -199,6 +202,25 @@ class InspectionCollector:
             return []
         return sorted({item for item in value if isinstance(item, str) and len(item) <= 80})
 
+    def _annotate_steps_ko(self, steps: list[dict[str, Any]]) -> None:
+        """Attach a Korean sentence saying what each engine step actually checked."""
+
+        if not steps:
+            return
+        try:
+            catalog = SchemaCatalog.from_generated()
+        except Exception:
+            return
+        pairs = {
+            item["relationship_type"]: (item["start_label"], item["end_label"])
+            for item in self._safe_path_edges(self._approved_query.get("path_edges"))
+        }
+        for step in steps:
+            try:
+                step["explanation_ko"] = describe_operator_ko(step, catalog, pairs)
+            except Exception:
+                step["explanation_ko"] = ""
+
     @staticmethod
     def _safe_traversal_steps(value: Any) -> list[dict[str, Any]]:
         """Keep the engine's measured steps in execution order.
@@ -223,6 +245,14 @@ class InspectionCollector:
                 or not _SAFE_TYPE_NAME.fullmatch(operator.replace("(", "").replace(")", ""))
             ):
                 continue
+            # 엔진이 적은 설명. 파라미터 자리표시는 값을 담고 있지 않지만 내부 표기라
+            # 사람이 읽을 수 있게 다듬는다.
+            raw_detail = item.get("detail")
+            detail = (
+                _AUTOSTRING.sub("<값>", raw_detail)[:160]
+                if isinstance(raw_detail, str)
+                else ""
+            )
             relationship = item.get("relationship_type")
             steps.append(
                 {
@@ -240,6 +270,7 @@ class InspectionCollector:
                     if isinstance(item.get("share_ms"), (int, float))
                     and not isinstance(item.get("share_ms"), bool)
                     else 0,
+                    "detail": detail,
                 }
             )
         return steps
@@ -468,6 +499,7 @@ class InspectionCollector:
             traversal_steps = self._safe_traversal_steps(
                 event.details.get("traversal_steps")
             )
+            self._annotate_steps_ko(traversal_steps)
             self._traversal_steps = traversal_steps
             summary = {
                 "row_count": self._safe_count(event.details.get("row_count")),

@@ -424,6 +424,99 @@ def build_traversal_projection(
     }
 
 
+_DETAIL_CACHE = re.compile(r"cache\[([^\]]+)\]")
+_DETAIL_REL = re.compile(r"\((\w+)\)\s*(?:<-|-)\s*\[:?(\w+)\]\s*(?:->|-)\s*\((\w+)\)")
+_DETAIL_PROP = re.compile(r"\b(\w+)\.(\w+)\b")
+_DETAIL_LABEL = re.compile(r"\b\w+:(\w+)\b")
+
+_OPERATOR_KO = {
+    "NodeIndexSeek": "색인으로 시작 노드 찾기",
+    "NodeUniqueIndexSeek": "고유 색인으로 시작 노드 찾기",
+    "NodeByLabelScan": "라벨로 노드 훑기",
+    "AllNodesScan": "전체 노드 훑기",
+    "Expand(All)": "관계 타고 확장",
+    "Filter": "조건으로 거르기",
+    "Limit": "개수 제한",
+    "Projection": "필요한 값만 뽑기",
+    "ProduceResults": "결과 내보내기",
+    "EagerAggregation": "집계",
+    "Distinct": "중복 제거",
+    "Sort": "정렬",
+}
+
+
+def describe_operator_ko(
+    step: Mapping[str, Any],
+    catalog: SchemaCatalog,
+    label_by_relationship: Mapping[str, tuple[str, str]],
+) -> str:
+    """Say in Korean what this engine step actually did.
+
+    값은 모두 PROFILE 이 보고한 것에서만 나온다. 속성·라벨·관계의 한국어 표기는
+    ontology_spec.json 이 이미 갖고 있으므로 사전을 새로 만들지 않는다.
+    """
+
+    operator = str(step.get("operator") or "")
+    # `cache[o.status]` 는 엔진 내부 표기다. 속성 이름만 남겨 읽히게 한다.
+    detail = _DETAIL_CACHE.sub(r"\1", str(step.get("detail") or ""))
+    rows = step.get("rows")
+    base = _OPERATOR_KO.get(operator, operator)
+
+    def particle(word: str, with_final: str, without_final: str) -> str:
+        """받침 유무로 조사를 고른다. `교과목로` 처럼 어색해지는 것을 막는다."""
+        if not word:
+            return without_final
+        last = word[-1]
+        if not ("가" <= last <= "힣"):
+            return without_final
+        return with_final if (ord(last) - 0xAC00) % 28 else without_final
+
+    def prop_ko(prop: str) -> str:
+        for (label, name), korean in catalog.property_labels_ko.items():
+            if name == prop and korean:
+                return korean
+        return prop
+
+    if operator.startswith("Expand"):
+        match = _DETAIL_REL.search(detail)
+        if match:
+            _, relationship, _ = match.groups()
+            pair = label_by_relationship.get(relationship)
+            rel_ko = catalog.relationship_ko(relationship)
+            if pair:
+                start_ko, end_ko = catalog.label_ko(pair[0]), catalog.label_ko(pair[1])
+                to = particle(end_ko, "으로", "로")
+                return (
+                    f"{start_ko}에서 '{rel_ko}' 관계를 타고 {end_ko}{to} 넘어갑니다"
+                    + (f" · {rows}건" if isinstance(rows, int) else "")
+                )
+            return f"'{rel_ko}' 관계를 타고 넘어갑니다"
+    if operator.startswith("NodeIndexSeek") or operator.startswith("NodeUniqueIndexSeek"):
+        labels = _DETAIL_LABEL.findall(detail)
+        props = [prop_ko(m[1]) for m in _DETAIL_PROP.findall(detail)]
+        where = f" {props[0]} 값으로" if props else ""
+        if labels:
+            return f"{catalog.label_ko(labels[0])}를{where} 색인에서 찾아 탐색을 시작합니다"
+    if operator == "Filter":
+        props = [prop_ko(m[1]) for m in _DETAIL_PROP.findall(detail)]
+        labels = [catalog.label_ko(x) for x in _DETAIL_LABEL.findall(detail)]
+        checks = list(dict.fromkeys(props + labels))
+        if checks:
+            return (
+                f"{', '.join(checks[:3])} 조건에 맞는 것만 남깁니다"
+                + (f" · {rows}건 남음" if isinstance(rows, int) else "")
+            )
+    if operator == "CacheProperties":
+        return "다음 단계에서 쓸 속성값을 미리 읽어 둡니다"
+    if operator == "Limit":
+        return f"결과를 최대 {detail.strip() or '지정된 수'}건으로 제한합니다"
+    if operator == "Projection":
+        return "답변에 쓸 값만 골라 냅니다"
+    if operator == "ProduceResults":
+        return f"최종 {rows}건을 돌려줍니다" if isinstance(rows, int) else "결과를 돌려줍니다"
+    return base
+
+
 def _scoped_label(
     catalog: SchemaCatalog, label: str, parameters: Mapping[str, Any]
 ) -> str:
