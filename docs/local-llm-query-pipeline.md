@@ -89,6 +89,12 @@ StructuredLLMClient
 
 OpenAI-compatible adapter는 실제 네트워크 없이 요청 envelope, 선택적 Bearer token, JSON Schema, 응답 파싱, 크기·timeout·HTTP 오류 비노출과 redirect 무추적을 단위 테스트했다. 실제 vLLM 서버 통합은 아직 실행하지 않았다.
 
+연구실 후보 모델 사전 조사, 최신 14B 단일·다중 턴 기준선과 동일 조건 비교 절차는
+[LLM provider·모델 비교 기준선과 DSW 사전 조사](evaluations/model-provider-benchmark.md)에
+기록했다. 2026-08-29 조사에서는 사용할 수 있는 SSH alias가 확인되지 않아 DSW 접속과 GPU
+실측을 수행하지 않았다. 후보 모델의 개선이 입증되지 않았으므로 기본 모델과 provider
+설정은 변경하지 않았다.
+
 ## 5. Planner와 스키마 선택
 
 planner는 provider가 반환한 JSON Schema 계약 응답을 사용하고 다음 상태를 구분한다.
