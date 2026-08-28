@@ -36,7 +36,7 @@ from kg_builder.answer.personalized_service import (
     PersonalizedChatResult,
     PersonalizedCurriculumChatService,
 )
-from kg_builder.agent import AgenticCurriculumChatService, ConversationContext
+from kg_builder.agent import AgenticCurriculumChatService, AgentPolicy, ConversationContext
 from kg_builder.config import ConfigurationError, Neo4jQuerySettings
 from kg_builder.llm.client import LLMConfigurationError, LLMSettings, create_llm_client
 from kg_builder.llm.cypher_generator import LocalCypherGenerator
@@ -542,7 +542,11 @@ class ChatState:
             self.service = PersonalizedCurriculumChatService(
                 CurriculumChatService(query_service)
             )
-            self.service = AgenticCurriculumChatService(self.service, client)
+            self.service = AgenticCurriculumChatService(
+                self.service,
+                client,
+                policy=AgentPolicy.from_env(),
+            )
         except (ConfigurationError, LLMConfigurationError):
             self.error = "서비스 환경 설정을 확인해 주세요."
             self.error_code = "CHAT_CONFIGURATION_ERROR"

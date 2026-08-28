@@ -21,6 +21,11 @@ from .models import LLMGeneration
 LOCAL_HOSTS = frozenset({"localhost", "127.0.0.1"})
 MAX_RESPONSE_BYTES = 1_048_576
 HTTP_REDIRECT_STATUS_CODES = frozenset({301, 302, 303, 307, 308})
+# vLLM's OpenAI-compatible structured-output grammar does not implement this
+# standard JSON Schema assertion.  Callers still validate uniqueness when they
+# materialize their typed contracts; omitting it from the provider grammar avoids
+# turning otherwise valid plans into HTTP 400 responses and deterministic fallback.
+OPENAI_GRAMMAR_OMITTED_KEYWORDS = frozenset({"uniqueItems"})
 
 
 class LLMConfigurationError(ValueError):
@@ -243,6 +248,27 @@ class _HTTPStructuredClient:
         return payload
 
 
+def _project_openai_grammar_schema(value: Any) -> Any:
+    """Return the lossless-enough grammar subset accepted by local vLLM.
+
+    This projection is used only to constrain provider generation.  It does not
+    weaken the authoritative application contract: callers that use uniqueness
+    assertions validate those collections while materializing their typed contracts.
+    """
+
+    if isinstance(value, Mapping):
+        return {
+            key: _project_openai_grammar_schema(item)
+            for key, item in value.items()
+            if key not in OPENAI_GRAMMAR_OMITTED_KEYWORDS
+        }
+    if isinstance(value, list):
+        return [_project_openai_grammar_schema(item) for item in value]
+    if isinstance(value, tuple):
+        return [_project_openai_grammar_schema(item) for item in value]
+    return value
+
+
 class OllamaClient(_HTTPStructuredClient):
     """Ollama adapter; raw model content is parsed in memory and never traced."""
 
@@ -317,7 +343,7 @@ class OpenAICompatibleClient(_HTTPStructuredClient):
                     "json_schema": {
                         "name": "kg_structured_response",
                         "strict": True,
-                        "schema": dict(response_schema),
+                        "schema": _project_openai_grammar_schema(response_schema),
                     },
                 },
             },

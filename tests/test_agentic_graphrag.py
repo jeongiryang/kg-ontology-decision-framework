@@ -4,6 +4,8 @@ import unittest
 
 from kg_builder.agent import (
     TOOL_SPECS,
+    AgentMode,
+    AgentPolicy,
     AgenticCurriculumChatService,
     ConversationContext,
     ToolName,
@@ -90,6 +92,28 @@ def context(*, codes=("CDA0008",), assistant="자료구조는 2학년 1학기입
 
 
 class ConversationContractTests(unittest.TestCase):
+    def test_agent_policy_defaults_conservative_and_expanded_is_bounded(self):
+        conservative = AgentPolicy.from_env({})
+        expanded = AgentPolicy.from_env({"KG_AGENT_MODE": "expanded"})
+        self.assertEqual(conservative.mode, AgentMode.CONSERVATIVE)
+        self.assertEqual(conservative.max_kg_queries, 4)
+        self.assertEqual(expanded.mode, AgentMode.EXPANDED)
+        self.assertEqual(expanded.max_tool_calls, 6)
+        self.assertEqual(expanded.max_kg_queries, 6)
+        self.assertEqual(expanded.max_subquestions, 5)
+        with self.assertRaises(ValueError):
+            AgentPolicy.from_env({"KG_AGENT_MODE": "unbounded"})
+        with self.assertRaises(ValueError):
+            AgentPolicy(max_tool_calls=7)
+        with self.assertRaises(ValueError):
+            AgentPolicy(
+                mode=AgentMode.EXPANDED,
+                max_tool_calls=7,
+                max_kg_queries=6,
+                max_subquestions=5,
+                max_turn_seconds=150.0,
+            )
+
     def test_every_tool_has_closed_json_input_and_output_schema(self):
         self.assertEqual(set(TOOL_SPECS), set(ToolName))
         for spec in TOOL_SPECS.values():
@@ -541,6 +565,80 @@ class AgentOrchestratorTests(unittest.TestCase):
             "교육과정을 확인해 줘.", conversation=context(codes=())
         )
         self.assertLessEqual(len(base.questions), MAX_KG_QUERIES_PER_TURN)
+
+    def test_expanded_policy_allows_five_distinct_grounded_subqueries(self):
+        subquestions = [
+            "교육과정 교양 기준은?",
+            "교육과정 전공 기준은?",
+            "교육과정 졸업 기준은?",
+            "교육과정 영어 기준은?",
+            "교육과정 과목 기준은?",
+        ]
+        llm = FakeLLM(
+            [
+                {
+                    "resolved_question": "교육과정 기준을 정리해 줘.",
+                    "referenced_course_codes": [],
+                    "tools": ["query_curriculum"],
+                    "topic": "교육과정",
+                    "subquestions": subquestions,
+                },
+                {"grounded_answer": "", "intro": "", "closing": ""},
+            ]
+        )
+        base = FakePersonalizedService()
+        AgenticCurriculumChatService(
+            base,
+            llm,
+            policy=AgentPolicy.from_env({"KG_AGENT_MODE": "expanded"}),
+        ).ask("교육과정 교양 전공 졸업 영어 과목 기준을 정리해 줘.")
+        self.assertEqual(len(base.questions), 6)
+        self.assertEqual(len(set(base.questions)), 6)
+
+    def test_provider_grammar_projection_does_not_allow_duplicate_agent_calls(self):
+        llm = FakeLLM(
+            [
+                {
+                    "resolved_question": "교육과정 기준은?",
+                    "referenced_course_codes": [],
+                    "tools": ["query_curriculum", "query_curriculum"],
+                    "topic": "교육과정",
+                    "subquestions": [],
+                },
+                {"grounded_answer": "", "intro": "", "closing": ""},
+            ]
+        )
+        base = FakePersonalizedService()
+        AgenticCurriculumChatService(base, llm).ask("교육과정 기준은?")
+        # Invalid structured output falls back to exactly one safe query.
+        self.assertEqual(base.questions, ["교육과정 기준은?"])
+
+    def test_expanded_narrative_rewrites_course_list_but_rejects_tampering(self):
+        from tests.test_evidence_chat import _answerable_response
+
+        response = _answerable_response(count=2)
+        safe = (
+            "전공필수 과목은 총 2과목, 합계 6학점이고 "
+            "자료구조(CDA0008, 3학점), 전공과목2(CDA0009, 3학점)입니다."
+        )
+        self.assertEqual(
+            AgenticCurriculumChatService._validated_grounded_answer(
+                safe, response, expanded=True
+            ),
+            safe,
+        )
+        self.assertEqual(
+            AgenticCurriculumChatService._validated_grounded_answer(
+                safe, response, expanded=False
+            ),
+            "",
+        )
+        self.assertEqual(
+            AgenticCurriculumChatService._validated_grounded_answer(
+                safe.replace("6학점", "9학점"), response, expanded=True
+            ),
+            "",
+        )
 
     def test_sealed_chat_response_wire_contract_is_unchanged(self):
         response = ChatResponse.unresolved("request:test-wire")

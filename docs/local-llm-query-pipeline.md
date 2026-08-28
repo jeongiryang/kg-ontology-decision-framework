@@ -87,13 +87,17 @@ StructuredLLMClient
 
 모델·엔진 교체 시 QueryPlan, SchemaSelector, Cypher 반환 계약, SafetyPipeline, Neo4j, Evidence 검증과 향후 renderer·프론트엔드 계약은 유지한다. provider 설정·adapter·JSON 준수율·Cypher 정확도·프롬프트 호환성·context·응답시간·VRAM·회귀 질문 결과만 다시 검증한다. KG 재적재나 온톨로지 재작성은 필요하지 않다.
 
-OpenAI-compatible adapter는 실제 네트워크 없이 요청 envelope, 선택적 Bearer token, JSON Schema, 응답 파싱, 크기·timeout·HTTP 오류 비노출과 redirect 무추적을 단위 테스트했다. 실제 vLLM 서버 통합은 아직 실행하지 않았다.
+OpenAI-compatible adapter는 요청 envelope, 선택적 Bearer token, JSON Schema, 응답 파싱,
+크기·timeout·HTTP 오류 비노출과 redirect 무추적을 단위 테스트했다. 연구실의 임시 vLLM
+0.28.0 서버에서도 loopback SSH forwarding으로 실제 통합을 검증했다. vLLM grammar가
+지원하지 않는 `uniqueItems`는 provider projection에서만 제외하고 typed planner/tool
+계약에서 중복을 계속 정규화한다.
 
 연구실 후보 모델 사전 조사, 최신 14B 단일·다중 턴 기준선과 동일 조건 비교 절차는
-[LLM provider·모델 비교 기준선과 DSW 사전 조사](evaluations/model-provider-benchmark.md)에
-기록했다. 2026-08-29 조사에서는 사용할 수 있는 SSH alias가 확인되지 않아 DSW 접속과 GPU
-실측을 수행하지 않았다. 후보 모델의 개선이 입증되지 않았으므로 기본 모델과 provider
-설정은 변경하지 않았다.
+[LLM provider·모델 및 Agent 모드 비교](evaluations/model-provider-benchmark.md)에 기록했다.
+2026-08-29 A6000 한 장에서 세 후보를 임시 실행했다. Qwen3-Coder 30B FP8은 지연은
+줄였지만 상태 정확도가 기준선보다 낮았고, 다른 32B 후보도 선정 조건을 충족하지 못했다.
+따라서 기본은 로컬 `qwen2.5-coder:14b`와 보수적 Agent 모드를 유지한다.
 
 ## 5. Planner와 스키마 선택
 

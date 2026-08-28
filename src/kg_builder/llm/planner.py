@@ -1120,6 +1120,21 @@ class LocalQueryPlanner:
         selection_mode = payload.get("selection_mode")
         filters = payload.get("filters")
         requested_fields = payload.get("requested_fields")
+        if isinstance(requested_fields, list):
+            if any(not isinstance(item, str) for item in requested_fields):
+                raise QueryPlanError("requested_fields must contain strings")
+            requested_fields = list(dict.fromkeys(requested_fields))
+        if isinstance(filters, Mapping):
+            for collection_name in ("course_codes", "rule_ids"):
+                collection = filters.get(collection_name)
+                if isinstance(collection, list):
+                    if any(not isinstance(item, str) for item in collection):
+                        raise QueryPlanError(
+                            f"{collection_name} must contain strings"
+                        )
+                    if len(collection) != len(set(collection)):
+                        filters = dict(filters)
+                        filters[collection_name] = list(dict.fromkeys(collection))
         # 사용자가 되묻기에서 고른 값은 계약 검사보다 **먼저** 반영한다. 나중에
         # 반영하면 모델이 고른 모드로 계약을 먼저 검사해 버려, 사용자의 선택과
         # 맞지 않는다는 이유로 계획 전체가 버려진다(규칙 하나를 골랐는데 모델이

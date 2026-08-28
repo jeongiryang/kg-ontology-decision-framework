@@ -1,120 +1,121 @@
-# LLM provider·모델 비교 기준선과 DSW 사전 조사
+# LLM provider·모델 및 Agent 모드 비교
 
-## 1. 판정 요약
+## 판정
 
-2026-08-29 기준 기본 모델은 Ollama `qwen2.5-coder:14b`를 유지한다. 프로젝트에는 이미
-`ollama`와 `openai-compatible` provider가 같은 `StructuredLLMClient` 계약으로 구현돼
-있고, 연구실 endpoint는 SSH 터널의 loopback 주소로 연결할 수 있다. 따라서 provider
-코드나 환경변수 계약을 추가로 변경하지 않았다.
+2026-08-29 실측 결과 개발 기본값은 Ollama `qwen2.5-coder:14b`와
+`KG_AGENT_MODE=conservative`를 유지한다. 연구실 A6000 한 장에서 실행한 세 후보 중
+Qwen3-Coder 30B MoE가 더 빨랐지만 단일·다중 턴 상태 정확도가 기준선보다 낮았다.
+Qwen2.5-Coder 32B AWQ는 더 느렸고, Qwen3 32B AWQ는 한 질문이 41.925초여서 공유 GPU를
+장시간 점유하지 않도록 전체 평가를 중단했다.
 
-DSW 연구실 서버는 표준 사용자 SSH 설정에서 사용할 수 있는 host alias가 확인되지 않아
-접속하지 않았다. 주소나 계정을 추측하지 않았고, 원격 `nvidia-smi`, `w`, `uptime`,
-`df -h`, 모델 다운로드와 후보 모델 실행도 수행하지 않았다. 이 문서의 DSW 후보는 공식
-모델 카드에 근거한 **벤치마크 대상 목록**이며 실행 결과나 선정 결과가 아니다.
+DSW 상주 서비스는 실행하지 않았고 기본 provider를 원격 서버로 변경하지 않았다.
 
-## 2. 현재 provider 경계
+## 공통 안전 경계와 provider 호환
 
 ```text
 StructuredLLMClient
 ├── OllamaClient             → loopback /api/chat
-└── OpenAICompatibleClient   → loopback /v1/chat/completions
+└── OpenAICompatibleClient   → SSH forwarding의 loopback /v1/chat/completions
 ```
 
-- `KG_LLM_PROVIDER`, `KG_LLM_BASE_URL`, `KG_LLM_MODEL`로 provider와 모델을 선택한다.
-- base URL은 `localhost` 또는 `127.0.0.1`의 HTTP endpoint만 허용한다.
-- 원격 연구실 모델은 외부 주소를 애플리케이션에 넣지 않고 SSH local forwarding으로
-  loopback에 연결한다.
-- planner, Cypher generator와 agent orchestrator는 provider 이름을 분기하지 않는다.
-- 모델 교체와 무관하게 canonical Cypher, SafetyPipeline, Result/Claim/Citation 검증은
-  그대로 적용한다.
-- DSW가 없어도 로컬 Ollama로 애플리케이션을 실행할 수 있다. 원격 provider로 자동
-  fallback하거나 연구실 연결 실패 때문에 로컬 구성을 무효화하지 않는다.
+- provider와 모델은 `KG_LLM_PROVIDER`, `KG_LLM_BASE_URL`, `KG_LLM_MODEL`로 선택한다.
+- 애플리케이션은 loopback HTTP endpoint만 허용한다.
+- planner, Cypher generator, Agent orchestrator는 provider별 분기를 만들지 않는다.
+- canonical Cypher, SafetyPipeline, EXPLAIN, Result/Claim/Citation 검증은 모델과 무관하게
+  동일하다.
+- vLLM structured-output grammar가 지원하지 않는 JSON Schema `uniqueItems`는 provider용
+  grammar projection에서만 생략한다. planner와 tool contract가 typed collection을
+  구성할 때 중복을 제거하거나 거부하므로 애플리케이션 계약은 유지된다.
 
-## 3. 로컬 14B 기준선
+## 서버와 실행 조건
 
-측정 환경은 현재 로컬 Ollama의 `qwen2.5-coder:14b`, context 8,192,
-temperature 0이다. 측정 시 Ollama loopback endpoint와 해당 모델 설치를 확인했다. 아래
-통계는 PR #32/#34 구현 검증 중 실제 `/api/ask` SSE로 얻은 마지막 성공 산출물을 합쳐 다시
-계산했다.
+- Ubuntu 22.04, NVIDIA driver 580.173.02, CUDA driver 13.0
+- RTX A6000 48GB 네 장 중 다른 연산이 없던 GPU 한 장만 사용
+- 모든 실행에 `CUDA_VISIBLE_DEVICES` 지정
+- 사용자 홈의 Python 3.10 가상환경, vLLM 0.28.0, 개인 Hugging Face cache만 사용
+- vLLM은 `127.0.0.1`에 bind하고 SSH local forwarding으로만 접근
+- context 16,384, temperature 0, 최대 동시 sequence 1
+- 시스템 CUDA toolkit 11.8과 FlashInfer sampler의 CUDA 12 요구가 맞지 않아
+  `VLLM_USE_FLASHINFER_SAMPLER=0`으로 vLLM 표준 sampler를 사용
 
-| 평가 | 건수 | 상태 분포 | 총 시간 | 평균 | 중앙값 | P95 | `ANSWERED` Citation | 공개 오류 |
-|---|---:|---|---:|---:|---:|---:|---:|---:|
-| PR #10 원본 | 50 | A 22 / N 5 / I 16 / O 1 / D 6 | 343.237s | 6.865s | 8.284s | 10.651s | 22/22 | 0 |
-| 미공개 단일 턴 | 50 | A 29 / N 3 / I 10 / O 5 / D 3 | 466.881s | 9.338s | 9.707s | 15.941s | 29/29 | 0 |
-| 미공개 다중 턴 | 65턴 | A 43 / N 1 / I 8 / O 1 / D 12 | 621.800s | 9.566s | 9.637s | 22.998s | 43/43 | 0 |
+실행 전 전체 `nvidia-smi`, `w`, `uptime`, `df -h`와 사용자 홈 사용량을 확인했다. 실행
+중 선택 GPU의 다른 사용자 프로세스는 없었고, 다른 세 GPU에는 Xorg의 4MiB 외 연산
+프로세스가 없었다. 원격 주소·계정·키·자격증명은 저장소에 기록하지 않았다.
 
-상태 약어는 `ANSWERED`, `NEEDS_USER_INFO`, `INSUFFICIENT_EVIDENCE`,
-`OUT_OF_SCOPE`, `ADVISORY` 순이다. 미공개 평가 115턴 모두 `agent_trace`를 반환했고,
-실제 KG 조회가 필요한 79턴에서 `GRAPH_EXECUTION`이 발생했다. 나머지는 사용자 정보 부족,
-근거 부족, 범위 밖 또는 조언 상태처럼 조회가 필수가 아닌 흐름을 포함한다.
+## 후보와 자원
 
-이전 로컬 6문항 모델 비교에서 기록한 14B 최대 VRAM은 11,506MiB다. 이번 추가 조사에서
-GPU 메모리는 다시 측정하지 않았다. 기존 SSE 산출물은 모델 generation별 최초 JSON 성공,
-재시도와 schema 오류를 별도 계수하지 않으므로 **JSON schema 준수율과 개별 tool-call
-성공률은 소급 계산하지 않았다**. 115/115 trace는 사용자 요청의 처리 완료 관측값이지
-generation 단위 schema 준수율을 뜻하지 않는다.
+| 후보 | runtime·quantization | 실행 범위 | 최대 VRAM | 판정 |
+|---|---|---:|---:|---|
+| 로컬 `qwen2.5-coder:14b` | Ollama, Q4 계열 로컬 배포 | 50 + 50 + 65턴 | 11,506MiB(기존 실측) | 기본 유지 |
+| [`Qwen2.5-Coder-32B-Instruct-AWQ`](https://huggingface.co/Qwen/Qwen2.5-Coder-32B-Instruct-AWQ) | vLLM, AWQ 4-bit | 50 + 50 + 65턴 | 43,133MiB | 정확도·지연 열세 |
+| [`Qwen3-32B-AWQ`](https://huggingface.co/Qwen/Qwen3-32B-AWQ) | vLLM, AWQ 4-bit | 구조화 smoke + 집중 질문 | 42,581MiB | S01 41.925초로 전체 중단 |
+| [`Qwen3-Coder-30B-A3B-Instruct-FP8`](https://huggingface.co/Qwen/Qwen3-Coder-30B-A3B-Instruct-FP8) | vLLM, FP8 MoE(8 active experts) | 50 + 50 + 65턴 | 43,291MiB | 빠르나 정확도 열세 |
 
-## 4. DSW 1-GPU 후보
+Qwen3-Coder의 최초 다운로드는 278.791초, checkpoint load는 약 301.7초였다. 공식 카드가
+BF16/FP16 실행에 약 55GB를 안내하는 Mistral Small 3.1 24B는 A6000 한 장 원칙에 맞지 않아
+다운로드하지 않았다.
 
-첫 비교는 A6000 한 장과 명시적인 `CUDA_VISIBLE_DEVICES` 안에서 실행해야 한다.
+## 보수적 모드 모델 비교
 
-| 우선순위 | 후보 | 공식 카드에서 확인한 특성 | 확인 목적 | 상태 |
-|---:|---|---|---|---|
-| 1 | [`Qwen/Qwen2.5-Coder-32B-Instruct-AWQ`](https://huggingface.co/Qwen/Qwen2.5-Coder-32B-Instruct-AWQ) | Apache-2.0, 32B, AWQ 4-bit, config 기준 32K | 현재 Coder 14B와 가장 가까운 저위험 용량 비교 | 미실행 |
-| 2 | [`Qwen/Qwen3-32B-AWQ`](https://huggingface.co/Qwen/Qwen3-32B-AWQ) | Apache-2.0, 32B, AWQ 4-bit, native 32K, tool calling 안내 | 다중 턴·도구 선택·한국어 설명 품질 비교 | 미실행 |
-| 보류 | [`Qwen/Qwen3-Coder-30B-A3B-Instruct-FP8`](https://huggingface.co/Qwen/Qwen3-Coder-30B-A3B-Instruct-FP8) | Apache-2.0, 30.5B MoE, FP8, agentic coding·tool calling 안내 | vLLM·A6000 FP8 호환성 확인 뒤 평가 | 미실행 |
+정확도는 저장소의 승인된 평가 보고서 상태와 비교했다. `ANSWERED Citation`은 해당 상태의
+모든 응답에 Citation이 하나 이상 있었는지를 뜻한다. 응답의 Fact–Evidence 의미 연결은
+동일한 ResultValidator·ClaimValidator·CitationRenderer를 통과한 sealed 응답으로 다시
+확인했다.
 
-[`Mistral-Small-3.1-24B-Instruct-2503`](https://huggingface.co/mistralai/Mistral-Small-3.1-24B-Instruct-2503)은
-공식 카드가 BF16/FP16 GPU 메모리를 약 55GB로 안내하므로 48GB A6000 한 장을 우선하는
-이번 사전 목록에서는 제외했다. 임의 제3자 양자화 모델을 대신 채택하지 않는다.
+| 모델·평가 | 상태 정확도 | 평균 | 중앙값 | P95 | `ANSWERED` Citation | 공개 오류 |
+|---|---:|---:|---:|---:|---:|---:|
+| 로컬 14B / PR #10 50 | 50/50 | 6.865s | 8.284s | 10.651s | 22/22 | 0 |
+| 로컬 14B / 미공개 단일 50 | 50/50 | 9.338s | 9.707s | 15.941s | 29/29 | 0 |
+| 로컬 14B / 다중 턴 65 | 65/65 | 9.566s | 9.637s | 22.998s | 43/43 | 0 |
+| Qwen2.5-Coder 32B AWQ / PR #10 | 45/50 | 21.442s | 18.916s | 47.162s | 25/25 | 0 |
+| Qwen2.5-Coder 32B AWQ / 미공개 단일 | 42/50 | 17.599s | 16.018s | 44.639s | 28/28 | 0 |
+| Qwen2.5-Coder 32B AWQ / 다중 턴 | 57/65 | 13.767s | 14.635s | 36.398s | 39/39 | 0 |
+| Qwen3-Coder 30B FP8 / PR #10 | 46/50 | 7.988s | 5.793s | 16.412s | 23/23 | 0 |
+| Qwen3-Coder 30B FP8 / 미공개 단일 | 46/50 | 5.321s | 4.503s | 11.973s | 28/28 | 0 |
+| Qwen3-Coder 30B FP8 / 다중 턴 | 60/65 | 4.241s | 4.294s | 9.050s | 39/39 | 0 |
 
-후보 이름은 코드 기본값에 넣지 않는다. 실제 비교에서는 각 모델을 같은 prompt, JSON
-schema, temperature 0, context/output 상한과 평가셋으로 실행하고, 서버별로 불가피한 설정
-차이는 결과에 기록한다.
+Qwen2.5-Coder 32B의 최초 요청은 vLLM이 `uniqueItems` grammar를 구현하지 않아 HTTP 400을
+반환했다. provider grammar projection 수정 뒤 PR #10 192회, 단일 178회, 다중 187회의
+구조화 HTTP 호출은 모두 200이었다. Qwen3-Coder 보수적 모드도 596/596 구조화 HTTP 호출이
+200이었다. 이는 provider grammar 수락률이며, 원문 모델 응답을 저장하지 않는 현재 개인
+정보 정책상 generation payload의 의미 재시도율을 별도 계측한 값은 아니다.
 
-## 5. 재현 가능한 DSW 절차
+## Agent 역할 A/B
 
-SSH 접속 정보가 정상적으로 구성된 뒤 다음 순서로 진행한다. placeholder는 실제 문서나
-Git 기록에 서버 주소·계정·키를 남기지 않기 위한 것이다.
+`expanded`는 별도 질의 파이프라인이 아니다. 기존 도구와 SafetyPipeline을 그대로 두고
+도구/조회/하위질문 예산을 `4/4/3`에서 `6/6/5`로 늘리며, Python이 모든 과목명·학수번호·
+학점·집계를 재검증할 수 있는 과목 목록만 LLM 표시 문장 대상으로 넓힌다. 동일 조회 반복은
+금지하고 시간 예산은 150초다.
 
-1. 설정된 본인 SSH alias로 접속한다.
-2. 모델 다운로드나 프로세스 시작 전에 `nvidia-smi`, `w`, `uptime`, `df -h`를 실행한다.
-3. 다른 사용자가 점유하지 않은 GPU 한 장을 선택하고
-   `CUDA_VISIBLE_DEVICES=<FREE_GPU>`를 명시한다.
-4. 본인 홈의 가상환경·캐시만 사용해 loopback에 임시 OpenAI-compatible server를 띄운다.
-5. 로컬 PC에서 SSH local forwarding을 열고 `KG_LLM_PROVIDER=openai-compatible`과
-   loopback `KG_LLM_BASE_URL`로 서버를 시작한다.
-6. `scripts/evaluate_question_set.py`로 PR #10 50문항을, 같은 commit의
-   `scripts/evaluate_agentic_chat.py`로 미공개 단일 50문항과 다중 20시나리오를 실행한다.
-7. 모델별 올바른 상태, Citation coverage, 주장-Evidence 일치, JSON schema/tool 호출,
-   평균·중앙값·P95, timeout·safe failure와 최대 VRAM을 기록한다.
-8. 본인이 시작한 서버·tmux·추론 프로세스를 종료하고 `nvidia-smi`로 VRAM 반환을 확인한다.
+| Qwen3-Coder 30B 모드·평가 | 상태 정확도 | 평균 | P95 | `ANSWERED` Citation | 공개 오류 |
+|---|---:|---:|---:|---:|---:|
+| conservative / PR #10 | 46/50 | 7.988s | 16.412s | 23/23 | 0 |
+| expanded / PR #10 | 45/50 | 7.912s | 20.551s | 23/23 | 0 |
+| conservative / 미공개 단일 | 46/50 | 5.321s | 11.973s | 28/28 | 0 |
+| expanded / 미공개 단일 | 45/50 | 6.740s | 16.314s | 27/27 | 0 |
+| conservative / 다중 턴 | 60/65 | 4.241s | 9.050s | 39/39 | 0 |
+| expanded / 다중 턴 | 57/65 | 4.449s | 11.031s | 37/37 | 0 |
 
-원본 PDF, `.env`, Neo4j 자격증명과 사용자 프로필은 DSW에 복사하지 않는다. 모델에는 평가에
-필요한 최소 prompt·schema·조회 packet만 전달하며 raw 질문·프로필 로그는 남기지 않는다.
-상주 vLLM/Ollama 서비스와 외부 공개 포트는 연구실 협의 없이는 만들지 않는다.
+확대 모드의 584/584 구조화 HTTP 호출은 200이었고 115/115 턴에 `agent_trace`가 있었다.
+그러나 세 평가 모두 정확도가 낮아졌고 자연스러운 목록 표현의 제한적 개선이 이를 상쇄하지
+못했다. 따라서 기본 모드는 conservative이며 expanded는 명시적인 실험 옵션으로만 남긴다.
 
-## 6. 모델 변경 조건
+## 선택 결론
 
-다음 항목을 같은 데이터로 측정하기 전에는 기본 모델을 변경하지 않는다.
+- 개발·시연 기본: 로컬 Ollama `qwen2.5-coder:14b`, conservative
+- 고성능 원격 실험: provider-neutral OpenAI-compatible 설정은 유지하되 기본 자동 전환 없음
+- DSW 상주 사용: 연구실 협의 전까지 미구현
+- DSW 연결 실패: 애플리케이션이 자동 원격 fallback하지 않으며 로컬 Ollama 구성은 독립
 
-- 단일·다중 턴 의미 정확도와 올바른 다섯 outcome 비율
-- generation 단위 JSON schema 준수율과 tool 호출 성공률
-- `ANSWERED` Citation 보유율과 주장-Evidence 일치율
-- Cypher 생성 후 SafetyPipeline·EXPLAIN 통과율
-- clarification과 사용자 정보 정정 품질
-- 평균·중앙값·P95 시간, timeout, 최대 VRAM과 단일 GPU 안정성
-- 한 요청씩 실행한 뒤 제한된 동시 요청에서의 안정성
+모델이 바뀌어도 학교 규정값은 FactPacket 밖에서 생성할 수 없고, 계산은 Python이 수행하며,
+Citation 없는 사실 답변은 승인되지 않는다.
 
-향상이 불명확하거나 상주 서비스 협의가 없으면 로컬 `qwen2.5-coder:14b`를 유지한다.
-DSW 후보가 더 좋아도 기존 Ollama 설정은 개발·fallback 경로로 계속 지원한다.
+## 종료와 잔여물
 
-## 7. 이번에 수행하지 않은 항목
+벤치마크 종료 후 본인이 시작한 vLLM 서버, tmux 세션, Starlette 서버와 SSH forwarding을
+모두 종료했다. 종료 후 네 GPU는 각각 15MiB만 사용했고 vLLM 연산 프로세스는 없었다.
+재평가를 위해 개인 홈에 모델 cache 약 66GB와 일반 cache 약 3.9GB를 유지했다. 상주 서비스,
+외부 공개 포트, 타인 파일·프로세스 변경은 없다.
 
-- DSW SSH 접속과 본인 계정 사용: 접속 alias 부재로 미실행
-- DSW `nvidia-smi`, `w`, `uptime`, `df -h`: 미실행
-- GPU 선택·모델 다운로드·vLLM 설치·후보 실행: 미실행
-- DSW 정확도·tool calling·Citation·지연·VRAM 비교: 결과 없음
-- 동시 요청 안정성: 미실행
-- 서버 파일 생성과 프로세스 시작·종료·VRAM 반환 확인: 해당 없음
-- 상주 서비스: 실행하지 않음
+수행하지 않은 검증은 다중 동시 요청 부하 시험과 Qwen3-32B 전체 165턴 평가다. 전자는
+공유 GPU 정책상 단일 sequence로 제한했고, 후자는 첫 질문 지연으로 조기 중단했다.

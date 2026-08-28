@@ -7,6 +7,7 @@ school-rule Evidence.
 
 from __future__ import annotations
 
+import os
 import re
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
@@ -29,6 +30,62 @@ _OPAQUE_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9:_-]{7,127}\Z")
 class ConversationRole(StrEnum):
     USER = "user"
     ASSISTANT = "assistant"
+
+
+class AgentMode(StrEnum):
+    """How much bounded exploration the existing grounded pipeline may perform."""
+
+    CONSERVATIVE = "conservative"
+    EXPANDED = "expanded"
+
+
+@dataclass(frozen=True, slots=True)
+class AgentPolicy:
+    """Turn-local budgets; this never weakens query or Evidence validation."""
+
+    mode: AgentMode = AgentMode.CONSERVATIVE
+    max_tool_calls: int = MAX_TOOL_CALLS
+    max_kg_queries: int = MAX_KG_QUERIES_PER_TURN
+    max_subquestions: int = 3
+    max_turn_seconds: float = 120.0
+
+    def __post_init__(self) -> None:
+        ceilings = (
+            (6, 6, 5, 150.0)
+            if self.mode is AgentMode.EXPANDED
+            else (MAX_TOOL_CALLS, MAX_KG_QUERIES_PER_TURN, 3, 120.0)
+        )
+        values = (
+            self.max_tool_calls,
+            self.max_kg_queries,
+            self.max_subquestions,
+            self.max_turn_seconds,
+        )
+        if not isinstance(self.mode, AgentMode) or any(
+            isinstance(value, bool) or not isinstance(value, (int, float))
+            for value in values
+        ):
+            raise ValueError("agent policy is invalid")
+        if any(value <= 0 or value > ceiling for value, ceiling in zip(values, ceilings)):
+            raise ValueError("agent policy exceeds its bounded mode")
+
+    @classmethod
+    def from_env(cls, environ: Mapping[str, str] | None = None) -> "AgentPolicy":
+        source = os.environ if environ is None else environ
+        raw_mode = source.get("KG_AGENT_MODE", AgentMode.CONSERVATIVE.value)
+        try:
+            mode = AgentMode(raw_mode.strip().lower())
+        except (AttributeError, ValueError) as exc:
+            raise ValueError("KG_AGENT_MODE must be conservative or expanded") from exc
+        if mode is AgentMode.EXPANDED:
+            return cls(
+                mode=mode,
+                max_tool_calls=6,
+                max_kg_queries=6,
+                max_subquestions=5,
+                max_turn_seconds=150.0,
+            )
+        return cls()
 
 
 class ToolName(StrEnum):

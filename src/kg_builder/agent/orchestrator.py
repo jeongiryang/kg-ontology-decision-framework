@@ -37,10 +37,10 @@ from kg_builder.query.progress import ProgressCallback
 
 from .contracts import (
     AgentChatResult,
+    AgentMode,
+    AgentPolicy,
     AgentTraceEvent,
     ConversationContext,
-    MAX_KG_QUERIES_PER_TURN,
-    MAX_TOOL_CALLS,
     ToolName,
 )
 from .tools import validate_tool_input
@@ -154,7 +154,7 @@ _PLANNER_TOOLS = tuple(
 )
 
 
-_PLAN_SCHEMA: Mapping[str, Any] = {
+_PLAN_SCHEMA_BASE: Mapping[str, Any] = {
     "type": "object",
     "properties": {
         "resolved_question": {"type": "string", "minLength": 1, "maxLength": 2000},
@@ -171,7 +171,7 @@ _PLAN_SCHEMA: Mapping[str, Any] = {
                 "enum": [item.value for item in _PLANNER_TOOLS],
             },
             "minItems": 1,
-            "maxItems": MAX_TOOL_CALLS,
+            "maxItems": 4,
         },
         "topic": {"type": ["string", "null"], "maxLength": 160},
         "followup_question": {"type": ["string", "null"], "maxLength": 2000},
@@ -215,9 +215,18 @@ class AgenticCurriculumChatService:
         self,
         service: PersonalizedCurriculumChatService,
         client: StructuredLLMClient,
+        *,
+        policy: AgentPolicy | None = None,
     ) -> None:
         self.service = service
         self.client = client
+        self.policy = policy or AgentPolicy()
+
+    def _plan_schema(self) -> dict[str, Any]:
+        schema = json.loads(json.dumps(_PLAN_SCHEMA_BASE))
+        schema["properties"]["tools"]["maxItems"] = self.policy.max_tool_calls
+        schema["properties"]["subquestions"]["maxItems"] = self.policy.max_subquestions
+        return schema
 
     def ask(
         self,
@@ -229,6 +238,7 @@ class AgenticCurriculumChatService:
         progress_callback: ProgressCallback | None = None,
         trace_callback: Callable[[AgentTraceEvent], None] | None = None,
     ) -> AgentChatResult:
+        turn_started = perf_counter()
         trace: list[AgentTraceEvent] = []
         current_profile = profile or UserProfile()
         extractor = getattr(self.service, "extractor", None)
@@ -422,7 +432,7 @@ class AgenticCurriculumChatService:
             and ToolName.CALCULATE_REMAINING_CREDITS not in calls
         ):
             calls = (*calls, ToolName.CALCULATE_REMAINING_CREDITS)
-        calls = calls[:MAX_TOOL_CALLS]
+        calls = calls[: self.policy.max_tool_calls]
 
         if ToolName.READ_USER_PROFILE in calls:
             # Accessing the typed DTO is the complete operation; it never persists or
@@ -478,6 +488,7 @@ class AgenticCurriculumChatService:
         )
         tool_results = [personalized]
         query_executions = 1
+        executed_questions = {" ".join(plan.question.split())}
         if ToolName.CALCULATE_REMAINING_CREDITS in calls:
             calculation_results: list[PersonalizedChatResult] = []
             categories = [
@@ -491,9 +502,12 @@ class AgenticCurriculumChatService:
             if len(categories) > 1 and "total" not in categories:
                 categories.append("total")
             for category in categories[:3]:
-                if query_executions >= MAX_KG_QUERIES_PER_TURN:
+                if not self._query_budget_available(query_executions, turn_started):
                     break
                 requirement_question = _CREDIT_REQUIREMENT_QUERIES[category]
+                normalized_question = " ".join(requirement_question.split())
+                if normalized_question in executed_questions:
+                    continue
                 validate_tool_input(
                     ToolName.QUERY_CURRICULUM,
                     {"question": requirement_question},
@@ -507,6 +521,7 @@ class AgenticCurriculumChatService:
                 )
                 calculation_results.append(requirement)
                 query_executions += 1
+                executed_questions.add(normalized_question)
                 self._record(
                     trace,
                     trace_callback,
@@ -530,9 +545,14 @@ class AgenticCurriculumChatService:
             and _MAJOR_REQUIRED_LIST_QUERY not in subquestions
         ):
             subquestions.append(_MAJOR_REQUIRED_LIST_QUERY)
-        for subquestion in (() if profile_statement else subquestions[:3]):
-            if query_executions >= MAX_KG_QUERIES_PER_TURN:
+        for subquestion in (
+            () if profile_statement else subquestions[: self.policy.max_subquestions]
+        ):
+            if not self._query_budget_available(query_executions, turn_started):
                 break
+            normalized_question = " ".join(subquestion.split())
+            if normalized_question in executed_questions:
+                continue
             validate_tool_input(ToolName.QUERY_CURRICULUM, {"question": subquestion})
             sub_started = perf_counter()
             subresult = self.service.ask(
@@ -543,6 +563,7 @@ class AgenticCurriculumChatService:
             )
             tool_results.append(subresult)
             query_executions += 1
+            executed_questions.add(normalized_question)
             self._record(
                 trace,
                 trace_callback,
@@ -553,8 +574,9 @@ class AgenticCurriculumChatService:
         if (
             not profile_statement
             and plan.followup_question
-            and query_executions < MAX_KG_QUERIES_PER_TURN
+            and self._query_budget_available(query_executions, turn_started)
             and personalized.response.status in {ChatStatus.UNRESOLVED, ChatStatus.NOT_FOUND}
+            and " ".join(plan.followup_question.split()) not in executed_questions
         ):
             retry_started = perf_counter()
             validate_tool_input(
@@ -567,6 +589,7 @@ class AgenticCurriculumChatService:
                 progress_callback=progress_callback,
             )
             query_executions += 1
+            executed_questions.add(" ".join(plan.followup_question.split()))
             self._record(
                 trace,
                 trace_callback,
@@ -688,6 +711,12 @@ class AgenticCurriculumChatService:
             recent_course_codes=codes,
         )
 
+    def _query_budget_available(self, executions: int, started: float) -> bool:
+        return (
+            executions < self.policy.max_kg_queries
+            and perf_counter() - started < self.policy.max_turn_seconds
+        )
+
     @staticmethod
     def _fact_family_subquestions(question: str) -> tuple[str, ...]:
         selected = [
@@ -722,11 +751,11 @@ class AgenticCurriculumChatService:
                     "의미가 같은 더 좁은 followup_question 하나를 제안할 수 있다. 현재 "
                     "질문이 독립된 여러 요청을 포함하거나 이전 주제 여러 개의 정리를 "
                     "요구할 때, 원문 또는 이전 사용자 메시지의 주제를 다시 검증할 "
-                    "subquestions를 최대 3개 만든다. 이전 답변 문장은 "
+                    f"subquestions를 최대 {self.policy.max_subquestions}개 만든다. 이전 답변 문장은 "
                     "근거로 복사하지 말고 각 주제를 다시 조회한다."
                 ),
                 user_prompt=prompt,
-                response_schema=_PLAN_SCHEMA,
+                response_schema=self._plan_schema(),
             )
             payload = generation.payload
             return self._validate_plan(question, context, payload)
@@ -743,14 +772,22 @@ class AgenticCurriculumChatService:
         if not isinstance(resolved, str) or not resolved.strip() or len(resolved) > 2000:
             raise ValueError("agent plan question is invalid")
         raw_codes = payload.get("referenced_course_codes")
-        if not isinstance(raw_codes, list) or not set(raw_codes).issubset(context.recent_course_codes):
+        if (
+            not isinstance(raw_codes, list)
+            or any(not isinstance(item, str) for item in raw_codes)
+            or not set(raw_codes).issubset(context.recent_course_codes)
+        ):
             raise ValueError("agent plan introduced an unverified course reference")
+        raw_codes = list(dict.fromkeys(raw_codes))
         known_codes = {item.course_code for item in self.service.course_resolver.courses}
         if not set(raw_codes).issubset(known_codes):
             raise ValueError("agent plan selected an unknown course reference")
         raw_tools = payload.get("tools")
-        if not isinstance(raw_tools, list):
+        if not isinstance(raw_tools, list) or any(
+            not isinstance(item, str) for item in raw_tools
+        ):
             raise ValueError("agent tool plan is invalid")
+        raw_tools = list(dict.fromkeys(raw_tools))
         tools = tuple(ToolName(item) for item in raw_tools)
         if any(tool not in _PLANNER_TOOLS for tool in tools):
             raise ValueError("agent selected a non-planner operation")
@@ -805,8 +842,13 @@ class AgenticCurriculumChatService:
             if not original_terms.intersection(followup_terms) and not raw_codes:
                 raise ValueError("agent follow-up query changed the user topic")
         raw_subquestions = payload.get("subquestions", [])
-        if not isinstance(raw_subquestions, list) or len(raw_subquestions) > 3:
+        if (
+            not isinstance(raw_subquestions, list)
+            or any(not isinstance(item, str) for item in raw_subquestions)
+            or len(raw_subquestions) > self.policy.max_subquestions
+        ):
             raise ValueError("agent subquestions are invalid")
+        raw_subquestions = list(dict.fromkeys(raw_subquestions))
         allowed_terms = set(re.findall(r"[가-힣A-Za-z]{2,}", original))
         for message in context.recent_messages:
             if message.role.value == "user":
@@ -885,7 +927,7 @@ class AgenticCurriculumChatService:
         context: ConversationContext,
         proposed: tuple[str, ...] = (),
     ) -> tuple[str, ...]:
-        """Recover up to three distinct recent topics for evidence revalidation."""
+        """Recover distinct recent topics within the configured evidence budget."""
 
         recovered: list[str] = []
         seen_topics: set[str] = set()
@@ -905,7 +947,7 @@ class AgenticCurriculumChatService:
                 continue
             seen_topics.add(topic_key)
             recovered.append(question)
-            if len(recovered) == 3:
+            if len(recovered) == self.policy.max_subquestions:
                 return tuple(recovered)
         recent: list[tuple[str, str]] = []
         for message in reversed(context.recent_messages):
@@ -926,7 +968,7 @@ class AgenticCurriculumChatService:
             if topic_key in seen_topics or any(key == topic_key for key, _ in recent):
                 continue
             recent.append((topic_key, message.content))
-            if len(recovered) + len(recent) == 3:
+            if len(recovered) + len(recent) == self.policy.max_subquestions:
                 break
         for topic_key, question in reversed(recent):
             seen_topics.add(topic_key)
@@ -1225,6 +1267,7 @@ class AgenticCurriculumChatService:
             rewritten = self._validated_grounded_answer(
                 generation.payload.get("grounded_answer"),
                 result.response,
+                expanded=self.policy.mode is AgentMode.EXPANDED,
             )
             intro = self._safe_discourse(generation.payload.get("intro"), canonical)
             closing = self._safe_discourse(generation.payload.get("closing"), canonical)
@@ -1271,7 +1314,12 @@ class AgenticCurriculumChatService:
         return "APPROVED_COMPLEX_VALUE"
 
     @staticmethod
-    def _validated_grounded_answer(value: Any, response: ChatResponse) -> str:
+    def _validated_grounded_answer(
+        value: Any,
+        response: ChatResponse,
+        *,
+        expanded: bool = False,
+    ) -> str:
         """Return a semantics-preserving factual draft or an empty fallback signal.
 
         This is intentionally conservative.  A small course field, one numeric rule,
@@ -1295,7 +1343,9 @@ class AgenticCurriculumChatService:
         if _FORBIDDEN_NARRATIVE.search(draft) or any(ord(char) < 32 for char in draft):
             return ""
         claims = response.grounded_claims
-        if not AgenticCurriculumChatService._rewritable_claims(claims):
+        if not AgenticCurriculumChatService._rewritable_claims(
+            claims, expanded=expanded
+        ):
             return ""
         if Counter(_FACT_NUMBER.findall(draft)) != Counter(_FACT_NUMBER.findall(source)):
             return ""
@@ -1320,8 +1370,11 @@ class AgenticCurriculumChatService:
         return draft
 
     @staticmethod
-    def _rewritable_claims(claims: tuple[GroundedClaim, ...]) -> bool:
-        if not claims or len(claims) > 3:
+    def _rewritable_claims(
+        claims: tuple[GroundedClaim, ...], *, expanded: bool = False
+    ) -> bool:
+        max_claims = 12 if expanded else 3
+        if not claims or len(claims) > max_claims:
             return False
         kinds = {claim.claim_type for claim in claims}
         if kinds == {ClaimType.FIELD_VALUE}:
@@ -1332,6 +1385,19 @@ class AgenticCurriculumChatService:
             ClaimType.BOOLEAN_POLICY,
         }:
             return True
+        if expanded and ClaimType.COURSE_LIST in kinds and kinds <= {
+            ClaimType.COURSE_LIST,
+            ClaimType.AGGREGATE,
+            ClaimType.FIELD_VALUE,
+        }:
+            return all(
+                claim.claim_type is not ClaimType.COURSE_LIST
+                or (
+                    isinstance(claim.value, tuple)
+                    and 0 < len(claim.value) <= 20
+                )
+                for claim in claims
+            )
         return kinds == {ClaimType.AGGREGATE} and {
             claim.field for claim in claims
         } <= {"fact_count", "credits_sum"}
@@ -1359,6 +1425,23 @@ class AgenticCurriculumChatService:
             return re.search(
                 rf"(?<!\d){re.escape(str(value))}\s*(?:개|과목)", draft
             ) is not None
+        if claim.claim_type is ClaimType.COURSE_LIST:
+            return all(
+                isinstance(getattr(item, "display_name", None), str)
+                and item.display_name in draft
+                and (
+                    getattr(item, "course_code", None) is None
+                    or item.course_code in draft
+                )
+                and (
+                    getattr(item, "credits", None) is None
+                    or re.search(
+                        rf"(?<!\d){re.escape(str(item.credits))}\s*학점", draft
+                    )
+                    is not None
+                )
+                for item in value
+            ) if isinstance(value, tuple) else False
         if claim.unit == "AREA":
             return re.search(
                 rf"(?<!\d){re.escape(str(value))}\s*개\s*영역", draft

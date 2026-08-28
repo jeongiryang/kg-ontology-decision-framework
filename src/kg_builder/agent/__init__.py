@@ -2,6 +2,8 @@
 
 from .contracts import (
     AgentChatResult,
+    AgentMode,
+    AgentPolicy,
     AgentTraceEvent,
     ConversationContext,
     ConversationMessage,
@@ -12,6 +14,8 @@ from .tools import TOOL_SPECS, ToolSpec, validate_tool_input
 
 __all__ = [
     "AgentChatResult",
+    "AgentMode",
+    "AgentPolicy",
     "AgentTraceEvent",
     "AgenticCurriculumChatService",
     "ConversationContext",
