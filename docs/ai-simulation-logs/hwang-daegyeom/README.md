@@ -5,7 +5,7 @@
 - 파일명 규칙: `NNNN-short-task-name.md`
   - `NNNN`은 이 폴더에서 독립적으로 증가하는 4자리 번호다.
   - 작업명은 영문 소문자 kebab-case로 작성한다.
-- 현재 다음 로그 번호: `0013`
+- 현재 다음 로그 번호: `0014`
 - 중앙 템플릿: [AI 시뮬레이션 로그 템플릿](../_template.md)
 - 중앙 운영 규칙: [AI 시뮬레이션 로그 운영 규칙](../README.md)
 
@@ -23,3 +23,4 @@
 - [0010. 선택지가 답이 되지 않게 — 되묻는 축을 올리고 범위를 관계로 거름](0010-choices-must-not-be-the-answer.md)
 - [0011. 실제 질의가 밟은 경로를 그대로 그리는 탐색 시각화](0011-query-traversal-visualization.md)
 - [0012. 지어낸 연출을 걷어내고 엔진이 실제 실행한 순서로 재생](0012-engine-operator-replay.md)
+- [0013. 실시간 hop 탐색을 하지 않는 이유](0013-no-realtime-hop-traversal.md)
