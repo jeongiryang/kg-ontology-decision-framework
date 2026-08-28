@@ -7,7 +7,8 @@
 ```text
 브라우저
 → Starlette POST /api/ask
-→ CurriculumChatService
+→ 브라우저 UserProfile 검증·현재 메시지 정보 추출
+→ PersonalizedCurriculumChatService → CurriculumChatService
 → 자연어 QueryPlan·동적 Cypher·SafetyPipeline
 → ResultValidator
 → 구조화 Claim·결정론적 한국어 답변
@@ -55,6 +56,7 @@ Starlette lifespan에서 다음 객체를 한 번 구성하고 `app.state`에 �
 - provider-neutral `StructuredLLMClient`
 - `NaturalLanguageQueryService`
 - `CurriculumChatService`
+- `PersonalizedCurriculumChatService` (request-local 사용자 진술과 다섯 outcome)
 - 동시 실행 제한기
 
 요청마다 driver나 모델 client를 다시 만들지 않는다. 종료 시 Neo4j driver만 닫으며 Ollama 프로세스는 종료하지 않는다. 기본 동시 LLM 요청은 1개다.
@@ -95,6 +97,12 @@ used_fact_ids, used_evidence_ids, clarification, error_code
 | `SAFE_FAILURE` | 중앙에서 정한 일반 안전 문구, Citation 없음 |
 
 `ANSWER_VALIDATION_FAILED`는 status가 아니라 `SAFE_FAILURE`의 내부 오류 코드다.
+
+sealed 응답과 별도로 `profile_update version=1`과 `outcome version=1` SSE envelope를
+보낸다. outcome은 `ANSWERED`, `NEEDS_USER_INFO`, `INSUFFICIENT_EVIDENCE`,
+`OUT_OF_SCOPE`, `ADVISORY` 중 하나다. Fact·Citation을 다시 조립하지 않으며 기존
+8필드 소비자도 그대로 동작한다. 자세한 계약은
+[질의 정확도와 개인화](query-personalization.md)를 참고한다.
 
 되묻기 선택지는 sealed `ChatResponse`에 필드를 추가하지 않는다. 질문 분석이 실제로
 `CLARIFICATION_REQUIRED`로 끝났을 때만 별도 versioned SSE envelope를 보낸다.
@@ -210,8 +218,11 @@ KG_CHAT_PDF_PATH=/local/ignored/path/2026_curriculum_excerpt.pdf
 ## 입력과 브라우저 보안
 
 - 빈 질문과 2,000자 초과 질문을 서버에서 거부한다.
-- 질문 JSON은 `question`과 서버가 발급한 clarification 선택을 되돌려 보내는 선택적
-  `resolved`만 허용한다.
+- 질문 JSON은 `question`, 서버가 발급한 clarification 선택을 되돌려 보내는 선택적
+  `resolved`, version 1 브라우저 `profile`만 허용한다.
+- 프로필은 localStorage에만 보존하며 서버 DB나 Neo4j에 영구 저장하지 않는다. 손상된
+  저장값은 빈 프로필로 fallback하고 서버는 타입·범위·controlled vocabulary를 재검증한다.
+- 채팅에서 추출한 학적·이수 정보는 `USER_ASSERTION`으로 표시하고 KG 사실과 합치지 않는다.
 - UI는 질문·답변·Evidence를 `textContent`로만 삽입한다.
 - PDF route는 Starlette 정수 path converter를 사용한다.
 - 서버 오류, traceback, 로컬 경로, 비밀번호, 토큰을 반환하지 않는다.

@@ -202,8 +202,8 @@ KG_LOCAL_LLM_INTEGRATION=1 uv run pytest -q tests/test_answer_integration.py -s
 subject·unit·operator·polarity 변조, 이수구분 의미 반전, 과목 수·학점 합계 교환,
 면제 극성 반전, 최소·최대 연산자 교환, 학년·학기 교환, 공개 ChatResponse 위조,
 고정 `SAFE_FAILURE` 문구와 unknown 오류 코드 정제를 검사한다. 통합 테스트는 임시
-trace 디렉터리를 사용하고 전후 노드 1,518개,
-관계 3,260개, Evidence 511개 불변을 확인한다.
+trace 디렉터리를 사용하고 전후 노드 1,536개,
+관계 3,287개, Evidence 520개 불변을 확인한다.
 
 ## 현재 범위와 확장 방법
 

@@ -97,10 +97,24 @@ uv run python -m kg_builder.neo4j_ingest load
 예상 첫 번째와 두 번째 결과는 모두 다음과 같다.
 
 ```text
-nodes = 1518
-relationships = 3260
-Evidence = 511
+nodes = 1536
+relationships = 3287
+Evidence = 520
 ```
+
+### 기존 전용 DB의 additive 보완
+
+이전 Verified bundle이 이미 적재된 전용 로컬 DB에 새 bundle의 누락 항목만 더할 때는
+`load` 대신 다음 명령을 사용한다.
+
+```bash
+uv run python -m kg_builder.neo4j_ingest sync
+```
+
+`sync`는 현재 DB의 모든 안정 identity와 relationship type이 새 bundle의 부분집합인지
+먼저 검사한다. 예상 개수보다 많거나 bundle에 없는 identity가 하나라도 있으면 실패한다.
+검사를 통과한 뒤에만 `MERGE`를 두 번 실행해 생성량 0의 멱등성을 확인하며 삭제·초기화는
+수행하지 않는다. unrelated/shared DB를 일반 병합 대상으로 쓰는 명령이 아니다.
 
 ## 8. 적재 결과 검증
 
@@ -208,7 +222,23 @@ ORDER BY r.rule_id;
 
 Neo4j 기본 LOOKUP 인덱스 2개와 고유 제약조건이 소유하는 backing index는 위 프로젝트 RANGE 인덱스 7개에 포함하지 않는다.
 
-## 11. 오류 처리와 안전 원칙
+## 11. 2026-08-28 영어 면제 atomic Rule 보완
+
+기존 DB 1,518/3,260/511에서 `sync`를 실행해 이미 추출된 영어 시험 Condition 9건의
+VERIFIED atomic Rule·Evidence를 추가했다.
+
+| 항목 | 실제 결과 |
+|---|---|
+| sync 전 | 노드 1,518, 관계 3,260, Evidence 511 |
+| 1차 생성 | 노드 18, 관계 27 |
+| sync 후 | 노드 1,536, 관계 3,287, Evidence 520 |
+| 2차 생성 | 노드 0, 관계 0 |
+| `verify` | 개수·대표 사실 PASS |
+
+새 Evidence는 발췌 1쪽, 원본 PDF 33쪽, 인쇄 페이지 25쪽의 영어 면제 표 원문을
+가리킨다. raw JSON과 PDF는 수정하지 않았다.
+
+## 12. 오류 처리와 안전 원칙
 
 - 환경변수 누락, 빈 비밀번호, 비로컬 URI는 연결 전에 실패한다.
 - 비어 있지 않은 데이터베이스는 노드·관계 개수와 상위 라벨만 보고하고 중단한다.
