@@ -1215,8 +1215,12 @@ function buildTraversalList(graph) {
     const rel = document.createElement("p");
     rel.className = "traversal-rel";
     // 영어 관계 타입은 목록에 찍지 않는다. 읽는 데 방해만 되고 tooltip 으로 충분하다.
-    rel.textContent = edge.relationship_ko || edge.relationship;
-    rel.title = edge.relationship;
+    const parts = [edge.relationship_ko || edge.relationship];
+    if (Number.isInteger(edge.rows)) parts.push(`${edge.rows}행`);
+    if (Number.isInteger(edge.db_hits)) parts.push(`DB ${edge.db_hits}회`);
+    if (Number.isFinite(edge.share_ms)) parts.push(`배분 ${edge.share_ms}ms`);
+    rel.textContent = parts.join(" · ");
+    rel.title = `${edge.relationship} — 시간은 Neo4j 가 단계별로 주지 않아 총 실행시간을 DB 접근 비율로 나눈 배분값입니다`;
     body.append(hop, rel);
     item.append(mark, body);
     list.append(item);
@@ -1244,12 +1248,15 @@ function applySimulationStep(svg, step) {
   });
 }
 
-function startSimulation(svg, maxOrder, button) {
+function startSimulation(svg, maxOrder, button, paceMs) {
   stopSimulation(svg);
   svg.classList.add("is-simulating");
   let step = 0;
   applySimulationStep(svg, step);
   button.textContent = "■ 정지";
+  // 실제 실행 시간은 ms 단위라 그대로 재생하면 눈으로 볼 수 없다. 단계별 배분값의
+  // **비율**을 유지한 채 전체를 사람이 볼 수 있는 길이로 늘린다. 비율이 곧 어느
+  // 단계가 무거웠는지를 보여 준다.
   const timer = setInterval(() => {
     step += 1;
     applySimulationStep(svg, step);
@@ -1261,7 +1268,7 @@ function startSimulation(svg, maxOrder, button) {
       );
       button.textContent = "▶ 다시 재생";
     }
-  }, SIMULATION_STEP_MS);
+  }, Math.max(320, Math.min(2200, paceMs || SIMULATION_STEP_MS)));
   runningSimulations.set(svg, timer);
 }
 
@@ -1271,6 +1278,11 @@ function addSimulationControl(controls, svg, graph, { autoplay = false } = {}) {
     .filter((value) => Number.isInteger(value));
   if (!graph.ordered || !orders.length) return;
   const maxOrder = Math.max(...orders);
+  // 실측 배분 시간의 합을 사람이 볼 수 있는 길이(단계당 최소 320ms)로 늘린 페이스.
+  const shares = (graph.edges || [])
+    .map((edge) => (Number.isFinite(edge.share_ms) ? edge.share_ms : 0));
+  const totalShare = shares.reduce((sum, value) => sum + value, 0);
+  const pace = totalShare > 0 ? Math.round((totalShare / maxOrder) * 60) : 0;
   const button = document.createElement("button");
   button.type = "button";
   button.className = "ghost compact graph-simulate";
@@ -1292,7 +1304,7 @@ function addSimulationControl(controls, svg, graph, { autoplay = false } = {}) {
       button.textContent = "▶ 탐색 재생";
       return;
     }
-    startSimulation(svg, maxOrder, button);
+    startSimulation(svg, maxOrder, button, pace);
   });
   controls.append(button);
   // 처리 중 화면은 사용자가 누르지 않아도 한 번 재생한다. 그 화면의 목적이
@@ -1300,7 +1312,7 @@ function addSimulationControl(controls, svg, graph, { autoplay = false } = {}) {
   // 누를 때만 재생한다.
   if (autoplay && !autoplayedGraphs.has(svg.dataset.graphKey)) {
     autoplayedGraphs.add(svg.dataset.graphKey);
-    startSimulation(svg, maxOrder, button);
+    startSimulation(svg, maxOrder, button, pace);
   }
 }
 
@@ -1469,6 +1481,9 @@ function renderGraphPanel(container, title, graph, options = {}) {
         group.append(bt);
       }
       const relText = edge.relationship_ko || edge.relationship;
+      const measured = Number.isInteger(edge.db_hits)
+        ? `${Number.isInteger(edge.rows) ? edge.rows + "행 · " : ""}DB ${edge.db_hits}회`
+        : "";
       const lw = Math.min(140, relText.length * 11.5 + 14);
       group.append(svgNode("rect", {
         class: "graph-edge-label-bg",
@@ -1478,8 +1493,22 @@ function renderGraphPanel(container, title, graph, options = {}) {
         class: "graph-edge-label", x: mx, y: my - 17, "text-anchor": "middle",
       });
       label.textContent = relText;
+      if (measured) {
+        const mw = Math.min(150, measured.length * 8 + 14);
+        group.append(svgNode("rect", {
+          class: "graph-edge-label-bg",
+          x: mx - mw / 2, y: my + 14, width: mw, height: 16, rx: 5,
+        }));
+        const mt = svgNode("text", {
+          class: "graph-edge-measure", x: mx, y: my + 26, "text-anchor": "middle",
+        });
+        mt.textContent = measured;
+        group.append(mt);
+      }
       const title = svgNode("title");
-      title.textContent = `${edge.traversal_order || ""} ${relText} (${edge.relationship})`.trim();
+      const share = Number.isFinite(edge.share_ms) ? ` · 배분 ${edge.share_ms}ms` : "";
+      title.textContent =
+        `${edge.traversal_order || ""} ${relText} (${edge.relationship})${measured ? " · " + measured : ""}${share}`.trim();
       group.append(title, label);
       edgeLayer.append(group);
     });

@@ -879,3 +879,10 @@ kbd {
   opacity: 0.65;
 }
 .traversal-arrow { font-size: 12px; opacity: 0.6; }
+
+/* 간선의 실측치 (rows / dbHits) */
+.graph-edge-measure {
+  font-size: 10.5px; fill: #64748b; font-variant-numeric: tabular-nums;
+  pointer-events: none;
+}
+@media (prefers-color-scheme: dark) { .graph-edge-measure { fill: #94a3b0; } }

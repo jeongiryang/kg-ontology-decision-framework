@@ -222,14 +222,40 @@ class SafetyPipeline:
             0,
         )
         try:
-            rows = self.executor.execute(explained)
+            outcome = self.executor.execute(explained)
+            # 테스트 대역은 행 목록만 돌려준다. 실행기가 PROFILE 결과를 함께 주는
+            # 경우에만 단계별 실측값을 얻는다.
+            rows = getattr(outcome, "rows", outcome)
+            steps = tuple(getattr(outcome, "steps", ()) or ())
+            elapsed_ms = (perf_counter() - started) * 1000
             self._pass(trace, TraceStage.EXECUTION, started, row_count=len(rows))
             emit_progress(
                 progress_callback,
                 ProgressPhase.GRAPH_EXECUTION,
                 ProgressState.COMPLETED,
-                (perf_counter() - started) * 1000,
+                elapsed_ms,
                 row_count=len(rows),
+                # 엔진이 실제로 밟은 단계. 시간은 Neo4j 가 주지 않으므로, 총 실행
+                # 시간을 DB 접근 횟수 비율로 나눈 **배분값**을 함께 보낸다. 화면이
+                # 이것이 측정값이 아니라 배분값임을 표시한다.
+                traversal_steps=[
+                    {
+                        "order": step.order,
+                        "operator": step.operator,
+                        "relationship_type": step.relationship_type,
+                        "start_variable": step.start_variable,
+                        "end_variable": step.end_variable,
+                        "rows": step.rows,
+                        "db_hits": step.db_hits,
+                        "share_ms": round(
+                            elapsed_ms
+                            * (step.db_hits / max(1, sum(s.db_hits for s in steps))),
+                            3,
+                        ),
+                    }
+                    for step in steps
+                ],
+                execution_ms=round(elapsed_ms, 3),
             )
         except Exception as exc:
             emit_progress(

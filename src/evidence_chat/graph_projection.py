@@ -169,6 +169,7 @@ def build_traversal_projection(
     approved_pairs: Iterable[tuple[str, str]],
     *,
     opaque_key: bytes,
+    traversal_steps: Sequence[Mapping[str, Any]] = (),
 ) -> dict[str, Any] | None:
     """One picture: the approved path from its root down to the real matched facts.
 
@@ -197,6 +198,27 @@ def build_traversal_projection(
         (step for step in path_edges if isinstance(step, Mapping)),
         key=lambda step: step.get("order", 0),
     )
+    # 엔진이 실제로 밟은 단계를 관계 타입으로 묶는다. 같은 관계를 여러 번 타면
+    # 실행 순서대로 소진한다.
+    measured: dict[str, list[Mapping[str, Any]]] = {}
+    for item in traversal_steps or ():
+        if not isinstance(item, Mapping):
+            continue
+        rel = item.get("relationship_type")
+        if isinstance(rel, str) and rel:
+            measured.setdefault(rel, []).append(item)
+
+    def take_measure(relationship: str) -> dict[str, Any]:
+        bucket = measured.get(relationship) or []
+        item = bucket.pop(0) if bucket else None
+        if not item:
+            return {}
+        return {
+            "rows": item.get("rows"),
+            "db_hits": item.get("db_hits"),
+            "share_ms": item.get("share_ms"),
+            "operator": item.get("operator"),
+        }
     fact_label = rows[0].get("fact_label")
     if not isinstance(fact_label, str) or not _SAFE_TYPE.fullmatch(fact_label):
         return None
@@ -260,6 +282,7 @@ def build_traversal_projection(
             "relationship": step.get("relationship_type", ""),
             "relationship_ko": catalog.relationship_ko(step.get("relationship_type", "")),
             "traversal_order": hop,
+            **take_measure(step.get("relationship_type", "")),
         })
     parent_label = next(
         (s.get("start_label") for s in steps if s.get("end_label") == fact_label), None
@@ -282,6 +305,10 @@ def build_traversal_projection(
         return None
 
     fact_ids: dict[str, str] = {}
+    # 같은 관계를 행마다 반복해 그리므로 실측치는 한 번만 읽어 공유한다.
+    fact_measure = (
+        take_measure(into_fact.get("relationship_type", "")) if into_fact else {}
+    )
     for raw_id, row in sorted(fact_rows.items()):
         order += 1
         node_id = _opaque_id(opaque_key, "fact-node", raw_id)
@@ -305,6 +332,7 @@ def build_traversal_projection(
                     into_fact.get("relationship_type", "")
                 ),
                 "traversal_order": hop,
+                **fact_measure,
             })
 
     # 2-b) fact 에서 나가는 이웃 hop(OF_COURSE 등)을 행이 실제로 들고 있는 값으로
@@ -323,6 +351,7 @@ def build_traversal_projection(
         )
         if display_field is None:
             continue
+        neighbour_measure = take_measure(step.get("relationship_type", ""))
         for raw_id, row in sorted(fact_rows.items()):
             value = _safe_display(row.get(display_field), "")
             if not value:
@@ -350,11 +379,13 @@ def build_traversal_projection(
                 "relationship": step.get("relationship_type", ""),
                 "relationship_ko": catalog.relationship_ko(step.get("relationship_type", "")),
                 "traversal_order": hop,
+                **neighbour_measure,
             })
 
     # 3) 승인된 provenance 쌍만 Evidence 로 잇는다.
     evidence_ids: dict[str, str] = {}
     supported_ko = catalog.relationship_ko("SUPPORTED_BY")
+    supported_measure = take_measure("SUPPORTED_BY")
     for raw_id, row in sorted(evidence_rows.items()):
         order += 1
         node_id = _opaque_id(opaque_key, "evidence-node", raw_id)
@@ -380,6 +411,7 @@ def build_traversal_projection(
             "relationship": "SUPPORTED_BY",
             "relationship_ko": supported_ko,
             "traversal_order": hop,
+            **supported_measure,
         })
     if len(edges) > MAX_GRAPH_EDGES or len(nodes) > MAX_GRAPH_NODES:
         return None

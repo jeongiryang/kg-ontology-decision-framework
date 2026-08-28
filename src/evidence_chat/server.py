@@ -118,6 +118,7 @@ class InspectionCollector:
         self._opaque_key = secrets.token_bytes(32)
         self._retry_count = 0
         self._result_validation_approved = False
+        self._traversal_steps: list[dict[str, Any]] = []
 
     @staticmethod
     def _candidate_attempt(event: ProgressEvent) -> int | None:
@@ -197,6 +198,51 @@ class InspectionCollector:
         if not isinstance(value, (list, tuple)):
             return []
         return sorted({item for item in value if isinstance(item, str) and len(item) <= 80})
+
+    @staticmethod
+    def _safe_traversal_steps(value: Any) -> list[dict[str, Any]]:
+        """Keep the engine's measured steps in execution order.
+
+        시간은 Neo4j 가 주지 않으므로 ``share_ms`` 는 총 실행 시간을 DB 접근 횟수
+        비율로 나눈 **배분값**이다. 화면이 그렇게 표시한다.
+        """
+
+        if not isinstance(value, (list, tuple)):
+            return []
+        steps: list[dict[str, Any]] = []
+        for item in list(value)[:MAX_PATH_EDGES]:
+            if not isinstance(item, dict):
+                continue
+            order = item.get("order")
+            operator = item.get("operator")
+            if (
+                not isinstance(order, int)
+                or isinstance(order, bool)
+                or order < 1
+                or not isinstance(operator, str)
+                or not _SAFE_TYPE_NAME.fullmatch(operator.replace("(", "").replace(")", ""))
+            ):
+                continue
+            relationship = item.get("relationship_type")
+            steps.append(
+                {
+                    "order": order,
+                    "operator": operator,
+                    "relationship_type": relationship
+                    if isinstance(relationship, str)
+                    and _SAFE_TYPE_NAME.fullmatch(relationship)
+                    else None,
+                    "rows": item.get("rows") if isinstance(item.get("rows"), int) else 0,
+                    "db_hits": item.get("db_hits")
+                    if isinstance(item.get("db_hits"), int)
+                    else 0,
+                    "share_ms": item.get("share_ms")
+                    if isinstance(item.get("share_ms"), (int, float))
+                    and not isinstance(item.get("share_ms"), bool)
+                    else 0,
+                }
+            )
+        return steps
 
     @staticmethod
     def _safe_path_edges(value: Any) -> list[dict[str, Any]]:
@@ -419,9 +465,14 @@ class InspectionCollector:
                 "message": "LLM이 Cypher 후보를 생성했습니다. 안전 검증을 진행합니다.",
             }
         elif event.phase is ProgressPhase.GRAPH_EXECUTION:
+            traversal_steps = self._safe_traversal_steps(
+                event.details.get("traversal_steps")
+            )
+            self._traversal_steps = traversal_steps
             summary = {
                 "row_count": self._safe_count(event.details.get("row_count")),
                 "query_elapsed_ms": event.elapsed_ms,
+                "traversal_steps": traversal_steps,
             }
         elif event.phase is ProgressPhase.RESULT_VALIDATION:
             fact_status_verified = event.details.get("fact_status_verified") is True
@@ -471,6 +522,7 @@ class InspectionCollector:
                     rows,
                     pairs,
                     opaque_key=self._opaque_key,
+                    traversal_steps=self._traversal_steps,
                 )
             summary = {
                 "traversal_graph": traversal_graph,

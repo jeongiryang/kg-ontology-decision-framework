@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import json
+import re
+from dataclasses import dataclass, field
 from typing import Any
 
 from neo4j import unit_of_work
@@ -16,6 +18,80 @@ class QueryExecutionError(RuntimeError):
     def __init__(self, code: str, message: str):
         super().__init__(message)
         self.code = code
+
+
+EXPAND_DETAIL = re.compile(
+    r"\((\w+)\)\s*(<-|-)\s*\[:?(\w+)\]\s*(->|-)\s*\((\w+)\)"
+)
+
+
+@dataclass(frozen=True, slots=True)
+class TraversalStep:
+    """One measured step of the engine's actual execution plan.
+
+    Neo4j 는 operator 별 소요시간을 주지 않는다(``time`` 은 비어 있다). 대신 각 단계에서
+    **몇 행이 나왔고 DB 를 몇 번 읽었는지**는 준다. 시간을 지어내는 대신 이 실측값을 쓴다.
+    """
+
+    order: int
+    operator: str
+    relationship_type: str | None
+    start_variable: str | None
+    end_variable: str | None
+    rows: int
+    db_hits: int
+
+
+@dataclass(frozen=True, slots=True)
+class ExecutionOutcome:
+    """Rows plus the engine's measured traversal, from one PROFILE run."""
+
+    rows: list[dict[str, Any]]
+    steps: tuple[TraversalStep, ...] = ()
+
+
+def _profile_steps(profile: Any) -> tuple[TraversalStep, ...]:
+    """Flatten the PROFILE tree into execution order (leaf first).
+
+    자식이 먼저 실행되므로 트리를 후위 순회하면 그것이 곧 실행 순서다. 확장·탐색
+    operator 만 남기고 Projection/Limit 처럼 그래프를 밟지 않는 단계는 뺀다.
+    """
+
+    collected: list[dict[str, Any]] = []
+
+    def walk(node: Any) -> None:
+        if not isinstance(node, dict):
+            return
+        for child in node.get("children") or ():
+            walk(child)
+        collected.append(node)
+
+    walk(profile)
+    steps: list[TraversalStep] = []
+    for node in collected:
+        operator = str(node.get("operatorType", "")).split("@", 1)[0]
+        if not operator.startswith(("Expand", "NodeIndexSeek", "NodeByLabelScan", "NodeUniqueIndexSeek")):
+            continue
+        detail = str((node.get("args") or {}).get("Details", ""))
+        match = EXPAND_DETAIL.search(detail)
+        relationship = start = end = None
+        if match:
+            left, left_arrow, relationship, right_arrow, right = match.groups()
+            start, end = (left, right) if right_arrow == "->" else (right, left)
+        rows = node.get("rows")
+        hits = node.get("dbHits")
+        steps.append(
+            TraversalStep(
+                order=len(steps) + 1,
+                operator=operator,
+                relationship_type=relationship,
+                start_variable=start,
+                end_variable=end,
+                rows=rows if isinstance(rows, int) else 0,
+                db_hits=hits if isinstance(hits, int) else 0,
+            )
+        )
+    return tuple(steps)
 
 
 class DynamicQueryExecutor:
@@ -34,7 +110,7 @@ class DynamicQueryExecutor:
         self.max_row_bytes = max_row_bytes
         self.max_response_bytes = max_response_bytes
 
-    def execute(self, explained: ExplainedCypher) -> list[dict[str, Any]]:
+    def execute(self, explained: ExplainedCypher) -> ExecutionOutcome:
         if not isinstance(explained, ExplainedCypher) or not explained._is_approved():
             raise QueryExecutionError(
                 "EXPLAIN_APPROVAL_REQUIRED",
@@ -46,8 +122,10 @@ class DynamicQueryExecutor:
         except CypherValidationError as exc:
             raise QueryExecutionError("EXECUTOR_SAFETY_REJECTED", str(exc)) from exc
 
-        def run(tx: Any) -> list[dict[str, Any]]:
-            result = tx.run(validated.text, validated.parameters)
+        def run(tx: Any) -> ExecutionOutcome:
+            # 실행되는 질의는 동일하다. PROFILE 은 엔진이 실제로 밟은 단계별 행 수와
+            # DB 접근 횟수를 함께 돌려줄 뿐이며, 검증기가 승인한 본문은 바뀌지 않는다.
+            result = tx.run("PROFILE " + validated.text, validated.parameters)
             rows: list[dict[str, Any]] = []
             total_bytes = 0
             for record in result:
@@ -73,7 +151,7 @@ class DynamicQueryExecutor:
                         f"serialized result exceeds {self.max_response_bytes} bytes",
                     )
                 rows.append(row)
-            return rows
+            return ExecutionOutcome(rows, _profile_steps(result.consume().profile))
 
         try:
             with self.driver.session(database=self.database) as session:

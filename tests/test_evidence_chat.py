@@ -822,7 +822,7 @@ class StarletteRouteTests(unittest.IsolatedAsyncioTestCase):
                 "path",
                 "query_graph",
             },
-            "GRAPH_EXECUTION": {"row_count", "query_elapsed_ms"},
+            "GRAPH_EXECUTION": {"row_count", "query_elapsed_ms", "traversal_steps"},
             "RESULT_VALIDATION": {
                 "row_count",
                 "fact_count",
@@ -951,7 +951,10 @@ class StarletteRouteTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn("graph-path-traverse", style)
         self.assertNotIn("is-query-pulse", script)
         self.assertNotIn("animatedGraphs", script)
-        self.assertIn("overflow-x: hidden", style)
+        # 종전에는 그래프 뷰포트가 overflow-x:hidden 이라 폭을 넘어선 노드가 그대로
+        # 잘려 나갔다(2026-08-29 담당자 보고). 뷰포트에 억지로 맞춰 축소하면 한국어가
+        # 뭉개지므로, 원래 크기를 보존하고 가로 스크롤로 보여 주는 쪽으로 바꿨다.
+        self.assertIn("overflow-x: auto", style)
         self.assertIn("graphLabelLines", script)
         self.assertIn("renderGraphFallback", script)
         self.assertIn("createElementNS", script)
