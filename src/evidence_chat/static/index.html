@@ -56,6 +56,40 @@
           <p class="hint"><kbd>Enter</kbd> 전송 · <kbd>Shift</kbd>+<kbd>Enter</kbd> 줄바꿈</p>
         </form>
         <div class="examples" id="examples" aria-label="예시 질문"></div>
+        <details class="profile-panel" id="profile-panel">
+          <summary>내 학적·이수 정보</summary>
+          <p class="profile-storage-note">
+            이 정보는 이 브라우저의 localStorage에만 저장되며 서버 DB나 교육과정 KG에
+            학생 노드로 저장되지 않습니다.
+          </p>
+          <form id="profile-form" autocomplete="off">
+            <div class="profile-grid">
+              <label>입학연도 <input id="profile-admission-year" inputmode="numeric" maxlength="4" /></label>
+              <label>학과
+                <select id="profile-department"><option value="">미입력</option><option value="CSE">컴퓨터공학과</option></select>
+              </label>
+              <label>현재 학년 <input id="profile-grade" inputmode="numeric" min="1" max="6" /></label>
+              <label>입학 구분
+                <select id="profile-admission-type"><option value="">미입력</option><option value="NEW">신입</option><option value="TRANSFER">편입</option><option value="CHANGE_MAJOR">전과</option></select>
+              </label>
+              <label>전공 구분
+                <select id="profile-major-type"><option value="">미입력</option><option value="SINGLE">단일전공</option><option value="DOUBLE">복수전공</option><option value="MINOR">부전공</option><option value="LINKED">연계전공</option><option value="CONVERGENCE">융합전공</option></select>
+              </label>
+              <label>총 이수학점 <input id="profile-credit-total" inputmode="decimal" /></label>
+              <label>교양학점 <input id="profile-credit-general" inputmode="decimal" /></label>
+              <label>전공학점 <input id="profile-credit-major" inputmode="decimal" /></label>
+              <label>일반선택학점 <input id="profile-credit-free" inputmode="decimal" /></label>
+              <label class="profile-wide">진로 목표 <input id="profile-career-goal" maxlength="160" /></label>
+            </div>
+            <p id="profile-course-summary" class="profile-summary">채팅에서 알려 준 이수 과목이 여기에 반영됩니다.</p>
+            <div id="profile-course-list" class="profile-course-list" aria-label="저장된 이수 과목"></div>
+            <div class="profile-actions">
+              <button type="submit" class="primary">브라우저에 저장</button>
+              <button type="button" class="ghost" id="profile-reset">전체 초기화</button>
+            </div>
+            <p class="notice" id="profile-notice" hidden></p>
+          </form>
+        </details>
         <p class="notice" id="ask-notice" hidden></p>
       </div>
     </section>

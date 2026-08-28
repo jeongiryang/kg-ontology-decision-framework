@@ -137,6 +137,86 @@ class Neo4jIngestor:
                 f"nodes={counts.nodes}, relationships={counts.relationships}, labels=[{summary}]"
             )
 
+    def require_database_subset(self) -> None:
+        """Allow additive sync only when every current identity is in the bundle.
+
+        This prevents ``sync`` from becoming a broad merge into an unrelated/shared
+        database.  It never deletes a node or relationship.
+        """
+
+        actual = self.counts()
+        expected = DatabaseCounts(*self.bundle.expected_counts)
+        if (
+            actual.nodes > expected.nodes
+            or actual.relationships > expected.relationships
+            or actual.evidence > expected.evidence
+        ):
+            raise IngestionError(
+                f"Database is not an additive subset: expected at most {expected}, actual={actual}"
+            )
+        with self.driver.session(database=self.database) as session:
+            seen_nodes: set[tuple[str, Any]] = set()
+            expected_by_identity: dict[tuple[str, str], set[Any]] = {}
+            for (_labels, match_label, id_property), rows in self.bundle.node_groups().items():
+                expected_by_identity.setdefault((match_label, id_property), set()).update(
+                    row["id"] for row in rows
+                )
+            for (match_label, id_property), expected_ids in expected_by_identity.items():
+                label = validate_identifier(match_label)
+                prop = validate_identifier(id_property)
+                found = {
+                    record["id"]
+                    for record in session.run(
+                        f"MATCH (n:{label}) RETURN n.{prop} AS id"
+                    )
+                }
+                unexpected = found - expected_ids
+                if unexpected:
+                    raise IngestionError(
+                        f"Database has identities absent from bundle for {label}.{prop}"
+                    )
+                seen_nodes.update((label, value) for value in found)
+            database_node_count = session.run(
+                "MATCH (n) RETURN count(n) AS count"
+            ).single(strict=True)["count"]
+            if len(seen_nodes) < database_node_count:
+                raise IngestionError(
+                    "Database contains nodes outside declared bundle identity groups"
+                )
+
+            expected_types = {
+                relationship["type"] for relationship in self.bundle.relationships
+            }
+            current_types = {
+                record["type"]
+                for record in session.run(
+                    "MATCH ()-[r]->() RETURN DISTINCT type(r) AS type"
+                )
+            }
+            if current_types - expected_types:
+                raise IngestionError(
+                    "Database contains relationship types absent from the bundle"
+                )
+            for key, rows in self.bundle.relationship_groups().items():
+                kind, start_label, start_prop, end_label, end_prop = key
+                kind = validate_identifier(kind)
+                start_label = validate_identifier(start_label)
+                start_prop = validate_identifier(start_prop)
+                end_label = validate_identifier(end_label)
+                end_prop = validate_identifier(end_prop)
+                expected_pairs = {(row["from_id"], row["to_id"]) for row in rows}
+                found_pairs = {
+                    (record["from_id"], record["to_id"])
+                    for record in session.run(
+                        f"MATCH (a:{start_label})-[r:{kind}]->(b:{end_label}) "
+                        f"RETURN a.{start_prop} AS from_id, b.{end_prop} AS to_id"
+                    )
+                }
+                if found_pairs - expected_pairs:
+                    raise IngestionError(
+                        f"Database has {kind} endpoints absent from the bundle"
+                    )
+
     def apply_schema(self) -> tuple[int, int]:
         with self.driver.session(database=self.database) as session:
             return apply_schema(session, self.bundle.spec)
@@ -338,8 +418,11 @@ def _database_command(args: argparse.Namespace) -> int:
             print(f"Counts: {counts}")
             print(json.dumps(facts, ensure_ascii=False, sort_keys=True))
             return 0
-        if args.command == "load":
-            ingestor.require_empty_database()
+        if args.command in {"load", "sync"}:
+            if args.command == "load":
+                ingestor.require_empty_database()
+            else:
+                ingestor.require_database_subset()
             constraints, indexes = ingestor.apply_schema()
             print(f"Schema applied: constraints={constraints}, indexes={indexes}")
             first_stats = ingestor.load_once()
@@ -358,7 +441,10 @@ def _database_command(args: argparse.Namespace) -> int:
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("command", choices=("validate", "check-connection", "apply-schema", "load", "verify"))
+    parser.add_argument(
+        "command",
+        choices=("validate", "check-connection", "apply-schema", "load", "sync", "verify"),
+    )
     parser.add_argument("--spec", type=Path, default=DEFAULT_SPEC_PATH)
     parser.add_argument("--data", type=Path, default=DEFAULT_DATA_PATH)
     parser.add_argument("--batch-size", type=int, default=DEFAULT_BATCH_SIZE)

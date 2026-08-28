@@ -214,8 +214,11 @@ class NamedCourseGuardTests(unittest.TestCase):
             * 2
         )
         outcome = LocalQueryPlanner(client).plan("자료구조는 몇 학기에 개설되나?")
-        self.assertIs(outcome.status, PlanningStatus.CLARIFICATION_REQUIRED)
-        self.assertIsNone(outcome.plan)
+        self.assertIs(outcome.status, PlanningStatus.READY)
+        self.assertEqual(outcome.plan.selection_mode, "SINGLE_COURSE")
+        self.assertEqual(outcome.plan.filters["name_ko"], "자료구조")
+        self.assertEqual(outcome.plan.requested_fields, ("semester",))
+        self.assertEqual(client.prompts, [])
 
 
 class RelatedRuleTests(unittest.TestCase):
@@ -291,7 +294,7 @@ class SettledScopeTests(unittest.TestCase):
         self.assertIs(outcome.status, PlanningStatus.CLARIFICATION_REQUIRED)
 
     def test_a_plan_that_ignores_the_named_course_is_not_accepted(self) -> None:
-        """지목된 과목을 담지 않은 계획으로는 다른 것을 답하지 않는다."""
+        """명확한 과목 질문은 모델의 무관한 계획보다 stable identity를 우선한다."""
 
         client = SequenceClient(
             [
@@ -305,8 +308,11 @@ class SettledScopeTests(unittest.TestCase):
             * 2
         )
         outcome = LocalQueryPlanner(client).plan("자료구조는 몇 학기에 개설되나?")
-        self.assertIs(outcome.status, PlanningStatus.CLARIFICATION_REQUIRED)
-        self.assertIsNone(outcome.plan)
+        self.assertIs(outcome.status, PlanningStatus.READY)
+        self.assertEqual(outcome.plan.selection_mode, "SINGLE_COURSE")
+        self.assertEqual(outcome.plan.filters["name_ko"], "자료구조")
+        self.assertNotEqual(outcome.plan.selection_mode, "ROADMAP_LIST")
+        self.assertEqual(client.prompts, [])
 
 
 class PlanningDiagnosticsTests(unittest.TestCase):

@@ -15,6 +15,7 @@ from kg_builder.query.clarification import (
     Choice,
     ClarificationChoices,
 )
+from kg_builder.query.course_names import CourseIdentity, CourseNameResolver
 from kg_builder.query.fact_index import (
     FactIndex,
     leading_candidates,
@@ -106,6 +107,7 @@ INTERNAL_CONTEXT_KEYS = (
     "rule_field_presence",
     "question_matchable_values",
     "course_codes_by_name",
+    "course_identities",
     "rule_match_text",
 )
 # 질문 낱말이 규칙 설명과 겹치는지 볼 때 인정하는 최소 길이. 조사가 붙은 낱말은
@@ -176,14 +178,24 @@ _GENERAL_RULE_CRITERION = re.compile(
     r"(?:기준|최소|최대|요건|규정|점수|학점|필수\s*과목|면제)"
 )
 _SUBJECT_FIELD_QUESTION_ALIASES: Mapping[str, re.Pattern[str]] = {
-    "TOEIC": re.compile(r"(?:TOEIC|토익)", re.IGNORECASE),
+    "TOEIC": re.compile(r"(?:TOEIC(?!\s*SPEAKING)|토익(?!\s*스피킹))", re.IGNORECASE),
     "TOEIC_SPEAKING": re.compile(r"(?:TOEIC\s*SPEAKING|토익\s*스피킹)", re.IGNORECASE),
     "TOEFL_IBT": re.compile(r"(?:TOEFL|토플)", re.IGNORECASE),
-    "TEPS": re.compile(r"(?:TEPS|텝스)", re.IGNORECASE),
+    "TEPS": re.compile(r"(?:(?<!NEW\s)TEPS|텝스)", re.IGNORECASE),
     "NEW_TEPS": re.compile(r"(?:NEW\s*TEPS|뉴\s*텝스)", re.IGNORECASE),
     "OPIC": re.compile(r"(?:OPIC|오픽)", re.IGNORECASE),
     "GTELP": re.compile(r"(?:G-?TELP|지텔프)", re.IGNORECASE),
     "FLEX": re.compile(r"FLEX", re.IGNORECASE),
+}
+_SUBJECT_FIELD_RULE_LABELS: Mapping[str, str] = {
+    "TOEIC": "TOEIC 기준",
+    "TOEIC_SPEAKING": "TOEIC Speaking 기준",
+    "TOEFL_IBT": "TOEFL 기준",
+    "TEPS": "TEPS 기준",
+    "NEW_TEPS": "New TEPS 기준",
+    "OPIC": "OPIc 기준",
+    "GTELP": "G-TELP",
+    "FLEX": "FLEX 기준",
 }
 _REQUESTED_FIELD_PATTERNS: Mapping[str, re.Pattern[str]] = {
     "grade_year": re.compile(r"(?:몇|어느)\s*학년"),
@@ -192,6 +204,21 @@ _REQUESTED_FIELD_PATTERNS: Mapping[str, re.Pattern[str]] = {
         r"(?:과목\s*코드|학수번호).*(?:뭐|무엇|알려|인가|어떤)"
     ),
 }
+_COURSE_FIELD_HINTS: Mapping[str, re.Pattern[str]] = {
+    "course_code": re.compile(r"(?:과목\s*코드|학수번호)"),
+    "grade_year": re.compile(r"(?:학년|권장\s*시기)"),
+    "semester": re.compile(r"(?:학기|개설\s*시기)"),
+    "credits": re.compile(r"(?:몇\s*학점|\d+\s*학점|학점은|학점이|0학점)"),
+    "completion_type": re.compile(r"(?:이수구분|전공필수|전공선택|교양|전공으로)"),
+}
+_COURSE_LIST_HINT = re.compile(
+    r"(?:과목(?:은|이|을|들|\s*목록)|어떤\s*과목|정확히\s*어떤|중\s*어떤|"
+    r"지정된\s*과목|빠뜨|순서)"
+)
+_GENERAL_RULE_HINT = re.compile(
+    r"(?:이수요건|요건|기준|최소|최대|초과|면제|의무|대체|졸업\s*학점|잔여\s*학점|"
+    r"졸업까지|졸업하려|절반|반드시|가능|인정|충족|삭제|채워|들어야|이수해야|남은)"
+)
 
 def planner_response_schema(catalog: SchemaCatalog) -> dict[str, Any]:
     requested_fields = sorted(LLM_REQUESTED_FIELDS.intersection(catalog.all_node_properties))
@@ -203,6 +230,12 @@ def planner_response_schema(catalog: SchemaCatalog) -> dict[str, Any]:
         "completion_type": {"type": "string", "enum": sorted(catalog.controlled_vocabularies["completion_type"])},
         "credits": {"type": "number", "minimum": 0},
         "course_code": {"type": "string"},
+        "course_codes": {
+            "type": "array",
+            "items": {"type": "string"},
+            "minItems": 1,
+            "uniqueItems": True,
+        },
         "name_ko": {"type": "string"},
         "rule_id": {"type": "string"},
         "rule_ids": {
@@ -416,6 +449,24 @@ def build_planner_context(
     # 어느 과목명이 어느 학수번호인지. 계획 모델이 지어낸 학수번호로 다른 과목을 답하는
     # 것을 막는 대조용이며, 프롬프트에는 싣지 않는다(동명 과목이 있어 값은 목록이다).
     course_codes_by_name: dict[str, list[str]] = {}
+    course_identities: list[dict[str, Any]] = []
+    curriculum_scopes = {
+        node["id"]: node["properties"].get("scope_type")
+        for node in data["nodes"]
+        if "CurriculumVersion" in node["labels"]
+    }
+    offering_scopes = {
+        relationship["to_id"]: curriculum_scopes.get(relationship["from_id"])
+        for relationship in data["relationships"]
+        if relationship["type"] == "HAS_OFFERING"
+    }
+    scopes_by_course: dict[str, set[str]] = {}
+    for relationship in data["relationships"]:
+        if relationship["type"] != "OF_COURSE":
+            continue
+        scope = offering_scopes.get(relationship["from_id"])
+        if isinstance(scope, str):
+            scopes_by_course.setdefault(relationship["to_id"], set()).add(scope)
     for node in data["nodes"]:
         if "Course" not in node["labels"]:
             continue
@@ -424,6 +475,16 @@ def build_planner_context(
         code = props.get("course_code")
         if isinstance(name, str) and name and isinstance(code, str) and code:
             course_codes_by_name.setdefault(name, []).append(code)
+            course_id = props.get("course_id")
+            if isinstance(course_id, str) and course_id:
+                course_identities.append(
+                    {
+                        "course_id": course_id,
+                        "course_code": code,
+                        "name_ko": name,
+                        "scope_types": sorted(scopes_by_course.get(course_id, ())),
+                    }
+                )
     group_to_rule: dict[str, str] = {}
     condition_fields_by_rule: dict[str, set[str]] = {
         rule_id: set() for rule_id in review_required_rules
@@ -458,6 +519,9 @@ def build_planner_context(
         "academic_years": sorted(academic_years),
         "question_matchable_values": question_matchable_values,
         "course_codes_by_name": course_codes_by_name,
+        "course_identities": sorted(
+            course_identities, key=lambda item: (item["course_code"], item["course_id"])
+        ),
         "filterable_values": filterable_values,
         "departments": sorted(departments, key=lambda item: item["department_id"]),
         "verified_rule_identifiers": sorted(rule_ids, key=lambda item: item["rule_id"]),
@@ -554,6 +618,14 @@ def _matches_review_required_rule(
             matcher = _SUBJECT_FIELD_QUESTION_ALIASES.get(family)
             if matcher is not None and matcher.search(question):
                 return True
+        hint = str(item.get("semantic_hint_without_values") or "")
+        terms = {
+            term.rstrip("의은는이가을를")
+            for term in _WORD.findall(hint)
+            if len(term.rstrip("의은는이가을를")) >= 4
+        }
+        if sum(term in question for term in terms) >= 2:
+            return True
     return False
 
 
@@ -573,6 +645,25 @@ class LocalQueryPlanner:
         # 계획을 다듬는 데만 쓰는 내부 자료이기 때문이다.
         self.fact_index = fact_index if fact_index is not None else _default_fact_index()
         self.choices = _default_choices() if fact_index is None else None
+        identities = self.context.get("course_identities")
+        self.course_resolver = CourseNameResolver(
+            CourseIdentity(
+                item["course_id"],
+                item["course_code"],
+                item["name_ko"],
+                tuple(
+                    scope
+                    for scope in item.get("scope_types", ())
+                    if isinstance(scope, str)
+                ),
+            )
+            for item in identities or ()
+            if isinstance(item, Mapping)
+            and all(
+                isinstance(item.get(key), str) and item.get(key)
+                for key in ("course_id", "course_code", "name_ko")
+            )
+        )
         # 이번 요청에서 사용자가 고른 값. plan() 이 매 호출마다 다시 채운다.
         self._resolved: dict[str, Any] = {}
 
@@ -1222,31 +1313,10 @@ class LocalQueryPlanner:
             "selection_mode": selection_mode,
         }
 
-    def _names_a_course(self, question: str) -> bool:
-        """Say whether the question states a loaded course name verbatim."""
-
-        values = self.context.get("question_matchable_values")
-        if not isinstance(values, Mapping):
-            return False
-        names = values.get("name_ko")
-        if not isinstance(names, list):
-            return False
-        return any(isinstance(name, str) and name and name in question for name in names)
-
     def _named_courses(self, question: str) -> list[str]:
-        """Every loaded course name the question states verbatim."""
+        """Every loaded course identity named exactly or by one safe spelling edit."""
 
-        values = self.context.get("question_matchable_values")
-        if not isinstance(values, Mapping):
-            return []
-        names = values.get("name_ko")
-        if not isinstance(names, list):
-            return []
-        return [
-            name
-            for name in names
-            if isinstance(name, str) and name and name in question
-        ]
+        return [item.name_ko for item in self.course_resolver.find_mentions(question)]
 
     def _names_a_course(self, question: str) -> bool:
         """Say whether the question states a loaded course name verbatim."""
@@ -1269,7 +1339,11 @@ class LocalQueryPlanner:
         if not named:
             return False
         filters = plan_payload.get("filters") or {}
-        present = [name for name in COURSE_IDENTIFYING_FILTERS if name in filters]
+        present = [
+            name
+            for name in (*COURSE_IDENTIFYING_FILTERS, "course_codes")
+            if name in filters
+        ]
         if not present:
             return True
         codes = self._course_codes_for(named)
@@ -1279,6 +1353,9 @@ class LocalQueryPlanner:
                 # 적재된 학수번호를 모르면 판단하지 않고 통과시킨다. 결과 검증이 뒤에서
                 # 다시 거른다.
                 if codes and value not in codes:
+                    return True
+            elif name == "course_codes":
+                if not isinstance(value, list) or codes - set(value):
                     return True
             elif isinstance(value, str) and value not in named:
                 return True
@@ -1553,6 +1630,251 @@ class LocalQueryPlanner:
         # 검증된 원문 설명은 수치를 문장 안에 그대로 담고 있어 근거를 잃지 않는다.
         return [name for name in RULE_FIELDS if name in common]
 
+    def _deterministic_course_plan(self, question: str) -> QueryPlan | None:
+        """Build a plan when loaded course identities and requested fields are explicit.
+
+        This is semantic slot extraction, not an answer table: identities come from the
+        Verified bundle and field hints apply to every course question alike.  The plan
+        still traverses the normal Cypher validation, EXPLAIN and result grounding path.
+        """
+
+        mentions = self.course_resolver.find_mentions(question)
+        if not mentions:
+            return None
+        requested = [
+            field for field, pattern in _COURSE_FIELD_HINTS.items() if pattern.search(question)
+        ]
+        if (
+            not requested
+            and len(mentions) < 2
+            and (
+                not _COURSE_LIST_HINT.search(question)
+                or re.search(r"(?:추천|진로|되고\s*싶)", question)
+            )
+        ):
+            return None
+        if len(mentions) > 1 or _COURSE_LIST_HINT.search(question):
+            requested = list(COURSE_DETAIL_FIELDS)
+            default = self.context.get("default_scope") or {}
+            filters: dict[str, Any] = {
+                "academic_year": default.get("academic_year"),
+                "course_codes": sorted({item.course_code for item in mentions}),
+            }
+            if not all(set(item.scope_types) == {"COMMON"} for item in mentions):
+                filters["department_id"] = default.get("department_id")
+            mode = SelectionMode.COURSE_LIST
+        else:
+            item = mentions[0]
+            default = self.context.get("default_scope") or {}
+            exact_name = item.name_ko in question
+            filters = {
+                "academic_year": default.get("academic_year"),
+                ("name_ko" if exact_name else "course_code"): (
+                    item.name_ko if exact_name else item.course_code
+                ),
+            }
+            if set(item.scope_types) != {"COMMON"}:
+                filters["department_id"] = default.get("department_id")
+            mode = SelectionMode.SINGLE_COURSE
+        return QueryPlan.from_dict(
+            {
+                "question": question,
+                "intent": "COURSE_FACT_LOOKUP",
+                "filters": filters,
+                "requested_fields": list(dict.fromkeys(requested)),
+                "evidence_required": True,
+                "selection_mode": mode.value,
+            },
+            self.catalog,
+        )
+
+    def _verified_rule_rows(self) -> list[tuple[str, str]]:
+        match_text = self.context.get("rule_match_text")
+        if not isinstance(match_text, Mapping):
+            return []
+        verified = set(self._verified_rule_ids())
+        return sorted(
+            (rule_id, str(text))
+            for rule_id, text in match_text.items()
+            if rule_id in verified and isinstance(rule_id, str)
+        )
+
+    def _deterministic_rule_plan(self, question: str) -> QueryPlan | None:
+        """Select a small verified rule family from general curriculum semantics."""
+
+        if not _GENERAL_RULE_HINT.search(question):
+            return None
+        rows = self._verified_rule_rows()
+        if not rows:
+            return None
+        selected: list[str] = []
+
+        def take(*required: str, any_of: tuple[str, ...] = ()) -> None:
+            for rule_id, text in rows:
+                if all(term in text for term in required) and (
+                    not any_of or any(term in text for term in any_of)
+                ):
+                    selected.append(rule_id)
+
+        named_subject_rules: list[str] = []
+        if re.search(r"(?:대체|반드시|필수|가능)", question):
+            for rule_id, text in rows:
+                # Long subject terms come from the verified rule text.  This lets a
+                # mandatory named item be resolved without an application-owned
+                # course/rule allowlist or answer value.
+                subject_terms = {
+                    term.rstrip("의은는이가을를")
+                    for term in _WORD.findall(text)
+                    if len(term.rstrip("의은는이가을를")) >= 6
+                }
+                if any(term in question for term in subject_terms):
+                    named_subject_rules.append(rule_id)
+
+        if re.search(
+            r"(?:TOEIC|토익|TOEFL|토플|TEPS|텝스|OPIc|오픽|G-?TELP|FLEX)",
+            question,
+            re.IGNORECASE,
+        ):
+            # 시험 명칭은 atomic Verified Rule 설명에서 읽는다. 질문에 실제로 나온
+            # 시험만 선택하며 점수값은 조회 결과가 제공한다.
+            aliases = _SUBJECT_FIELD_QUESTION_ALIASES
+            named_families = [name for name, pattern in aliases.items() if pattern.search(question)]
+            for rule_id, text in rows:
+                if any(
+                    _SUBJECT_FIELD_RULE_LABELS[family].casefold() in text.casefold()
+                    for family in named_families
+                ):
+                    selected.append(rule_id)
+            if re.search(r"(?:학점|교양|인정|줄어|대신)", question):
+                take("대학영어 이수 면제", "학점 인정")
+            if re.search(r"(?:중\s*하나|하나만|둘\s*다|모두)", question):
+                take("영어 공인시험 중 하나", "면제")
+        elif named_subject_rules:
+            selected.extend(named_subject_rules)
+        elif "교양" in question and re.search(r"(?:초과|삭제)", question):
+            take("교양학점", any_of=("초과", "최대"))
+            selected = [
+                rule_id
+                for rule_id in selected
+                if "예술대학" not in dict(rows)[rule_id]
+            ]
+        elif "교양" in question and "전공" in question and re.search(
+            r"(?:영역별|나머지|잔여|졸업)", question
+        ):
+            take("일반 적용 대상", "교양", "최소")
+            take("단일전공", "전공 합계")
+            take("단일전공", "졸업학점 기준")
+            take("단일전공", "졸업 잔여 기준")
+        elif "균형교양" in question and re.search(r"(?:총학점|남은)", question):
+            take("균형교양")
+            take("일반 적용 대상", "교양", "최소")
+        elif "균형교양" in question:
+            take("균형교양")
+        elif "편입" in question and "교양" in question:
+            take("편입생", "교양")
+        elif "대학영어" in question and "면제" in question:
+            take("대학영어 이수 면제", "학점 인정")
+            take("영어 공인시험 중 하나", "면제")
+        elif "교양" in question and re.search(r"(?:최소|총학점|몇\s*학점)", question):
+            take("일반 적용 대상", "교양", "최소")
+        elif "전공필수" in question and "학점" in question:
+            take("단일전공", "전공필수 기준")
+        elif "전공" in question and "졸업잔여" in question:
+            take("단일전공", "전공 합계")
+            take("단일전공", "졸업 잔여 기준")
+        elif "전공" in question and re.search(r"(?:전공\s*합계|최소\s*전공)", question):
+            take("단일전공", "전공 합계")
+        elif "졸업" in question and re.search(r"(?:총\s*학점|몇\s*학점|절반)", question):
+            take("단일전공", "졸업학점 기준")
+        elif "잔여" in question and "학점" in question:
+            take("단일전공", "졸업 잔여 기준")
+
+        selected = sorted(set(selected))
+        if not selected:
+            return None
+        fields = self._fields_every_rule_has(selected)
+        mode = SelectionMode.SINGLE_RULE if len(selected) == 1 else SelectionMode.MULTIPLE_RULES
+        return QueryPlan.from_dict(
+            {
+                "question": question,
+                "intent": "VERIFIED_RULE_LOOKUP",
+                "filters": {
+                    "academic_year": (self.context.get("default_scope") or {}).get(
+                        "academic_year"
+                    ),
+                    "rule_ids": selected,
+                },
+                "requested_fields": fields,
+                "evidence_required": True,
+                "selection_mode": mode.value,
+            },
+            self.catalog,
+        )
+
+    def _deterministic_plan(self, question: str) -> QueryPlan | None:
+        if re.search(r"(?:권장\s*과목|과목\s*추천)", question):
+            default = self.context.get("default_scope") or {}
+            return QueryPlan.from_dict(
+                {
+                    "question": question,
+                    "intent": "DEPARTMENT_COURSE_RECOMMENDATIONS",
+                    "filters": {
+                        "academic_year": default.get("academic_year"),
+                        "department_id": default.get("department_id"),
+                    },
+                    "requested_fields": [
+                        "course_name_ko",
+                        "course_code",
+                        "recommended_grade_year",
+                        "recommended_semester",
+                        "credits",
+                    ],
+                    "evidence_required": True,
+                    "selection_mode": SelectionMode.COURSE_RECOMMENDATION_LIST.value,
+                },
+                self.catalog,
+            )
+        if (
+            "전공필수" in question
+            and _COURSE_LIST_HINT.search(question)
+            and not self.course_resolver.find_mentions(question)
+        ):
+            default = self.context.get("default_scope") or {}
+            return QueryPlan.from_dict(
+                {
+                    "question": question,
+                    "intent": "COURSE_LIST_BY_COMPLETION_TYPE",
+                    "filters": {
+                        "academic_year": default.get("academic_year"),
+                        "department_id": default.get("department_id"),
+                        "completion_type": "MAJOR_REQUIRED",
+                    },
+                    "requested_fields": list(COURSE_DETAIL_FIELDS),
+                    "evidence_required": True,
+                    "selection_mode": SelectionMode.COURSE_LIST.value,
+                },
+                self.catalog,
+            )
+        # 과목명이 있고 질문이 그 과목의 학점·이수구분·개설 시기를 묻는다면
+        # 졸업/전공이라는 주변 단어보다 실제 Course identity를 우선한다. 영어
+        # 면제처럼 과목명이 함께 나와도 규칙 자체를 묻는 경우는 위 rule router가
+        # 먼저 처리한다.
+        if re.search(
+            r"(?:TOEIC|토익|TOEFL|토플|TEPS|텝스|OPIc|오픽|G-?TELP|FLEX|대학영어.{0,12}면제)",
+            question,
+            re.IGNORECASE,
+        ):
+            rule = self._deterministic_rule_plan(question)
+            if rule is not None:
+                return rule
+        course = self._deterministic_course_plan(question)
+        if course is not None:
+            return course
+        rule = self._deterministic_rule_plan(question)
+        if rule is not None:
+            return rule
+        return None
+
     def plan(
         self, question: str, *, resolved: Mapping[str, Any] | None = None
     ) -> PlanningOutcome:
@@ -1571,18 +1893,18 @@ class LocalQueryPlanner:
         if not isinstance(question, str) or not question.strip():
             raise QueryPlanError("question must be a non-empty string")
         question = question.strip()
+        self._resolved = self._reconciled(self._accepted_resolved(question, resolved))
+        direct = self._deterministic_plan(question)
+        if direct is not None and not self._resolved:
+            return PlanningOutcome(status=PlanningStatus.READY, plan=direct)
         question_classification = classify_graduation_question(question)
         if question_classification is GraduationQuestionClass.FULL_PERSONAL_HISTORY:
             return PlanningOutcome(
                 status=PlanningStatus.UNSUPPORTED,
                 unsupported_reason=UnsupportedReason.PERSONAL_HISTORY,
             )
-        if (
-            question_classification is GraduationQuestionClass.GENERAL_RULE
-            and _matches_review_required_rule(question, self.context)
-        ):
+        if _matches_review_required_rule(question, self.context):
             return PlanningOutcome(status=PlanningStatus.UNRESOLVED)
-        self._resolved = self._reconciled(self._accepted_resolved(question, resolved))
         if self._points_at_nothing(question):
             return PlanningOutcome(status=PlanningStatus.OUT_OF_SCOPE)
         outcome = self._plan_once(question, question_classification)

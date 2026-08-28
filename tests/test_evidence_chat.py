@@ -20,6 +20,7 @@ from evidence_chat.graph_projection import (
 )
 from evidence_chat.server import ChatState, InspectionCollector, create_app
 from kg_builder.answer.contracts import ChatErrorCode, ChatResponse, ChatStatus
+from kg_builder.answer.personalized_service import PersonalizedCurriculumChatService
 from kg_builder.answer.service import CurriculumChatService
 from kg_builder.query.natural_language_service import NaturalLanguageResult
 from kg_builder.query.query_plan import MAX_QUESTION_LENGTH
@@ -727,6 +728,50 @@ class StarletteRouteTests(unittest.IsolatedAsyncioTestCase):
             {"department_id": "department:cwnu:cse"},
         )
 
+    async def test_profile_and_five_state_outcome_use_separate_versioned_envelopes(self):
+        base = _ChatStub(_answerable_response())
+        personalized = PersonalizedCurriculumChatService(base)
+        app = create_app(lambda: ChatState(personalized))
+        async with app.router.lifespan_context(app):
+            async with httpx2.AsyncClient(
+                transport=httpx2.ASGITransport(app=app),
+                base_url="http://testserver",
+            ) as client:
+                events = _events(
+                    (
+                        await client.post(
+                            "/api/ask",
+                            json={
+                                "question": "2026학번 컴퓨터공학과이고 자료구조를 들었어.",
+                                "profile": {"version": 1},
+                            },
+                        )
+                    ).text
+                )
+        profile = next(item for item in events if item["type"] == "profile_update")
+        outcome = next(item for item in events if item["type"] == "outcome")
+        result = next(item for item in events if item["type"] == "result")
+        self.assertEqual(profile["version"], 1)
+        self.assertEqual(profile["profile"]["admission_year"], 2026)
+        self.assertEqual(profile["profile"]["department_id"], "CSE")
+        self.assertEqual(len(profile["profile"]["completed_courses"]), 1)
+        self.assertEqual(outcome["version"], 1)
+        self.assertEqual(outcome["status"], "ANSWERED")
+        self.assertEqual(set(result["response"]), set(CHAT_RESPONSE_FIELDS))
+        self.assertNotIn("profile", result["response"])
+        self.assertNotIn("outcome", result["response"])
+
+    async def test_invalid_profile_fails_closed_without_exposing_input(self):
+        response = await self.client.post(
+            "/api/ask",
+            json={
+                "question": "질문",
+                "profile": {"version": 99, "note": "synthetic-private-marker"},
+            },
+        )
+        self.assertEqual(response.status_code, 422)
+        self.assertNotIn("synthetic-private-marker", response.text)
+
     async def test_inspection_updates_stream_before_result_and_only_approved_cypher(self):
         with mock.patch.dict("os.environ", {"KG_CHAT_SHOW_QUERY_DETAILS": "true"}):
             app = create_app(lambda: ChatState(self.chat))
@@ -939,6 +984,14 @@ class StarletteRouteTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn("Cypher 및 지식그래프 탐색 정보 보기", markup)
         self.assertIn("resize: none", style)
         self.assertIn("overflow-y: hidden", style)
+        self.assertIn('const PROFILE_KEY = "evidence-chat-profile-v1"', script)
+        self.assertIn("localStorage.getItem(PROFILE_KEY)", script)
+        self.assertIn("localStorage.setItem(PROFILE_KEY", script)
+        self.assertIn("localStorage.removeItem(PROFILE_KEY)", script)
+        self.assertIn("validProfileShape", script)
+        self.assertIn('payload.type === "profile_update"', script)
+        self.assertIn('payload.type === "outcome"', script)
+        self.assertIn("이 브라우저의 localStorage에만", markup)
 
     def test_frontend_does_not_construct_backend_contracts(self):
         root = Path(__file__).parents[1] / "src/evidence_chat"

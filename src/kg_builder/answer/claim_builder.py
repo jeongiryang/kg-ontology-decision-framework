@@ -230,7 +230,9 @@ class ClaimBuilder:
                         description_ko=description.strip(),
                     )
                 )
-            elif row.get("value") is not None:
+            elif isinstance(row.get("value"), (int, float)) and not isinstance(
+                row.get("value"), bool
+            ):
                 claims.append(
                     GroundedClaim(
                         _claim_id("requirement", "value", [fact_id]),
@@ -321,6 +323,9 @@ class ClaimBuilder:
                     subject.display_name,
                     row.get("course_code"),
                     credits,
+                    row.get("grade_year"),
+                    row.get("semester"),
+                    row.get("completion_type"),
                 )
             )
             all_links.extend(self._provenance(rows))

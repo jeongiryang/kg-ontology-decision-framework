@@ -28,8 +28,18 @@ class RecordingQueryService:
         self.wrapped = wrapped
         self.last_result: NaturalLanguageResult | None = None
 
-    def ask(self, question: str) -> NaturalLanguageResult:
-        self.last_result = self.wrapped.ask(question)
+    def ask(
+        self,
+        question: str,
+        *,
+        resolved=None,
+        progress_callback=None,
+    ) -> NaturalLanguageResult:
+        self.last_result = self.wrapped.ask(
+            question,
+            resolved=resolved,
+            progress_callback=progress_callback,
+        )
         return self.last_result
 
 
@@ -105,7 +115,7 @@ class EvidenceAnswerIntegrationTests(unittest.TestCase):
         return nodes, relationships, evidence
 
     def test_six_grounded_korean_answers_and_database_invariance(self) -> None:
-        self.assertEqual(self.before, (1518, 3260, 511))
+        self.assertEqual(self.before, (1536, 3287, 520))
         questions = {
             "general": "2026학년도 교양 최소 이수학점은?",
             "balanced": "2026학년도 균형교양 이수요건은?",
@@ -138,10 +148,11 @@ class EvidenceAnswerIntegrationTests(unittest.TestCase):
             )
             self.assertIn(
                 self.client.calls - calls_before,
-                {2, 3, 4},
+                {1, 2, 3, 4},
                 msg=(
-                    "only planner/Cypher calls (including their one allowed retry) "
-                    "may occur; there is no final-answer model call"
+                    "a deterministic plan may skip the planner model; only planner/Cypher "
+                    "calls (including their allowed retry) may occur and there is no "
+                    "final-answer model call"
                 ),
             )
 

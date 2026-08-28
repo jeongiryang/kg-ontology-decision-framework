@@ -159,6 +159,9 @@ class CourseClaimItem:
     display_name: str
     course_code: str | None
     credits: int | float | None
+    grade_year: int | tuple[int, ...] | None = None
+    semester: str | None = None
+    completion_type: str | None = None
 
 
 @dataclass(frozen=True, slots=True)

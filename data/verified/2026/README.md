@@ -28,6 +28,9 @@
 1. `GEA8617`은 수식없는물리로보는세상으로 확정하고 2학기 편성을 복구했다.
 2. 융합프로젝트Ⅰ의 PDF 원문 학수번호 `GEA8617`은 Evidence에 보존하고, 승인 정정값 `GEA8817`로 Course를 생성했다. `이룸` 학기는 미확정이라 CourseOffering은 만들지 않았다.
 3. 전공 교과목 편성표의 실기 합계 원문 `12`와 숫자형 개별 행 합계 `14`를 모두 보존했다. 주 단위 현장실습은 시간 합계에 포함하지 않았다.
+4. raw 추출에 이미 있던 영어 면제 시험 Condition 9건을 원문 표의 atomic VERIFIED
+   Rule·Evidence로 보완했다. 임계값은 Condition에서 복사하며 발췌 1쪽·원본 33쪽·인쇄
+   25쪽을 직접 연결한다.
 
 정정은 `CorrectionRecord-[:CORRECTS]->대상` 및 `SUPPORTED_BY` Evidence로 추적한다.
 
@@ -51,4 +54,6 @@
 - 모든 관계 endpoint와 wrapper `id`/ID 속성이 일치해야 한다.
 - VERIFIED Rule, CourseOffering 및 V0.2 원문 기반 노드는 VERIFIED Evidence를 가져야 한다.
 - Raw JSON 및 PDF는 적재 입력으로 직접 수정하지 않는다.
-- 다음 구현 단계는 Neo4j 제약조건과 멱등 적재 스크립트다.
+- 현재 bundle 기준은 노드 1,536, 관계 3,287, Evidence 520이다.
+- 빈 DB는 `neo4j_ingest load`, 이전 bundle이 적재된 전용 DB의 additive 보완은
+  subset 검사를 포함한 `neo4j_ingest sync`를 사용한다.

@@ -50,8 +50,8 @@
       "correction_policy": "PDF Evidence 원문은 유지하고 승인된 정정은 CorrectionRecord와 normalized 값으로 분리"
     },
     "counts": {
-      "nodes_total": 1518,
-      "relationships_total": 3260,
+      "nodes_total": 1536,
+      "relationships_total": 3287,
       "nodes_by_label": {
         "Alignment": 57,
         "ApplicabilityScope": 21,
@@ -65,18 +65,18 @@
         "CourseRecommendation": 3,
         "CourseRequirement": 11,
         "CreditAllocation": 117,
-        "CreditRequirement": 28,
+        "CreditRequirement": 37,
         "CurriculumAggregate": 8,
         "CurriculumVersion": 2,
         "Department": 1,
         "Document": 1,
         "EducationArea": 18,
         "EducationGoal": 7,
-        "Evidence": 511,
+        "Evidence": 520,
         "ExemptionRule": 3,
         "Institution": 1,
         "RoadmapEntry": 43,
-        "Rule": 57,
+        "Rule": 66,
         "TalentProfile": 3,
         "TransitionRule": 14
       },
@@ -92,7 +92,7 @@
         "DEVELOPS_COMPETENCY": 427,
         "EMPHASIZES_COMPETENCY": 36,
         "FOR_DEPARTMENT": 1,
-        "FROM_DOCUMENT": 511,
+        "FROM_DOCUMENT": 520,
         "HAS_AGGREGATE": 8,
         "HAS_CAREER_FIELD": 3,
         "HAS_CONDITION": 9,
@@ -102,7 +102,7 @@
         "HAS_OFFERING": 318,
         "HAS_RECOMMENDATION": 3,
         "HAS_ROADMAP_ENTRY": 43,
-        "HAS_RULE": 57,
+        "HAS_RULE": 66,
         "IN_AREA": 318,
         "MAPS_COURSE": 36,
         "OF_COURSE": 318,
@@ -110,7 +110,7 @@
         "PARENT_OF": 16,
         "PART_OF": 1,
         "RECOMMENDS_COURSE": 3,
-        "SUPPORTED_BY": 632,
+        "SUPPORTED_BY": 641,
         "TARGETS": 79
       },
       "unresolved_schema_gaps": 10,
@@ -17493,8 +17493,8 @@
       "properties": {
         "rule_id": "rule:cwnu:2026:general:college-english-waiver",
         "rule_type": "EXEMPTION",
-        "status": "REVIEW_REQUIRED",
-        "description_ko": "영어 공인시험성적이 기준을 충족하면 글로벌의사소통 영역 대학영어Ⅰ·Ⅱ의 필수이수를 면제한다.",
+        "status": "VERIFIED",
+        "description_ko": "영어 공인시험 중 하나가 표의 해당 기준을 충족하면 대학영어Ⅰ·Ⅱ의 필수이수를 면제한다.",
         "source_value": "영어 공인시험성적이 해당 기준을 만족할 경우 글로벌의사소통 영역의 필수이수를 면제함.",
         "correction_note": "OPIc IM1은 서열형 등급이어서 현재 GTE 연산자만으로 안전하게 자동 판정할 수 없음."
       }
@@ -25310,6 +25310,312 @@
         "normalized_value": 14,
         "reason_ko": "개별 숫자형 실기 시수의 합계는 14이며, 4주·8주·12주 현장실습 값은 시간 합계에서 제외한다.",
         "status": "APPROVED"
+      }
+    },
+    {
+      "id": "rule:cwnu:2026:general:college-english-waiver-threshold:flex",
+      "labels": [
+        "Rule",
+        "CreditRequirement"
+      ],
+      "properties": {
+        "rule_id": "rule:cwnu:2026:general:college-english-waiver-threshold:flex",
+        "rule_type": "CREDIT_REQUIREMENT",
+        "operator": "GTE",
+        "value": 630,
+        "unit": "POINT",
+        "status": "VERIFIED",
+        "description_ko": "대학영어 이수 면제 FLEX 기준은 630점 이상이다.",
+        "source_value": "FLEX | 630"
+      }
+    },
+    {
+      "id": "evidence:document:2026-curriculum-excerpt:8ee5ee9d45fd:excerpt-p1:college-english-waiver-threshold:flex",
+      "labels": [
+        "Evidence"
+      ],
+      "properties": {
+        "evidence_id": "evidence:document:2026-curriculum-excerpt:8ee5ee9d45fd:excerpt-p1:college-english-waiver-threshold:flex",
+        "excerpt_page": 1,
+        "source_pdf_page": 33,
+        "printed_page": 25,
+        "raw_text": "FLEX | 630",
+        "verification_status": "VERIFIED",
+        "section_title": "2-1. 교양 이수학점",
+        "table_name": "대학영어 I, II 교과목 이수 면제 요건",
+        "row_key": "college-english-waiver-threshold:flex"
+      }
+    },
+    {
+      "id": "rule:cwnu:2026:general:college-english-waiver-threshold:gtelp-level-2",
+      "labels": [
+        "Rule",
+        "CreditRequirement"
+      ],
+      "properties": {
+        "rule_id": "rule:cwnu:2026:general:college-english-waiver-threshold:gtelp-level-2",
+        "rule_type": "CREDIT_REQUIREMENT",
+        "operator": "GTE",
+        "value": 65,
+        "unit": "POINT",
+        "status": "VERIFIED",
+        "description_ko": "대학영어 이수 면제 G-TELP Level 2 기준은 65점 이상이다.",
+        "source_value": "G-TELP Level 2 | 65"
+      }
+    },
+    {
+      "id": "evidence:document:2026-curriculum-excerpt:8ee5ee9d45fd:excerpt-p1:college-english-waiver-threshold:gtelp-level-2",
+      "labels": [
+        "Evidence"
+      ],
+      "properties": {
+        "evidence_id": "evidence:document:2026-curriculum-excerpt:8ee5ee9d45fd:excerpt-p1:college-english-waiver-threshold:gtelp-level-2",
+        "excerpt_page": 1,
+        "source_pdf_page": 33,
+        "printed_page": 25,
+        "raw_text": "G-TELP Level 2 | 65",
+        "verification_status": "VERIFIED",
+        "section_title": "2-1. 교양 이수학점",
+        "table_name": "대학영어 I, II 교과목 이수 면제 요건",
+        "row_key": "college-english-waiver-threshold:gtelp-level-2"
+      }
+    },
+    {
+      "id": "rule:cwnu:2026:general:college-english-waiver-threshold:gtelp-level-3",
+      "labels": [
+        "Rule",
+        "CreditRequirement"
+      ],
+      "properties": {
+        "rule_id": "rule:cwnu:2026:general:college-english-waiver-threshold:gtelp-level-3",
+        "rule_type": "CREDIT_REQUIREMENT",
+        "operator": "GTE",
+        "value": 85,
+        "unit": "POINT",
+        "status": "VERIFIED",
+        "description_ko": "대학영어 이수 면제 G-TELP Level 3 기준은 85점 이상이다.",
+        "source_value": "G-TELP Level 3 | 85"
+      }
+    },
+    {
+      "id": "evidence:document:2026-curriculum-excerpt:8ee5ee9d45fd:excerpt-p1:college-english-waiver-threshold:gtelp-level-3",
+      "labels": [
+        "Evidence"
+      ],
+      "properties": {
+        "evidence_id": "evidence:document:2026-curriculum-excerpt:8ee5ee9d45fd:excerpt-p1:college-english-waiver-threshold:gtelp-level-3",
+        "excerpt_page": 1,
+        "source_pdf_page": 33,
+        "printed_page": 25,
+        "raw_text": "G-TELP Level 3 | 85",
+        "verification_status": "VERIFIED",
+        "section_title": "2-1. 교양 이수학점",
+        "table_name": "대학영어 I, II 교과목 이수 면제 요건",
+        "row_key": "college-english-waiver-threshold:gtelp-level-3"
+      }
+    },
+    {
+      "id": "rule:cwnu:2026:general:college-english-waiver-threshold:new-teps",
+      "labels": [
+        "Rule",
+        "CreditRequirement"
+      ],
+      "properties": {
+        "rule_id": "rule:cwnu:2026:general:college-english-waiver-threshold:new-teps",
+        "rule_type": "CREDIT_REQUIREMENT",
+        "operator": "GTE",
+        "value": 264,
+        "unit": "POINT",
+        "status": "VERIFIED",
+        "description_ko": "대학영어 이수 면제 New TEPS 기준은 264점 이상이다.",
+        "source_value": "New TEPS | 264"
+      }
+    },
+    {
+      "id": "evidence:document:2026-curriculum-excerpt:8ee5ee9d45fd:excerpt-p1:college-english-waiver-threshold:new-teps",
+      "labels": [
+        "Evidence"
+      ],
+      "properties": {
+        "evidence_id": "evidence:document:2026-curriculum-excerpt:8ee5ee9d45fd:excerpt-p1:college-english-waiver-threshold:new-teps",
+        "excerpt_page": 1,
+        "source_pdf_page": 33,
+        "printed_page": 25,
+        "raw_text": "New TEPS | 264",
+        "verification_status": "VERIFIED",
+        "section_title": "2-1. 교양 이수학점",
+        "table_name": "대학영어 I, II 교과목 이수 면제 요건",
+        "row_key": "college-english-waiver-threshold:new-teps"
+      }
+    },
+    {
+      "id": "rule:cwnu:2026:general:college-english-waiver-threshold:opic",
+      "labels": [
+        "Rule",
+        "CreditRequirement"
+      ],
+      "properties": {
+        "rule_id": "rule:cwnu:2026:general:college-english-waiver-threshold:opic",
+        "rule_type": "CREDIT_REQUIREMENT",
+        "operator": "GTE",
+        "value": "IM1",
+        "unit": "GRADE",
+        "status": "VERIFIED",
+        "description_ko": "대학영어 이수 면제 OPIc 기준은 IM1 이상이다.",
+        "source_value": "OPIc | IM1(Intermediate Mid)"
+      }
+    },
+    {
+      "id": "evidence:document:2026-curriculum-excerpt:8ee5ee9d45fd:excerpt-p1:college-english-waiver-threshold:opic",
+      "labels": [
+        "Evidence"
+      ],
+      "properties": {
+        "evidence_id": "evidence:document:2026-curriculum-excerpt:8ee5ee9d45fd:excerpt-p1:college-english-waiver-threshold:opic",
+        "excerpt_page": 1,
+        "source_pdf_page": 33,
+        "printed_page": 25,
+        "raw_text": "OPIc | IM1(Intermediate Mid)",
+        "verification_status": "VERIFIED",
+        "section_title": "2-1. 교양 이수학점",
+        "table_name": "대학영어 I, II 교과목 이수 면제 요건",
+        "row_key": "college-english-waiver-threshold:opic"
+      }
+    },
+    {
+      "id": "rule:cwnu:2026:general:college-english-waiver-threshold:teps",
+      "labels": [
+        "Rule",
+        "CreditRequirement"
+      ],
+      "properties": {
+        "rule_id": "rule:cwnu:2026:general:college-english-waiver-threshold:teps",
+        "rule_type": "CREDIT_REQUIREMENT",
+        "operator": "GTE",
+        "value": 494,
+        "unit": "POINT",
+        "status": "VERIFIED",
+        "description_ko": "대학영어 이수 면제 TEPS 기준은 494점 이상이다.",
+        "source_value": "TEPS | 494"
+      }
+    },
+    {
+      "id": "evidence:document:2026-curriculum-excerpt:8ee5ee9d45fd:excerpt-p1:college-english-waiver-threshold:teps",
+      "labels": [
+        "Evidence"
+      ],
+      "properties": {
+        "evidence_id": "evidence:document:2026-curriculum-excerpt:8ee5ee9d45fd:excerpt-p1:college-english-waiver-threshold:teps",
+        "excerpt_page": 1,
+        "source_pdf_page": 33,
+        "printed_page": 25,
+        "raw_text": "TEPS | 494",
+        "verification_status": "VERIFIED",
+        "section_title": "2-1. 교양 이수학점",
+        "table_name": "대학영어 I, II 교과목 이수 면제 요건",
+        "row_key": "college-english-waiver-threshold:teps"
+      }
+    },
+    {
+      "id": "rule:cwnu:2026:general:college-english-waiver-threshold:toefl-ibt",
+      "labels": [
+        "Rule",
+        "CreditRequirement"
+      ],
+      "properties": {
+        "rule_id": "rule:cwnu:2026:general:college-english-waiver-threshold:toefl-ibt",
+        "rule_type": "CREDIT_REQUIREMENT",
+        "operator": "GTE",
+        "value": 79,
+        "unit": "POINT",
+        "status": "VERIFIED",
+        "description_ko": "대학영어 이수 면제 TOEFL 기준은 79점 이상이다.",
+        "source_value": "TOEFL | 79(IBT)"
+      }
+    },
+    {
+      "id": "evidence:document:2026-curriculum-excerpt:8ee5ee9d45fd:excerpt-p1:college-english-waiver-threshold:toefl-ibt",
+      "labels": [
+        "Evidence"
+      ],
+      "properties": {
+        "evidence_id": "evidence:document:2026-curriculum-excerpt:8ee5ee9d45fd:excerpt-p1:college-english-waiver-threshold:toefl-ibt",
+        "excerpt_page": 1,
+        "source_pdf_page": 33,
+        "printed_page": 25,
+        "raw_text": "TOEFL | 79(IBT)",
+        "verification_status": "VERIFIED",
+        "section_title": "2-1. 교양 이수학점",
+        "table_name": "대학영어 I, II 교과목 이수 면제 요건",
+        "row_key": "college-english-waiver-threshold:toefl-ibt"
+      }
+    },
+    {
+      "id": "rule:cwnu:2026:general:college-english-waiver-threshold:toeic",
+      "labels": [
+        "Rule",
+        "CreditRequirement"
+      ],
+      "properties": {
+        "rule_id": "rule:cwnu:2026:general:college-english-waiver-threshold:toeic",
+        "rule_type": "CREDIT_REQUIREMENT",
+        "operator": "GTE",
+        "value": 700,
+        "unit": "POINT",
+        "status": "VERIFIED",
+        "description_ko": "대학영어 이수 면제 TOEIC 기준은 700점 이상이다.",
+        "source_value": "TOEIC | 700점"
+      }
+    },
+    {
+      "id": "evidence:document:2026-curriculum-excerpt:8ee5ee9d45fd:excerpt-p1:college-english-waiver-threshold:toeic",
+      "labels": [
+        "Evidence"
+      ],
+      "properties": {
+        "evidence_id": "evidence:document:2026-curriculum-excerpt:8ee5ee9d45fd:excerpt-p1:college-english-waiver-threshold:toeic",
+        "excerpt_page": 1,
+        "source_pdf_page": 33,
+        "printed_page": 25,
+        "raw_text": "TOEIC | 700점",
+        "verification_status": "VERIFIED",
+        "section_title": "2-1. 교양 이수학점",
+        "table_name": "대학영어 I, II 교과목 이수 면제 요건",
+        "row_key": "college-english-waiver-threshold:toeic"
+      }
+    },
+    {
+      "id": "rule:cwnu:2026:general:college-english-waiver-threshold:toeic-speaking",
+      "labels": [
+        "Rule",
+        "CreditRequirement"
+      ],
+      "properties": {
+        "rule_id": "rule:cwnu:2026:general:college-english-waiver-threshold:toeic-speaking",
+        "rule_type": "CREDIT_REQUIREMENT",
+        "operator": "GTE",
+        "value": 130,
+        "unit": "POINT",
+        "status": "VERIFIED",
+        "description_ko": "대학영어 이수 면제 TOEIC Speaking 기준은 130점 이상이다.",
+        "source_value": "TOEIC Speaking | Level 130점"
+      }
+    },
+    {
+      "id": "evidence:document:2026-curriculum-excerpt:8ee5ee9d45fd:excerpt-p1:college-english-waiver-threshold:toeic-speaking",
+      "labels": [
+        "Evidence"
+      ],
+      "properties": {
+        "evidence_id": "evidence:document:2026-curriculum-excerpt:8ee5ee9d45fd:excerpt-p1:college-english-waiver-threshold:toeic-speaking",
+        "excerpt_page": 1,
+        "source_pdf_page": 33,
+        "printed_page": 25,
+        "raw_text": "TOEIC Speaking | Level 130점",
+        "verification_status": "VERIFIED",
+        "section_title": "2-1. 교양 이수학점",
+        "table_name": "대학영어 I, II 교과목 이수 면제 요건",
+        "row_key": "college-english-waiver-threshold:toeic-speaking"
       }
     }
   ],
@@ -46581,6 +46887,168 @@
         "source_value": "창의적사고",
         "normalized_value": "창의적사고 역량"
       }
+    },
+    {
+      "type": "HAS_RULE",
+      "from_id": "curriculum:cwnu:2026:common",
+      "to_id": "rule:cwnu:2026:general:college-english-waiver-threshold:flex",
+      "properties": {}
+    },
+    {
+      "type": "SUPPORTED_BY",
+      "from_id": "rule:cwnu:2026:general:college-english-waiver-threshold:flex",
+      "to_id": "evidence:document:2026-curriculum-excerpt:8ee5ee9d45fd:excerpt-p1:college-english-waiver-threshold:flex",
+      "properties": {}
+    },
+    {
+      "type": "FROM_DOCUMENT",
+      "from_id": "evidence:document:2026-curriculum-excerpt:8ee5ee9d45fd:excerpt-p1:college-english-waiver-threshold:flex",
+      "to_id": "document:2026-curriculum-excerpt:8ee5ee9d45fd",
+      "properties": {}
+    },
+    {
+      "type": "HAS_RULE",
+      "from_id": "curriculum:cwnu:2026:common",
+      "to_id": "rule:cwnu:2026:general:college-english-waiver-threshold:gtelp-level-2",
+      "properties": {}
+    },
+    {
+      "type": "SUPPORTED_BY",
+      "from_id": "rule:cwnu:2026:general:college-english-waiver-threshold:gtelp-level-2",
+      "to_id": "evidence:document:2026-curriculum-excerpt:8ee5ee9d45fd:excerpt-p1:college-english-waiver-threshold:gtelp-level-2",
+      "properties": {}
+    },
+    {
+      "type": "FROM_DOCUMENT",
+      "from_id": "evidence:document:2026-curriculum-excerpt:8ee5ee9d45fd:excerpt-p1:college-english-waiver-threshold:gtelp-level-2",
+      "to_id": "document:2026-curriculum-excerpt:8ee5ee9d45fd",
+      "properties": {}
+    },
+    {
+      "type": "HAS_RULE",
+      "from_id": "curriculum:cwnu:2026:common",
+      "to_id": "rule:cwnu:2026:general:college-english-waiver-threshold:gtelp-level-3",
+      "properties": {}
+    },
+    {
+      "type": "SUPPORTED_BY",
+      "from_id": "rule:cwnu:2026:general:college-english-waiver-threshold:gtelp-level-3",
+      "to_id": "evidence:document:2026-curriculum-excerpt:8ee5ee9d45fd:excerpt-p1:college-english-waiver-threshold:gtelp-level-3",
+      "properties": {}
+    },
+    {
+      "type": "FROM_DOCUMENT",
+      "from_id": "evidence:document:2026-curriculum-excerpt:8ee5ee9d45fd:excerpt-p1:college-english-waiver-threshold:gtelp-level-3",
+      "to_id": "document:2026-curriculum-excerpt:8ee5ee9d45fd",
+      "properties": {}
+    },
+    {
+      "type": "HAS_RULE",
+      "from_id": "curriculum:cwnu:2026:common",
+      "to_id": "rule:cwnu:2026:general:college-english-waiver-threshold:new-teps",
+      "properties": {}
+    },
+    {
+      "type": "SUPPORTED_BY",
+      "from_id": "rule:cwnu:2026:general:college-english-waiver-threshold:new-teps",
+      "to_id": "evidence:document:2026-curriculum-excerpt:8ee5ee9d45fd:excerpt-p1:college-english-waiver-threshold:new-teps",
+      "properties": {}
+    },
+    {
+      "type": "FROM_DOCUMENT",
+      "from_id": "evidence:document:2026-curriculum-excerpt:8ee5ee9d45fd:excerpt-p1:college-english-waiver-threshold:new-teps",
+      "to_id": "document:2026-curriculum-excerpt:8ee5ee9d45fd",
+      "properties": {}
+    },
+    {
+      "type": "HAS_RULE",
+      "from_id": "curriculum:cwnu:2026:common",
+      "to_id": "rule:cwnu:2026:general:college-english-waiver-threshold:opic",
+      "properties": {}
+    },
+    {
+      "type": "SUPPORTED_BY",
+      "from_id": "rule:cwnu:2026:general:college-english-waiver-threshold:opic",
+      "to_id": "evidence:document:2026-curriculum-excerpt:8ee5ee9d45fd:excerpt-p1:college-english-waiver-threshold:opic",
+      "properties": {}
+    },
+    {
+      "type": "FROM_DOCUMENT",
+      "from_id": "evidence:document:2026-curriculum-excerpt:8ee5ee9d45fd:excerpt-p1:college-english-waiver-threshold:opic",
+      "to_id": "document:2026-curriculum-excerpt:8ee5ee9d45fd",
+      "properties": {}
+    },
+    {
+      "type": "HAS_RULE",
+      "from_id": "curriculum:cwnu:2026:common",
+      "to_id": "rule:cwnu:2026:general:college-english-waiver-threshold:teps",
+      "properties": {}
+    },
+    {
+      "type": "SUPPORTED_BY",
+      "from_id": "rule:cwnu:2026:general:college-english-waiver-threshold:teps",
+      "to_id": "evidence:document:2026-curriculum-excerpt:8ee5ee9d45fd:excerpt-p1:college-english-waiver-threshold:teps",
+      "properties": {}
+    },
+    {
+      "type": "FROM_DOCUMENT",
+      "from_id": "evidence:document:2026-curriculum-excerpt:8ee5ee9d45fd:excerpt-p1:college-english-waiver-threshold:teps",
+      "to_id": "document:2026-curriculum-excerpt:8ee5ee9d45fd",
+      "properties": {}
+    },
+    {
+      "type": "HAS_RULE",
+      "from_id": "curriculum:cwnu:2026:common",
+      "to_id": "rule:cwnu:2026:general:college-english-waiver-threshold:toefl-ibt",
+      "properties": {}
+    },
+    {
+      "type": "SUPPORTED_BY",
+      "from_id": "rule:cwnu:2026:general:college-english-waiver-threshold:toefl-ibt",
+      "to_id": "evidence:document:2026-curriculum-excerpt:8ee5ee9d45fd:excerpt-p1:college-english-waiver-threshold:toefl-ibt",
+      "properties": {}
+    },
+    {
+      "type": "FROM_DOCUMENT",
+      "from_id": "evidence:document:2026-curriculum-excerpt:8ee5ee9d45fd:excerpt-p1:college-english-waiver-threshold:toefl-ibt",
+      "to_id": "document:2026-curriculum-excerpt:8ee5ee9d45fd",
+      "properties": {}
+    },
+    {
+      "type": "HAS_RULE",
+      "from_id": "curriculum:cwnu:2026:common",
+      "to_id": "rule:cwnu:2026:general:college-english-waiver-threshold:toeic",
+      "properties": {}
+    },
+    {
+      "type": "SUPPORTED_BY",
+      "from_id": "rule:cwnu:2026:general:college-english-waiver-threshold:toeic",
+      "to_id": "evidence:document:2026-curriculum-excerpt:8ee5ee9d45fd:excerpt-p1:college-english-waiver-threshold:toeic",
+      "properties": {}
+    },
+    {
+      "type": "FROM_DOCUMENT",
+      "from_id": "evidence:document:2026-curriculum-excerpt:8ee5ee9d45fd:excerpt-p1:college-english-waiver-threshold:toeic",
+      "to_id": "document:2026-curriculum-excerpt:8ee5ee9d45fd",
+      "properties": {}
+    },
+    {
+      "type": "HAS_RULE",
+      "from_id": "curriculum:cwnu:2026:common",
+      "to_id": "rule:cwnu:2026:general:college-english-waiver-threshold:toeic-speaking",
+      "properties": {}
+    },
+    {
+      "type": "SUPPORTED_BY",
+      "from_id": "rule:cwnu:2026:general:college-english-waiver-threshold:toeic-speaking",
+      "to_id": "evidence:document:2026-curriculum-excerpt:8ee5ee9d45fd:excerpt-p1:college-english-waiver-threshold:toeic-speaking",
+      "properties": {}
+    },
+    {
+      "type": "FROM_DOCUMENT",
+      "from_id": "evidence:document:2026-curriculum-excerpt:8ee5ee9d45fd:excerpt-p1:college-english-waiver-threshold:toeic-speaking",
+      "to_id": "document:2026-curriculum-excerpt:8ee5ee9d45fd",
+      "properties": {}
     }
   ]
 }

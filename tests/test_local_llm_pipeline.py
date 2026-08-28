@@ -276,7 +276,7 @@ class LocalLLMContractTests(unittest.TestCase):
         )
         self.assertFalse(client.prompts)
 
-    def test_general_graduation_rule_with_pronouns_is_not_personal_history(self):
+    def test_general_graduation_rule_with_pronouns_uses_verified_atomic_rule(self):
         question = (
             "컴공과 학생인데 내가 졸업하고 싶은데 졸업하기 위해서 영어 대체로 "
             "토익 점수를 얼마나 받아야 할까? 최소 기준점이 있어?"
@@ -287,34 +287,30 @@ class LocalLLMContractTests(unittest.TestCase):
             classify_graduation_question(question),
             GraduationQuestionClass.GENERAL_RULE,
         )
-        self.assertEqual(outcome.status, PlanningStatus.UNRESOLVED)
+        self.assertEqual(outcome.status, PlanningStatus.READY)
+        self.assertIsNotNone(outcome.plan)
+        self.assertTrue(outcome.plan.evidence_required)
+        self.assertEqual(outcome.plan.selection_mode.value, "SINGLE_RULE")
+        self.assertEqual(len(outcome.plan.filters["rule_ids"]), 1)
         self.assertFalse(client.prompts)
         context = LocalQueryPlanner(SequenceClient([])).context
         serialized_review = str(context["review_required_rule_identifiers"])
-        self.assertIn("TOEIC.score", serialized_review)
+        self.assertNotIn("TOEIC.score", serialized_review)
         self.assertNotIn("700", serialized_review)
 
-    def test_single_condition_comparison_has_distinct_unsupported_reason(self):
+    def test_single_condition_comparison_uses_the_same_verified_rule_path(self):
         question = "토익 700점이면 영어 대체 기준을 충족해?"
-        payload = {
-            "status": "UNSUPPORTED",
-            "intent": None,
-            "filters": {},
-            "requested_fields": [],
-            "evidence_required": True,
-            "message": None,
-            "selection_mode": "SINGLE_RULE",
-        }
-        outcome = LocalQueryPlanner(SequenceClient([payload])).plan(question)
+        client = SequenceClient([])
+        outcome = LocalQueryPlanner(client).plan(question)
         self.assertEqual(
             classify_graduation_question(question),
             GraduationQuestionClass.SINGLE_CONDITION_COMPARISON,
         )
-        self.assertEqual(outcome.status, PlanningStatus.UNSUPPORTED)
-        self.assertEqual(
-            outcome.unsupported_reason,
-            UnsupportedReason.SINGLE_CONDITION_COMPARISON,
-        )
+        self.assertEqual(outcome.status, PlanningStatus.READY)
+        self.assertIsNotNone(outcome.plan)
+        self.assertTrue(outcome.plan.evidence_required)
+        self.assertEqual(len(outcome.plan.filters["rule_ids"]), 1)
+        self.assertFalse(client.prompts)
 
     def test_full_personal_history_remains_unsupported_without_llm(self):
         question = "내가 지금까지 들은 과목과 학점으로 졸업할 수 있어?"
@@ -354,6 +350,31 @@ class LocalLLMContractTests(unittest.TestCase):
         validated = CypherValidator(SchemaCatalog.from_generated()).validate(plan, scaffold)
         self.assertEqual(validated.provenance.fact_label, "CourseOffering")
         self.assertIn("c.course_id AS course_identity", scaffold)
+
+    def test_unique_common_course_identity_uses_common_curriculum_path(self) -> None:
+        client = SequenceClient([])
+        outcome = LocalQueryPlanner(client).plan(
+            "컴퓨터프로그래밍의 이수구분을 알려줘"
+        )
+        self.assertEqual(outcome.status, PlanningStatus.READY)
+        self.assertNotIn("department_id", outcome.plan.filters)
+        subset = QuerySchemaSelector().select(outcome.plan)
+        scaffold = build_syntax_scaffold(outcome.plan, subset)
+        validated = CypherValidator(SchemaCatalog.from_generated()).validate(
+            outcome.plan, scaffold
+        )
+        self.assertEqual(validated.provenance.fact_label, "CourseOffering")
+        self.assertNotIn("FOR_DEPARTMENT", scaffold)
+        self.assertIn("MATCH (cv:CurriculumVersion)", scaffold)
+        self.assertFalse(client.prompts)
+
+    def test_multiple_data_derived_spelling_variants_resolve_to_stable_codes(self) -> None:
+        outcome = LocalQueryPlanner(SequenceClient([])).plan(
+            "운영체제와 데이터통신의 이수구분을 비교해줘"
+        )
+        self.assertEqual(outcome.status, PlanningStatus.READY)
+        self.assertEqual(outcome.plan.selection_mode, SelectionMode.COURSE_LIST)
+        self.assertEqual(len(outcome.plan.filters["course_codes"]), 2)
 
     def test_generated_multi_rule_scaffold_passes_the_existing_validator(self) -> None:
         payload = {

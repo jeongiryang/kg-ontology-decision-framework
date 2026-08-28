@@ -270,6 +270,54 @@ kbd {
   margin-top: 14px; padding: 10px 12px; border-radius: 8px;
   color: var(--warn); background: rgba(154, 103, 0, 0.1);
 }
+
+.profile-panel {
+  width: min(760px, 100%);
+  margin-top: 1rem;
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  background: var(--panel);
+  padding: .8rem 1rem;
+}
+.profile-panel summary { cursor: pointer; font-weight: 700; }
+.profile-storage-note, .profile-summary { color: var(--muted); font-size: .9rem; }
+.profile-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: .75rem;
+}
+.profile-grid label { display: grid; gap: .35rem; font-size: .86rem; font-weight: 650; }
+.profile-grid input, .profile-grid select {
+  min-width: 0;
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  background: var(--panel-2);
+  color: inherit;
+  padding: .65rem .7rem;
+}
+.profile-grid input:focus-visible, .profile-grid select:focus-visible {
+  outline: 3px solid color-mix(in srgb, var(--accent) 28%, transparent);
+  outline-offset: 1px;
+}
+.profile-wide { grid-column: 1 / -1; }
+.profile-course-list { display: flex; flex-wrap: wrap; gap: .45rem; }
+.profile-course-item {
+  display: inline-flex; align-items: center; gap: .4rem; padding: .35rem .45rem .35rem .65rem;
+  border: 1px solid var(--line); border-radius: 999px; background: var(--panel-2); font-size: .85rem;
+}
+.profile-course-remove {
+  border: 0; border-radius: 999px; background: transparent; color: var(--muted);
+  padding: .2rem .35rem; cursor: pointer; font: inherit; font-size: .76rem;
+}
+.profile-course-remove:hover, .profile-course-remove:focus-visible {
+  color: var(--danger); outline: 2px solid color-mix(in srgb, var(--danger) 35%, transparent);
+}
+.profile-actions { display: flex; flex-wrap: wrap; gap: .6rem; margin-top: .8rem; }
+
+@media (max-width: 640px) {
+  .profile-grid { grid-template-columns: 1fr; }
+  .profile-wide { grid-column: auto; }
+}
 .debug-meta { margin-top: 12px; color: var(--muted); font-family: ui-monospace, monospace; font-size: 0.72rem; }
 .answer-details { margin: 14px 0 0; padding: 0; list-style: none; display: grid; gap: 6px; }
 .answer-details li {

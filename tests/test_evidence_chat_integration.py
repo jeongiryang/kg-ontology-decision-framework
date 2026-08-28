@@ -6,6 +6,7 @@ import json
 import os
 import tempfile
 import unittest
+from unittest import mock
 from pathlib import Path
 from time import perf_counter
 
@@ -32,6 +33,12 @@ class EvidenceChatIntegrationTests(unittest.TestCase):
         cls.before = cls._counts()
         cls.trace_temp = tempfile.TemporaryDirectory()
         cls.trace_dir = Path(cls.trace_temp.name)
+        # This assertion covers the public/default presentation contract regardless
+        # of a developer's local .env detailed-inspection choice.
+        cls.details_patch = mock.patch.dict(
+            os.environ, {"KG_CHAT_SHOW_QUERY_DETAILS": "false"}
+        )
+        cls.details_patch.start()
         cls.client = TestClient(
             create_app(lambda: ChatState(trace_dir=cls.trace_dir))
         )
@@ -47,6 +54,7 @@ class EvidenceChatIntegrationTests(unittest.TestCase):
                     f"read-only Starlette smoke changed DB: {cls.before} -> {after}"
                 )
         finally:
+            cls.details_patch.stop()
             cls.count_driver.close()
             trace_dir = cls.trace_dir
             cls.trace_temp.cleanup()
@@ -74,7 +82,7 @@ class EvidenceChatIntegrationTests(unittest.TestCase):
         ]
 
     def test_six_questions_through_starlette_sse(self) -> None:
-        self.assertEqual(self.before, (1518, 3260, 511))
+        self.assertEqual(self.before, (1536, 3287, 520))
         cases = {
             "general": ("2026학년도 교양 최소 이수학점은?", ("34", "학점")),
             "balanced": (
