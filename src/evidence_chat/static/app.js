@@ -592,14 +592,14 @@ const STAGE_5W1H = {
   }),
   RESULT_VALIDATION: (s) => ({
     누가: "결과 검증기",
-    무엇을: `Fact ${s.fact_count ?? 0} · Evidence ${s.verified_evidence_count ?? 0} 확인`,
+    무엇을: `검증된 사실 ${s.fact_count ?? 0}건 · 근거 ${s.verified_evidence_count ?? 0}건 확인`,
     어떻게: "행마다 VERIFIED 상태와 직접 provenance 재검사",
     왜: "검증되지 않은 값이 답에 들어가지 못하게",
     어디서: "조회된 행 위에서",
   }),
   CLAIM_BUILDING: (s) => ({
-    누가: "Claim 검증기",
-    무엇을: `Claim ${s.claim_count ?? 0}건 구성`,
+    누가: "주장 검증기",
+    무엇을: `주장 ${s.claim_count ?? 0}건 구성`,
     어떻게: `유형 ${(s.claim_types || []).join(", ") || "-"}`,
     왜: "문장으로 옮기기 전에 근거와 값을 묶어 두기 위해",
     어디서: "승인된 행에서만",
@@ -693,9 +693,9 @@ function renderStageDetail(container, event, allowExplorationLinks) {
       "읽기 전용 문법": summary.read_only_syntax_verified,
       "온톨로지 명세": summary.ontology_schema_verified,
       "파라미터 바인딩": summary.parameter_binding_verified,
-      "Evidence 직접 경로": summary.direct_evidence_path_verified,
-      "comment-free canonicalization": summary.comment_free_canonical,
-      "LIMIT": summary.limit,
+      "근거 직접 경로": summary.direct_evidence_path_verified,
+      "주석 제거 정규화": summary.comment_free_canonical,
+      "결과 개수 제한(LIMIT)": summary.limit,
     });
   } else if (
     event.phase === "NEO4J_EXPLAIN" &&
@@ -703,7 +703,7 @@ function renderStageDetail(container, event, allowExplorationLinks) {
   ) {
     addDetailFacts(container, {
       "EXPLAIN 연산자": (summary.operators || []).join(", "),
-      "LIMIT": summary.limit,
+      "결과 개수 제한(LIMIT)": summary.limit,
     });
     if (allowExplorationLinks) {
       addExplorationLink(container, "탐색 그래프 보기", "graph");
@@ -713,7 +713,7 @@ function renderStageDetail(container, event, allowExplorationLinks) {
     addDetailFacts(container, {
       "반환 행": summary.row_count,
       "고유 Fact": validation ? validation.summary.fact_count : null,
-      "VERIFIED Evidence": validation
+      "검증된 근거": validation
         ? validation.summary.verified_evidence_count
         : null,
       "조회 시간": summary.query_elapsed_ms != null
@@ -725,24 +725,24 @@ function renderStageDetail(container, event, allowExplorationLinks) {
     }
   } else if (event.phase === "RESULT_VALIDATION") {
     addDetailFacts(container, {
-      "VERIFIED Fact": summary.fact_count,
-      "VERIFIED Evidence": summary.verified_evidence_count,
-      "Fact 상태 검사": summary.fact_status_verified,
-      "Evidence 상태 검사": summary.evidence_status_verified,
+      "검증된 사실": summary.fact_count,
+      "검증된 근거": summary.verified_evidence_count,
+      "사실 상태 검사": summary.fact_status_verified,
+      "근거 상태 검사": summary.evidence_status_verified,
       "직접 provenance 검사": summary.direct_provenance_verified,
       "거부된 행": summary.rejected_row_count,
     });
   } else if (event.phase === "CLAIM_BUILDING") {
     addDetailFacts(container, {
-      "Claim 수": summary.claim_count,
-      "Claim 유형": Array.isArray(summary.claim_types) ? summary.claim_types.join(", ") : null,
-      "집계 Claim": summary.aggregate,
-      "Citation 대상": summary.citation_target_count,
+      "주장 수": summary.claim_count,
+      "주장 유형": Array.isArray(summary.claim_types) ? summary.claim_types.join(", ") : null,
+      "집계 주장": summary.aggregate,
+      "인용 대상": summary.citation_target_count,
     });
   } else if (event.phase === "ANSWER_RENDERING") {
     addDetailFacts(container, {
       "결정론적 한국어 renderer": summary.deterministic_renderer,
-      "Citation 수": summary.citation_count,
+      "인용 수": summary.citation_count,
       "최종 답변 LLM 호출": summary.final_answer_llm_calls,
     });
   } else if (event.phase === "COMPLETED") {
@@ -752,8 +752,8 @@ function renderStageDetail(container, event, allowExplorationLinks) {
         ? `${summary.total_elapsed_ms}ms`
         : null,
       "재시도 횟수": summary.retry_count,
-      "Citation 수": summary.citation_count,
-      "request ID": queryDetailsEnabled && lastResult && lastResult.response
+      "인용 수": summary.citation_count,
+      "요청 ID": queryDetailsEnabled && lastResult && lastResult.response
         ? lastResult.response.request_id
         : null,
     });
@@ -1029,7 +1029,7 @@ function renderCypherTab(container, summary) {
   addDetailFacts(container, {
     "사용 label": (summary.labels || []).join(", "),
     "사용 relationship": (summary.relationships || []).join(", "),
-    "LIMIT": summary.limit,
+    "결과 개수 제한(LIMIT)": summary.limit,
   });
 }
 
@@ -1520,6 +1520,41 @@ function renderOperatorReadout(container, plan, step) {
   container.append(list);
 }
 
+// 그래프가 뷰포트보다 넓으면 지금 색이 변하는 노드가 화면 밖에 있을 수 있다.
+// 그러면 연출을 만들어도 보이지 않는다. 현재 단계를 따라 뷰포트를 움직인다.
+// 사용자가 직접 스크롤하면 잠시 멈춘다. 따라다니면 성가시다.
+const USER_SCROLL_PAUSE_MS = 4000;
+
+function prefersReducedMotion() {
+  return Boolean(window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches);
+}
+
+function followInViewport(svg, element) {
+  if (!element) return;
+  const viewport = svg.closest(".graph-viewport");
+  if (!viewport) return;
+  if (viewport._userScrollUntil && Date.now() < viewport._userScrollUntil) return;
+  const box = element.getBoundingClientRect();
+  const frame = viewport.getBoundingClientRect();
+  const margin = 40;
+  let dx = 0;
+  let dy = 0;
+  if (box.left < frame.left + margin) dx = box.left - frame.left - margin;
+  else if (box.right > frame.right - margin) dx = box.right - frame.right + margin;
+  if (box.top < frame.top + margin) dy = box.top - frame.top - margin;
+  else if (box.bottom > frame.bottom - margin) dy = box.bottom - frame.bottom + margin;
+  if (!dx && !dy) return;
+  viewport._autoScrolling = true;
+  viewport.scrollBy({
+    left: dx,
+    top: dy,
+    behavior: prefersReducedMotion() ? "auto" : "smooth",
+  });
+  window.setTimeout(() => {
+    viewport._autoScrolling = false;
+  }, 400);
+}
+
 function applySimulationStep(svg, step) {
   const split = svg.closest(".graph-split");
   if (split) {
@@ -1560,6 +1595,12 @@ function applySimulationStep(svg, step) {
   // 그래프 모양을 바꾸지 않는 단계(Filter/Limit/Projection 등)에서는 그 사실을 적는다.
   // 적지 않으면 ◀▶ 로 옮겨도 화면이 그대로라 고장으로 읽힌다. 문구의 값은 그 단계가
   // 실제로 보고한 것에서만 온다.
+  // 지금 강조된 것을 따라간다. 간선이 있으면 간선, 없으면 막 도달한 노드.
+  const target =
+    svg.querySelector(".graph-edge-group.is-frontier") ||
+    svg.querySelector(".graph-node.is-frontier");
+  if (target) followInViewport(svg, target);
+
   const caption = svg.closest(".graph-panel")?.querySelector(".step-caption");
   if (caption) {
     const item = plan[step - 1];
@@ -1756,6 +1797,10 @@ function renderGraphPanel(container, title, graph, options = {}) {
     const viewport = document.createElement("div");
     viewport.className = "graph-viewport";
     viewport.tabIndex = 0;
+    viewport.addEventListener("scroll", () => {
+      if (viewport._autoScrolling) return;
+      viewport._userScrollUntil = Date.now() + USER_SCROLL_PAUSE_MS;
+    });
     viewport.setAttribute("aria-label", `${title} 이동 영역`);
     const canvas = document.createElement("div");
     canvas.className = "graph-canvas";
@@ -1805,40 +1850,97 @@ function renderGraphPanel(container, title, graph, options = {}) {
       roots = first ? [first.id] : [];
     }
 
+    // 형제가 많으면 한 줄로 늘어놓지 않고 여러 줄로 접는다. 29노드 케이스에서 리프
+    // 18개를 한 줄에 두면 viewBox 폭이 5,000px 을 넘어 스크롤로 감당할 수 없었다.
+    // 이것은 축소가 아니라 배치 변경이므로 "축소하지 마라" 방침과 충돌하지 않는다.
+    //
+    // 슬롯을 되감는 방식은 서로 다른 부모의 자식이 같은 x 를 쓰게 만들어 겹쳤다.
+    // 대신 서브트리가 차지하는 폭을 먼저 재고, 그 폭만큼 자리를 잡아 준다.
+    // 한 줄 개수를 뷰포트 폭에서 재면 안 된다. 결과 화면 패널은 기본 접힘이라
+    // clientWidth 가 0 이고, 펼쳐도 좌우 2단 그리드의 좌측 칸(약 520px)이 잡혀
+    // 진행 중 화면과 결과 화면의 배치가 서로 달라졌다(2026-08-29 실측:
+    // 2155×1282 vs 2101×1067). 측정 시점에 좌우되지 않는 고정 기준을 쓴다.
+    // 한 줄에 4개로 고정한다. 29노드 케이스에서 실측한 결과 4개일 때 가장 좁았다.
+    //   4개 → 2,101px · 6개 → 2,926px (자식이 서브트리를 가지면 줄 폭이 곱으로 는다)
+    // 뷰포트 폭에서 재던 종전 방식은 접힘·그리드 때문에 화면마다 값이 달라졌다.
+    const perRow = 4;
+
     const depth = new Map();
-    let leafSlot = 0;
+    const shift = new Map();   // 같은 깊이 안에서 몇 번째 줄인지(부모에서 물려받는다)
     const placed = new Set();
-    const assign = (id, level) => {
-      if (placed.has(id)) return positions.get(id).x;
+
+    // 서브트리가 쓰는 가로 슬롯 수. 자식을 여러 줄로 접으면 가장 넓은 줄이 폭이 된다.
+    const spanCache = new Map();
+    const measuring = new Set();
+    const spanOf = (id) => {
+      if (spanCache.has(id)) return spanCache.get(id);
+      if (measuring.has(id)) return 1;
+      measuring.add(id);
+      const kids = children.get(id) || [];
+      let span = 1;
+      if (kids.length) {
+        let widest = 0;
+        for (let index = 0; index < kids.length; index += perRow) {
+          const row = kids.slice(index, index + perRow);
+          widest = Math.max(widest, row.reduce((sum, kid) => sum + spanOf(kid), 0));
+        }
+        span = Math.max(1, widest);
+      }
+      measuring.delete(id);
+      spanCache.set(id, span);
+      return span;
+    };
+
+    // 서브트리 높이(줄 수). 자식을 접은 만큼 아래 깊이가 밀린다.
+    const assign = (id, level, left, rowShift) => {
+      if (placed.has(id)) return;
       placed.add(id);
       depth.set(id, level);
-      const kids = (children.get(id) || []).filter((k) => !placed.has(k));
-      let x;
+      shift.set(id, rowShift);
+      const kids = (children.get(id) || []).filter((kid) => !placed.has(kid));
+      const span = spanOf(id);
       if (!kids.length) {
-        x = leafSlot * xGap;
-        leafSlot += 1;
-      } else {
-        const xs = kids.map((k) => assign(k, level + 1));
-        x = (Math.min(...xs) + Math.max(...xs)) / 2;
+        positions.set(id, { x: left * xGap, y: 0 });
+        return;
       }
-      positions.set(id, { x, y: 0 });
-      return x;
+      let rowShiftForKids = rowShift;
+      for (let index = 0; index < kids.length; index += perRow) {
+        const row = kids.slice(index, index + perRow);
+        let cursor = left;
+        row.forEach((kid) => {
+          assign(kid, level + 1, cursor, rowShiftForKids);
+          cursor += spanOf(kid);
+        });
+        // 다음 줄의 자식은 그만큼 아래로. 그 자식의 서브트리도 함께 내려간다.
+        rowShiftForKids += 1;
+      }
+      positions.set(id, { x: (left + span / 2 - 0.5) * xGap, y: 0 });
     };
-    roots.forEach((id) => assign(id, 0));
-    // 트리에 닿지 않은 노드가 있으면 마지막 줄에 이어 붙인다.
+    roots.forEach((id) => assign(id, 0, 0, 0));
     graph.nodes.forEach((n) => {
-      if (!placed.has(n.id)) assign(n.id, 0);
+      if (!placed.has(n.id)) assign(n.id, 0, 0, 0);
     });
 
     const maxDepth = Math.max(0, ...[...depth.values()]);
+    // 깊이마다 실제로 쓴 줄 수를 세어 아래 깊이를 그만큼 밀어 준다.
+    const rowsAtDepth = new Map();
+    depth.forEach((level, id) => {
+      rowsAtDepth.set(level, Math.max(rowsAtDepth.get(level) || 1, (shift.get(id) || 0) + 1));
+    });
+    const depthTop = new Map();
+    let cursorY = 58;
+    for (let level = 0; level <= maxDepth; level += 1) {
+      depthTop.set(level, cursorY);
+      cursorY += (rowsAtDepth.get(level) || 1) * yGap;
+    }
     const xs = [...positions.values()].map((p) => p.x);
     const minX = Math.min(...xs, 0);
     positions.forEach((p, id) => {
       p.x = p.x - minX + 70;
-      p.y = 58 + depth.get(id) * yGap;
+      p.y = depthTop.get(depth.get(id) || 0) + (shift.get(id) || 0) * yGap;
     });
-    const width = Math.max(320, Math.max(...[...positions.values()].map((p) => p.x)) + 90);
-    const height = Math.max(200, 58 + maxDepth * yGap + 118);
+    const width = Math.max(320, Math.max(...[...positions.values()].map((p) => p.x)) + 160);
+    const height = Math.max(200, cursorY + 118);
     svg.setAttribute("viewBox", `0 0 ${width} ${height}`);
     svg.setAttribute("preserveAspectRatio", "xMinYMin meet");
     svg.style.aspectRatio = `${width} / ${height}`;
