@@ -427,3 +427,57 @@ pgrep -a ollama || nohup ~/.local/bin/ollama serve > ~/ollama-serve.log 2>&1 &
 - 로컬에서만 필요한 파일과 생성물은 커밋 전에 `git status --short`와 `.gitignore`로 확인한다.
 - 실행하지 않은 설치·테스트·검증을 완료했다고 기록하지 않는다.
 - 공통 환경 변경은 관련 브랜치·커밋·AI 작업 로그에 변경 이유와 검증 결과를 남긴다.
+
+---
+
+## 12. 브라우저 화면 검증 (Playwright)
+
+`node --check`는 문법만 본다. 2026-08-29에 탐색 패널의 `ReferenceError: collapsible is
+not defined`가 화면에서는 "요청이 취소되었거나 연결이 종료되었습니다"로만 보였고, 문법
+검사와 단위 테스트를 모두 통과했다. **런타임 참조 오류는 실제 브라우저로만 잡힌다.**
+
+### 12.1 준비 — sudo 없이
+
+WSL 기본 이미지에는 Chromium이 필요로 하는 `libnss3` · `libnspr4` · `libasound2t64`가
+없고 한글 폰트도 없다(없으면 스크린샷의 한글이 `□`로 나온다). 시스템 설치에는 sudo가
+필요하므로 deb를 내려받아 홈 아래에 풀고 `LD_LIBRARY_PATH`로 붙인다.
+
+```bash
+bash scripts/setup_browser_verification.sh
+source .cache/browser-verify/env.sh
+```
+
+스크립트가 하는 일은 다음과 같다.
+
+| 단계 | 내용 |
+|---|---|
+| 1 | `uv run playwright install chromium` |
+| 2 | `apt-get download libnss3 libnspr4 libasound2t64` → `dpkg-deb -x`로 `.cache/browser-verify/root`에 전개 |
+| 3 | `apt-get download fonts-nanum` → `~/.local/share/fonts`에 복사 후 `fc-cache -f` |
+| 4 | `LD_LIBRARY_PATH`를 담은 `.cache/browser-verify/env.sh` 생성 |
+
+`.cache/`는 `.gitignore` 대상이다. 시스템 디렉터리는 건드리지 않는다.
+
+### 12.2 실행
+
+챗봇 서버가 떠 있어야 한다.
+
+```bash
+uv run python scripts/verify_chat_ui.py "컴퓨터공학과 전공필수 과목은?" \
+    --choice 1 --tag cse --out out/shots
+```
+
+| 옵션 | 뜻 |
+|---|---|
+| `--choice N` | 되묻기 선택지 N번(0부터)을 눌러 끝까지 진행 |
+| `--dark` | 다크 모드로 렌더 |
+| `--reduced-motion` | `prefers-reduced-motion: reduce` 상태로 렌더 |
+
+스크린샷과 함께 DOM 실측(JSON)을 표준출력으로 낸다. **콘솔 오류가 하나라도 있으면 종료
+코드 1**이므로 CI에서도 쓸 수 있다. `truncatedLabels`에 값이 있으면 노드 이름이 말줄임으로
+잘린 것이다.
+
+### 12.3 확인한 날짜와 방법
+
+2026-08-29 WSL2 Ubuntu 24.04에서 위 절차로 Chromium 151과 나눔고딕을 붙여 실행했고,
+3노드 질의의 결과 화면 스크린샷을 얻었다. `apt-get download`는 sudo 없이 동작한다.

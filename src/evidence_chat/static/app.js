@@ -337,6 +337,8 @@ async function ask(question) {
     if (!result && !failed) throw new Error("응답 결과가 없습니다.");
   } catch (error) {
     failed = true;
+    // 스트림 처리 중 예외를 삼키면 "연결이 종료됐다"로만 보여 원인을 찾을 수 없다.
+    console.error("[ask] 스트림 처리 실패", error);
     const timedOut = activeController && activeController.signal.reason === "timeout";
     markTimelineCancelled(
       timedOut ? "응답 대기 시간이 초과되었습니다." : "요청이 취소되었습니다."
@@ -957,7 +959,9 @@ function renderExplorationPanel(container) {
   panel.className = "exploration-panel";
   renderGraphTab(panel, state, false);
 
-  if (collapsible) {
+  // 처리 중 화면은 위에서 조기 반환하므로 여기까지 오는 것은 결과 화면뿐이다.
+  // 결과 화면은 기본으로 접어 두고, 펼치면 최종 상태와 재생을 볼 수 있다.
+  {
     const details = document.createElement("details");
     details.className = "exploration-fold";
     details.open = explorationExpanded;
@@ -968,9 +972,7 @@ function renderExplorationPanel(container) {
     });
     details.append(head, panel);
     container.append(details);
-    return;
   }
-  container.append(head, panel);
 }
 
 function addBadges(container, title, values, kind, usedSet) {
@@ -1136,6 +1138,11 @@ function addInspectionItem(container, label, value, options = {}) {
   item.append(head, body);
   container.append(item);
 }
+
+// TODO(묶음 4): 전체 추적을 위에서 아래로 읽는 "전체 보기" 모드와 텍스트/JSON
+// 내보내기 버튼. 질문 원문·시각·단계별 값이 모두 담겨 이 기록만으로 재현 가능해야 한다.
+// TODO(묶음 4): 개인 데이터 유래 필드 표시와 내보내기 마스킹(기본 켬). PR #32 의
+// personalized_service.py 가 병합되면 학번·이수 이력이 추적 화면에 실릴 수 있다.
 
 const SVG_NS = "http://www.w3.org/2000/svg";
 

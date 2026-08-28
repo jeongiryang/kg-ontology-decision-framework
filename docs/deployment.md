@@ -62,7 +62,7 @@ authtoken은 비밀값입니다. 셸 기록, 문서, 이슈, PR 또는 Git 파�
 
 ```dotenv
 KG_CHAT_DEBUG=false
-KG_CHAT_SHOW_QUERY_DETAILS=true
+KG_CHAT_SHOW_QUERY_DETAILS=summary
 KG_CHAT_MAX_CONCURRENT=1
 KG_QUERY_TRACE_RAW_QUESTION=false
 KG_QUERY_TRACE_FINGERPRINT=false
@@ -181,6 +181,19 @@ attach한 세션에서 현재 로그를 확인한 뒤 `Ctrl+B`, `D`로 다시 �
 - ngrok HTTPS URL은 공개 인터넷에서 접근 가능한 주소입니다. 현재 앱에는 정식 사용자 인증이 없습니다.
 - URL을 아는 사용자가 질문을 보낼 수 있으므로 제한된 시간과 대상에만 공유합니다.
 - 시연이 끝나면 `kg-tunnel` 세션을 즉시 종료합니다.
+### 외부 시연에서 추적 공개 수준 낮추기
+
+`KG_CHAT_SHOW_QUERY_DETAILS`는 `full`(기본) / `summary` / `off` 세 값을 받습니다. 기본값
+`full`은 9단계 전 항목과 승인 Cypher 원문, 버려진 재시도 이력까지 보여 줍니다. 승인 Cypher는
+공개 온톨로지에서 생성된 것이라 비밀이 아니지만, 외부 시연에서 질의 원문을 노출하고 싶지
+않으면 `summary`로 낮춥니다. `summary`는 단계·소요시간·행 수·한국어 설명만 남기고 Cypher
+원문과 질의 파라미터, 계획, 질문 원문 파생 값을 가립니다. 추적 패널 자체를 내리려면 `off`를
+씁니다. 기존 `true`/`false` 값도 각각 `full`/`off`로 읽으므로 하위 호환됩니다.
+
+```bash
+KG_CHAT_SHOW_QUERY_DETAILS=summary uv run python -m evidence_chat.server
+```
+
 - `.env`, Neo4j 비밀번호, ngrok authtoken, 모델 API key를 Git에 추가하지 않습니다.
 - Neo4j `7687`, Neo4j Browser `7474`, Ollama `11434`를 직접 터널링하지 않습니다.
 - `KG_CHAT_DEBUG=false`와 질문 원문·fingerprint trace 비활성 정책을 유지합니다.

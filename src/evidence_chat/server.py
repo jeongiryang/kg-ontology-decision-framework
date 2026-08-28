@@ -74,6 +74,38 @@ MAX_RESOLVED_ENTRIES = 8
 # 승인된 MATCH 경로의 최대 hop 수. 검증기가 허용하는 경로보다 넉넉하다.
 MAX_PATH_EDGES = 32
 _SAFE_TYPE_NAME = re.compile(r"[A-Za-z][A-Za-z0-9_]{0,79}\Z")
+
+# 추적 화면의 공개 수준. 기본은 full 이다. 이 프로젝트의 목적이 근거를 추적 가능하게
+# 보여 주는 것이고, 승인 Cypher 는 공개 온톨로지에서 생성된 것이라 비밀이 아니다.
+# 외부 시연에서는 실행 시 summary 로 낮춘다.
+DETAIL_FULL = "full"
+DETAIL_SUMMARY = "summary"
+DETAIL_OFF = "off"
+DETAIL_LEVELS = (DETAIL_FULL, DETAIL_SUMMARY, DETAIL_OFF)
+# 기존 boolean 값과의 하위 호환. true -> full, false -> off 로 읽는다.
+_LEGACY_DETAIL = {
+    "1": DETAIL_FULL, "true": DETAIL_FULL, "yes": DETAIL_FULL, "on": DETAIL_FULL,
+    "0": DETAIL_OFF, "false": DETAIL_OFF, "no": DETAIL_OFF, "off": DETAIL_OFF,
+}
+
+
+def _env_detail_level(name: str) -> str:
+    """Read the three-valued trace visibility, accepting the old boolean values."""
+
+    raw = os.getenv(name)
+    if raw is None:
+        return DETAIL_FULL
+    value = raw.strip().lower()
+    if value in DETAIL_LEVELS:
+        return value
+    if value in _LEGACY_DETAIL:
+        return _LEGACY_DETAIL[value]
+    if not value:
+        return DETAIL_FULL
+    raise ConfigurationError(
+        f"{name} must be one of {', '.join(DETAIL_LEVELS)} (or legacy true/false)"
+    )
+
 _AUTOSTRING = re.compile(r"\$autostring_\d+|\$autoint_\d+")
 
 EXAMPLE_QUESTIONS = (
@@ -96,6 +128,100 @@ class ChatService(Protocol):
     ) -> ChatResponse: ...
 
 
+# ── 브라우저로 내보내는 필드 목록 ──────────────────────────────────────────────
+# 여기 없는 값은 나가지 않는다. 각 항목에 왜 안전한지를 한 줄씩 적는다. 나중에 이
+# 목록만 보면 공개 범위를 알 수 있어야 한다.
+#
+# 절대 내보내지 않는 것: 접속 정보·토큰·내부 경로·스택트레이스·시스템 프롬프트.
+PUBLISHED_FIELDS: dict[str, dict[str, str]] = {
+    "QUESTION_ANALYSIS": {
+        "status": "계획 판정 코드. 통제된 열거값이라 자유 문자열이 아니다",
+        "query_plan": "검증을 통과한 QueryPlan. 값은 사용자 질문에서 왔고 온톨로지 필터로 한정된다",
+        "missing": "부족한 항목의 통제 코드. 대문자 스네이크만 통과시킨다",
+        "clarification_available": "되묻기 가능 여부. 불리언",
+        "question_text": "사용자가 입력한 원문. 이미 화면에 표시된 값이다",
+    },
+    "SCHEMA_SELECTION": {
+        "labels": "온톨로지가 선언한 라벨 이름. 공개 명세에 있는 값이다",
+        "relationships": "온톨로지가 선언한 관계 타입. 위와 같다",
+        "node_label_count": "개수. 정수",
+        "relationship_count": "개수. 정수",
+    },
+    "CYPHER_GENERATION": {
+        "candidate_generated": "후보 생성 여부. 불리언",
+        "candidate_attempt": "시도 회차. 1~10 정수",
+        "retry": "재시도 여부. 불리언",
+        "message": "고정 안내 문구. 모델 출력이 아니다",
+        "discarded_cypher": "버려진 후보 Cypher. 실행되지 않았음을 배지로 함께 표시한다",
+        "discard_reason": "버려진 사유 오류 코드. 통제된 대문자 코드",
+    },
+    "STATIC_VALIDATION": {
+        "read_only_syntax_verified": "검사 통과 여부. 불리언",
+        "ontology_schema_verified": "검사 통과 여부. 불리언",
+        "parameter_binding_verified": "검사 통과 여부. 불리언",
+        "direct_evidence_path_verified": "검사 통과 여부. 불리언",
+        "comment_free_canonical": "검사 통과 여부. 불리언",
+        "limit": "LIMIT 값. 정수",
+    },
+    "NEO4J_EXPLAIN": {
+        "approved_cypher": "검증기를 통과한 질의. 공개 온톨로지에서 생성돼 비밀이 아니다",
+        "parameters": "질의 파라미터. 온톨로지 필터로 한정되고 키 이름으로 비밀값을 거른다",
+        "operators": "Neo4j 실행계획 operator 이름. 서버 내부 경로를 담지 않는다",
+        "labels": "SCHEMA_SELECTION 과 같은 성격",
+        "relationships": "SCHEMA_SELECTION 과 같은 성격",
+        "limit": "LIMIT 값. 정수",
+        "path": "승인된 MATCH 경로. 온톨로지 라벨·관계 이름만 담는다",
+        "query_graph": "위 경로로 만든 표시용 투영. 식별자는 HMAC 로 가린다",
+    },
+    "GRAPH_EXECUTION": {
+        "row_count": "반환 행 수. 정수",
+        "query_elapsed_ms": "실측 소요 시간. 정수",
+        "traversal_steps": "PROFILE 실측 단계. operator 이름·행수·DB 접근·한국어 설명",
+    },
+    "RESULT_VALIDATION": {
+        "row_count": "정수",
+        "fact_count": "정수",
+        "verified_evidence_count": "정수",
+        "fact_status_verified": "불리언",
+        "evidence_status_verified": "불리언",
+        "direct_provenance_verified": "불리언",
+        "rejected_row_count": "정수",
+    },
+    "CLAIM_BUILDING": {
+        "claim_count": "정수",
+        "claim_types": "통제된 열거값",
+        "aggregate": "불리언",
+        "citation_target_count": "정수",
+        "provenance_graph": "승인된 Fact-Evidence 쌍의 투영. 식별자는 HMAC 로 가린다",
+        "traversal_graph": "위와 같은 성격의 통합 투영",
+    },
+    "ANSWER_RENDERING": {
+        "citation_count": "정수",
+        "deterministic_renderer": "불리언",
+        "final_answer_llm_calls": "정수",
+    },
+    "COMPLETED": {
+        "total_elapsed_ms": "정수",
+        "stage_timings_ms": "단계별 실측 시간. 정수 맵",
+        "final_status": "통제된 열거값",
+        "retry_count": "정수",
+        "citation_count": "정수",
+    },
+}
+
+# summary 수준에서 가리는 필드. 질의 원문과 그로부터 파생된 값만 뺀다.
+SUMMARY_HIDDEN_FIELDS = frozenset(
+    {
+        "approved_cypher",
+        "discarded_cypher",
+        "parameters",
+        "query_plan",
+        "question_text",
+        "path",
+    }
+)
+
+
 class InspectionCollector:
     """Build stage-scoped inspection updates from approved pipeline facts only."""
 
@@ -112,7 +238,8 @@ class InspectionCollector:
     _SECRET_KEY_MARKERS = ("password", "token", "secret", "api_key", "uri")
     _LIMIT = re.compile(r"\bLIMIT\s+(\d+)\s*\Z", re.IGNORECASE)
 
-    def __init__(self) -> None:
+    def __init__(self, detail_level: str = DETAIL_FULL) -> None:
+        self.detail_level = detail_level
         self.stage_timings_ms: dict[str, int] = {}
         self._active_attempt: int | None = None
         self._pending_query: dict[str, Any] = {}
@@ -320,8 +447,14 @@ class InspectionCollector:
             else 0
         )
 
-    @staticmethod
-    def _update(event: ProgressEvent, summary: dict[str, Any]) -> dict[str, Any]:
+    def _update(self, event: ProgressEvent, summary: dict[str, Any]) -> dict[str, Any]:
+        # summary 수준에서는 질의 원문과 그로부터 파생된 값을 가린다.
+        if self.detail_level == DETAIL_SUMMARY:
+            summary = {
+                key: value
+                for key, value in summary.items()
+                if key not in SUMMARY_HIDDEN_FIELDS
+            }
         payload: dict[str, Any] = {
             "type": "inspection_update",
             "version": 2,
@@ -330,7 +463,7 @@ class InspectionCollector:
             "summary": summary,
             "elapsed_ms": event.elapsed_ms,
         }
-        attempt = InspectionCollector._candidate_attempt(event)
+        attempt = self._candidate_attempt(event)
         if attempt is not None:
             payload["attempt"] = attempt
         return payload
@@ -631,7 +764,7 @@ class ChatState:
         self.error: str | None = None
         self.error_code: str | None = None
         self.debug = False
-        self.show_query_details = False
+        self.detail_level = DETAIL_FULL
         self.max_concurrent = DEFAULT_MAX_CONCURRENT
         self.client_timeout_seconds = DEFAULT_CLIENT_TIMEOUT_SECONDS
         self.limiter: anyio.Semaphore | None = None
@@ -650,7 +783,7 @@ class ChatState:
             # 켜도 처리 과정 상세가 열리지 않았다(2026-08-28 실측).
             load_dotenv(override=False)
             self.debug = _env_bool("KG_CHAT_DEBUG")
-            self.show_query_details = _env_bool("KG_CHAT_SHOW_QUERY_DETAILS")
+            self.detail_level = _env_detail_level("KG_CHAT_SHOW_QUERY_DETAILS")
             self.max_concurrent = _env_int(
                 "KG_CHAT_MAX_CONCURRENT", DEFAULT_MAX_CONCURRENT, 1, 4
             )
@@ -743,7 +876,8 @@ async def health(request: Request) -> Response:
         "max_question_length": MAX_QUESTION_LENGTH,
         "client_timeout_seconds": state.client_timeout_seconds,
         "debug": state.debug,
-        "show_query_details": state.show_query_details,
+        "show_query_details": state.detail_level != DETAIL_OFF,
+        "detail_level": state.detail_level,
     }
     if state.debug:
         payload["error_code"] = state.error_code
@@ -859,7 +993,7 @@ async def ask(request: Request) -> Response:
     async def stream() -> AsyncIterator[bytes]:
         queue: asyncio.Queue[dict[str, Any]] = asyncio.Queue()
         loop = asyncio.get_running_loop()
-        collector = InspectionCollector()
+        collector = InspectionCollector(state.detail_level)
 
         async def run_request() -> None:
             finished: asyncio.Future[None] = loop.create_future()
@@ -870,7 +1004,7 @@ async def ask(request: Request) -> Response:
                 clarification_update = _clarification_options_event(event)
                 if clarification_update is not None:
                     loop.call_soon_threadsafe(queue.put_nowait, clarification_update)
-                if state.show_query_details and inspection_update is not None:
+                if state.detail_level != DETAIL_OFF and inspection_update is not None:
                     loop.call_soon_threadsafe(queue.put_nowait, inspection_update)
 
             def worker() -> None:

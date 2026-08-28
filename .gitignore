@@ -12,3 +12,4 @@ logs/query-runs/
 
 # 테스트 커버리지 산출물
 .coverage
+.cache/

@@ -18,7 +18,17 @@ from evidence_chat.graph_projection import (
     build_provenance_projection,
     build_query_structure_projection,
 )
-from evidence_chat.server import ChatState, InspectionCollector, create_app
+from evidence_chat.server import (
+    DETAIL_FULL,
+    DETAIL_OFF,
+    DETAIL_SUMMARY,
+    SUMMARY_HIDDEN_FIELDS,
+    ChatState,
+    InspectionCollector,
+    _env_detail_level,
+    create_app,
+)
+from kg_builder.config import ConfigurationError
 from kg_builder.answer.contracts import ChatErrorCode, ChatResponse, ChatStatus
 from kg_builder.answer.service import CurriculumChatService
 from kg_builder.query.natural_language_service import NaturalLanguageResult
@@ -1059,3 +1069,78 @@ class InspectionGraphProjectionTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class DetailLevelTests(unittest.TestCase):
+    """추적 공개 수준 3값과 그 검열 효과."""
+
+    def test_legacy_boolean_values_map_to_full_and_off(self) -> None:
+        cases = {
+            "full": DETAIL_FULL, "summary": DETAIL_SUMMARY, "off": DETAIL_OFF,
+            "true": DETAIL_FULL, "yes": DETAIL_FULL, "1": DETAIL_FULL,
+            "false": DETAIL_OFF, "no": DETAIL_OFF, "0": DETAIL_OFF,
+            "FULL": DETAIL_FULL, " summary ": DETAIL_SUMMARY,
+        }
+        for raw, expected in cases.items():
+            with self.subTest(raw=raw):
+                with mock.patch.dict("os.environ", {"KG_CHAT_SHOW_QUERY_DETAILS": raw}):
+                    self.assertEqual(_env_detail_level("KG_CHAT_SHOW_QUERY_DETAILS"), expected)
+
+    def test_unset_defaults_to_full(self) -> None:
+        with mock.patch.dict("os.environ", {}, clear=True):
+            self.assertEqual(_env_detail_level("KG_CHAT_SHOW_QUERY_DETAILS"), DETAIL_FULL)
+
+    def test_invalid_value_is_rejected(self) -> None:
+        with mock.patch.dict("os.environ", {"KG_CHAT_SHOW_QUERY_DETAILS": "verbose"}):
+            with self.assertRaises(ConfigurationError):
+                _env_detail_level("KG_CHAT_SHOW_QUERY_DETAILS")
+
+    def test_summary_level_drops_query_derived_fields(self) -> None:
+        """summary 는 승인 Cypher·파라미터·계획·질문 파생값을 내보내지 않는다."""
+
+        full = InspectionCollector(DETAIL_FULL)
+        summary = InspectionCollector(DETAIL_SUMMARY)
+        details = {
+            "validated_cypher": "MATCH (o:CourseOffering) WHERE o.status = 'VERIFIED' RETURN o LIMIT 1",
+            "parameters": {"academic_year": 2026},
+            "labels": ["CourseOffering"],
+            "relationship_types": ["SUPPORTED_BY"],
+            "path_edges": [
+                {
+                    "order": 1,
+                    "start_label": "CurriculumVersion",
+                    "relationship_type": "HAS_RULE",
+                    "end_label": "Rule",
+                }
+            ],
+            "limit": 1,
+            "candidate_attempt": 1,
+            "parameter_binding_verified": True,
+            "direct_evidence_path_verified": True,
+        }
+        for collector in (full, summary):
+            collector.record(
+                ProgressEvent(
+                    ProgressPhase.CYPHER_GENERATION, ProgressState.STARTED, 0,
+                    {"candidate_attempt": 1},
+                )
+            )
+        static_event = ProgressEvent(
+            ProgressPhase.STATIC_VALIDATION, ProgressState.COMPLETED, 1, details
+        )
+        explain_event = ProgressEvent(
+            ProgressPhase.NEO4J_EXPLAIN, ProgressState.COMPLETED, 1,
+            {"operators": ["NodeIndexSeek"], "candidate_attempt": 1},
+        )
+        full.record(static_event)
+        summary.record(static_event)
+        full_explain = full.record(explain_event)
+        summary_explain = summary.record(explain_event)
+
+        self.assertIn("approved_cypher", full_explain["summary"])
+        for field in SUMMARY_HIDDEN_FIELDS:
+            with self.subTest(field=field):
+                self.assertNotIn(field, summary_explain["summary"])
+        # 가려지지 않는 값은 그대로 남는다.
+        self.assertIn("operators", summary_explain["summary"])
+        self.assertNotIn("MATCH", json.dumps(summary_explain, ensure_ascii=False))
