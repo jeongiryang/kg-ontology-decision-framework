@@ -158,6 +158,16 @@ class SafetyPipeline:
                 parameters=dict(validated.parameters),
                 labels=list(validated.labels),
                 relationship_types=list(validated.relationship_types),
+                # 화면이 경로를 순서대로 그리려면 정렬된 집합이 아니라 이 목록이 필요하다.
+                path_edges=[
+                    {
+                        "order": step.order,
+                        "start_label": step.start_label,
+                        "relationship_type": step.relationship_type,
+                        "end_label": step.end_label,
+                    }
+                    for step in validated.path_edges
+                ],
                 limit=validated.limit,
                 parameter_binding_verified=True,
                 direct_evidence_path_verified=plan.evidence_required,

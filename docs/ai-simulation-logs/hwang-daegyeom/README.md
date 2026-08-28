@@ -5,7 +5,7 @@
 - 파일명 규칙: `NNNN-short-task-name.md`
   - `NNNN`은 이 폴더에서 독립적으로 증가하는 4자리 번호다.
   - 작업명은 영문 소문자 kebab-case로 작성한다.
-- 현재 다음 로그 번호: `0011`
+- 현재 다음 로그 번호: `0012`
 - 중앙 템플릿: [AI 시뮬레이션 로그 템플릿](../_template.md)
 - 중앙 운영 규칙: [AI 시뮬레이션 로그 운영 규칙](../README.md)
 
@@ -21,3 +21,4 @@
 - [0008. 되묻기에 자격을 두어 뜻 없는 입력의 통로를 막음](0008-clarification-requires-grounding.md)
 - [0009. 재시작 절차 확립과 상태 점검의 사각지대 기록](0009-restart-procedure-and-health-blind-spot.md)
 - [0010. 선택지가 답이 되지 않게 — 되묻는 축을 올리고 범위를 관계로 거름](0010-choices-must-not-be-the-answer.md)
+- [0011. 실제 질의가 밟은 경로를 그대로 그리는 탐색 시각화](0011-query-traversal-visualization.md)

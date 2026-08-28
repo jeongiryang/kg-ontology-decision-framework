@@ -405,15 +405,20 @@ kbd {
 .graph-controls { display: flex; align-items: center; gap: 7px; flex-wrap: wrap; margin-bottom: 8px; }
 .graph-scale { min-width: 42px; text-align: center; color: var(--muted); font-size: 0.72rem; }
 .graph-viewport {
-  width: 100%; max-width: 100%; max-height: 520px;
-  overflow-x: hidden; overflow-y: auto; overscroll-behavior: contain;
+  /* 노드가 잘리지 않게 가로 스크롤을 허용하고 높이를 넉넉히 준다. 종전에는
+     overflow-x:hidden 이라 폭을 넘어선 노드가 그대로 잘려 나갔다. */
+  width: 100%; max-width: 100%; max-height: 760px;
+  overflow-x: auto; overflow-y: auto; overscroll-behavior: contain;
   border: 1px solid var(--line); border-radius: 8px; background: var(--panel);
 }
 .graph-viewport.is-pannable { overflow: auto; }
 .graph-viewport:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 .graph-canvas { width: 100%; min-width: 0; margin: 0 auto; }
 .graph-viewport svg {
-  display: block; width: 100%; height: auto; max-width: none; transform-origin: left top;
+  display: block; height: auto; max-width: none; transform-origin: left top;
+  /* 뷰포트보다 넓으면 줄이지 않고 가로 스크롤로 보여 준다. 억지로 100% 에 맞추면
+     글자가 뭉개져 읽을 수 없다. */
+  width: max(100%, var(--graph-natural-width, 100%));
 }
 .graph-edge {
   fill: none; stroke: var(--muted); stroke-width: 1.5; opacity: 0.68;
@@ -574,3 +579,303 @@ kbd {
 .trail-picked {
   font-weight: 600;
 }
+
+/* 탐색 재생 -----------------------------------------------------------------
+   재생 중에는 아직 밟지 않은 노드·간선을 흐리게 두고, 지나간 것만 색을 준다.
+   순서는 승인된 MATCH 패턴이 쓰인 차례이며 Neo4j 내부 실행 순서가 아니다. */
+.graph-simulate { margin-left: auto; font-variant-numeric: tabular-nums; }
+
+.graph-canvas svg.is-simulating .graph-node,
+.graph-canvas svg.is-simulating .graph-edge,
+.graph-canvas svg.is-simulating .graph-edge-label-group {
+  opacity: 0.22;
+  transition: opacity 240ms ease, stroke 240ms ease, filter 240ms ease;
+}
+
+.graph-canvas svg.is-simulating .graph-node.is-visited,
+.graph-canvas svg.is-simulating .graph-edge.is-traversed,
+.graph-canvas svg.is-simulating .graph-edge-label-group.is-traversed {
+  opacity: 1;
+}
+
+.graph-canvas svg.is-simulating .graph-node.is-visited rect {
+  stroke: #2f855a;
+  stroke-width: 2.5;
+  fill: #e6fffa;
+}
+
+.graph-canvas svg.is-simulating .graph-edge.is-traversed {
+  stroke: #2f855a;
+  stroke-width: 2.6;
+}
+
+.graph-canvas svg.is-simulating .graph-edge.is-active {
+  stroke: #dd6b20;
+  stroke-width: 3.4;
+}
+
+.graph-canvas svg.is-simulating .graph-edge-label-group.is-active rect {
+  fill: #fffaf0;
+  stroke: #dd6b20;
+}
+
+@media (prefers-color-scheme: dark) {
+  .graph-canvas svg.is-simulating .graph-node.is-visited rect {
+    fill: #12312a;
+    stroke: #4fd1a5;
+  }
+  .graph-canvas svg.is-simulating .graph-edge.is-traversed { stroke: #4fd1a5; }
+  .graph-canvas svg.is-simulating .graph-edge.is-active { stroke: #f6ad55; }
+  .graph-canvas svg.is-simulating .graph-edge-label-group.is-active rect {
+    fill: #3a2a12;
+    stroke: #f6ad55;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .graph-canvas svg.is-simulating .graph-node,
+  .graph-canvas svg.is-simulating .graph-edge,
+  .graph-canvas svg.is-simulating .graph-edge-label-group { transition: none; }
+}
+
+/* 왼쪽 그래프 · 오른쪽 방문 순서 ------------------------------------------- */
+.graph-split {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(220px, 300px);
+  gap: 18px;
+  align-items: start;
+}
+@media (max-width: 900px) {
+  .graph-split { grid-template-columns: minmax(0, 1fr); }
+}
+
+.traversal-side {
+  border: 1px solid var(--line, #d5dde1);
+  border-radius: 10px;
+  padding: 14px 16px;
+  background: rgba(127, 127, 127, 0.05);
+}
+.traversal-side h5 {
+  margin: 0 0 10px;
+  font-size: 13px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+}
+
+.traversal-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  counter-reset: none;
+}
+.traversal-step {
+  display: flex;
+  gap: 10px;
+  align-items: flex-start;
+  padding: 7px 9px;
+  border-radius: 8px;
+  border: 1px solid transparent;
+  opacity: 0.45;
+  transition: opacity 200ms ease, border-color 200ms ease, background 200ms ease;
+}
+.traversal-step.is-traversed { opacity: 1; border-color: #2f855a; }
+.traversal-step.is-active {
+  opacity: 1;
+  border-color: #dd6b20;
+  background: rgba(221, 107, 32, 0.09);
+}
+/* 재생 전에는 전부 또렷하게 보여 준다. */
+.graph-split:not(:has(svg.is-simulating)) .traversal-step { opacity: 1; }
+
+.traversal-mark {
+  flex: 0 0 auto;
+  font-size: 14px;
+  line-height: 1.5;
+  font-variant-numeric: tabular-nums;
+}
+.traversal-body { min-width: 0; }
+.traversal-hop {
+  margin: 0;
+  font-size: 13px;
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+.traversal-rel {
+  margin: 2px 0 0;
+  font-size: 11.5px;
+  opacity: 0.7;
+  overflow-wrap: anywhere;
+}
+
+@media (prefers-color-scheme: dark) {
+  .traversal-step.is-traversed { border-color: #4fd1a5; }
+  .traversal-step.is-active {
+    border-color: #f6ad55;
+    background: rgba(246, 173, 85, 0.12);
+  }
+}
+
+/* 원형 노드 그래프 ---------------------------------------------------------
+   노드는 원, 원 안에는 방문 순서, 이름은 원 아래. 간선은 화살표와 ①② 번호. */
+.graph-node-circle {
+  fill: #ffffff;
+  stroke: #94a3b0;
+  stroke-width: 2.5;
+  transition: fill 200ms ease, stroke 200ms ease;
+}
+.graph-node[data-kind="context"] .graph-node-circle { stroke: #3b6fb0; }
+.graph-node[data-kind="course"]  .graph-node-circle { stroke: #7a52c0; }
+.graph-node[data-kind="rule"]    .graph-node-circle { stroke: #c9761f; }
+.graph-node[data-kind="evidence"].graph-node-circle,
+.graph-node[data-kind="evidence"] .graph-node-circle { stroke: #1f8f68; }
+
+.graph-node-order {
+  font-size: 17px;
+  font-weight: 700;
+  fill: #1d2b33;
+  font-variant-numeric: tabular-nums;
+  pointer-events: none;
+}
+.graph-node-name {
+  font-size: 13px;
+  font-weight: 600;
+  fill: currentColor;
+  pointer-events: none;
+}
+.graph-node-type {
+  font-size: 10.5px;
+  fill: currentColor;
+  opacity: 0.55;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  pointer-events: none;
+}
+.graph-edge-label-bg { fill: #ffffff; stroke: none; }
+
+@media (prefers-color-scheme: dark) {
+  .graph-node-circle { fill: #1b242a; stroke: #55707f; }
+  .graph-node-order { fill: #e6eef2; }
+  .graph-edge-label-bg { fill: #131b1f; }
+}
+
+/* 재생 중 방문 표시 */
+.graph-canvas svg.is-simulating .graph-node.is-visited .graph-node-circle {
+  stroke: #2f855a;
+  stroke-width: 3.5;
+  fill: #e6fffa;
+}
+.graph-canvas svg.is-simulating .graph-edge-group { opacity: 0.22; }
+.graph-canvas svg.is-simulating .graph-edge-group.is-traversed { opacity: 1; }
+.graph-canvas svg.is-simulating .graph-edge-group.is-traversed .graph-edge { stroke: #2f855a; }
+.graph-canvas svg.is-simulating .graph-edge-group.is-active .graph-edge {
+  stroke: #dd6b20;
+  stroke-width: 3.4;
+}
+@media (prefers-color-scheme: dark) {
+  .graph-canvas svg.is-simulating .graph-node.is-visited .graph-node-circle {
+    fill: #12312a; stroke: #4fd1a5;
+  }
+  .graph-canvas svg.is-simulating .graph-edge-group.is-traversed .graph-edge { stroke: #4fd1a5; }
+  .graph-canvas svg.is-simulating .graph-edge-group.is-active .graph-edge { stroke: #f6ad55; }
+}
+
+/* 탐색이 끊긴 지점 --------------------------------------------------------- */
+.projection-note.is-failed { color: #c53030; font-weight: 600; }
+.graph-node.is-dead-end .graph-node-circle {
+  stroke: #c53030;
+  stroke-width: 3;
+  stroke-dasharray: 5 4;
+}
+.graph-node-fail {
+  font-size: 20px;
+  font-weight: 700;
+  fill: #c53030;
+  pointer-events: none;
+}
+@media (prefers-color-scheme: dark) {
+  .projection-note.is-failed { color: #fc8181; }
+  .graph-node.is-dead-end .graph-node-circle { stroke: #fc8181; }
+  .graph-node-fail { fill: #fc8181; }
+}
+
+/* 노드 안에 이름, 간선에 순서 ---------------------------------------------- */
+.graph-node-box {
+  fill: #ffffff;
+  stroke: #94a3b0;
+  stroke-width: 2;
+  transition: fill 200ms ease, stroke 200ms ease;
+}
+.graph-node[data-kind="context"]  .graph-node-box { stroke: #3b6fb0; }
+.graph-node[data-kind="course"]   .graph-node-box { stroke: #7a52c0; }
+.graph-node[data-kind="rule"]     .graph-node-box { stroke: #c9761f; }
+.graph-node[data-kind="evidence"] .graph-node-box { stroke: #1f8f68; }
+.graph-node .graph-node-name { font-size: 13px; font-weight: 600; fill: #16242b; }
+
+.graph-edge-badge { fill: #ffffff; stroke: #94a3b0; stroke-width: 2; }
+.graph-edge-badge-text {
+  font-size: 12px; font-weight: 700; fill: #16242b;
+  font-variant-numeric: tabular-nums; pointer-events: none;
+}
+
+@media (prefers-color-scheme: dark) {
+  .graph-node-box { fill: #1b242a; stroke: #55707f; }
+  .graph-node .graph-node-name { fill: #e6eef2; }
+  .graph-edge-badge { fill: #131b1f; stroke: #55707f; }
+  .graph-edge-badge-text { fill: #e6eef2; }
+}
+
+.graph-canvas svg.is-simulating .graph-node.is-visited .graph-node-box {
+  stroke: #2f855a; stroke-width: 3; fill: #e6fffa;
+}
+.graph-canvas svg.is-simulating .graph-edge-group.is-active .graph-edge-badge {
+  stroke: #dd6b20; stroke-width: 2.6;
+}
+@media (prefers-color-scheme: dark) {
+  .graph-canvas svg.is-simulating .graph-node.is-visited .graph-node-box {
+    fill: #12312a; stroke: #4fd1a5;
+  }
+  .graph-canvas svg.is-simulating .graph-edge-group.is-active .graph-edge-badge {
+    stroke: #f6ad55;
+  }
+}
+.graph-node.is-dead-end .graph-node-box {
+  stroke: #c53030; stroke-width: 3; stroke-dasharray: 5 4;
+}
+
+/* 노드 안 카테고리(온톨로지 라벨의 한국어 이름) */
+.graph-node-category {
+  font-size: 10.5px;
+  font-weight: 600;
+  letter-spacing: 0.03em;
+  fill: #64748b;
+  pointer-events: none;
+}
+.graph-node[data-kind="context"]  .graph-node-category { fill: #3b6fb0; }
+.graph-node[data-kind="course"]   .graph-node-category { fill: #7a52c0; }
+.graph-node[data-kind="rule"]     .graph-node-category { fill: #c9761f; }
+.graph-node[data-kind="evidence"] .graph-node-category { fill: #1f8f68; }
+@media (prefers-color-scheme: dark) {
+  .graph-node-category { fill: #94a3b0; }
+  .graph-node[data-kind="context"]  .graph-node-category { fill: #7aa7d9; }
+  .graph-node[data-kind="course"]   .graph-node-category { fill: #b096e0; }
+  .graph-node[data-kind="rule"]     .graph-node-category { fill: #e8a34f; }
+  .graph-node[data-kind="evidence"] .graph-node-category { fill: #4fd1a5; }
+}
+
+/* 후보 스키마: 실제 사용 여부 구분 */
+.schema-badge.is-unused { opacity: 0.45; border-style: dashed; }
+.schema-badge.is-used { font-weight: 600; }
+
+/* 방문 순서 목록: 원본 노드 이름 + 카테고리 */
+.traversal-hop { display: flex; flex-direction: column; gap: 3px; }
+.traversal-node { display: block; }
+.traversal-cat {
+  display: block;
+  font-size: 10.5px;
+  font-style: normal;
+  font-weight: 500;
+  opacity: 0.65;
+}
+.traversal-arrow { font-size: 12px; opacity: 0.6; }

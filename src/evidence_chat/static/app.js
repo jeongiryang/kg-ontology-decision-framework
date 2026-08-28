@@ -25,6 +25,7 @@ const el = {
   elapsed: $("elapsed"),
   asked: $("asked"),
   progressSteps: $("progress-steps"),
+  progressExploration: $("progress-exploration"),
   answerQuestion: $("answer-question"),
   answerBadge: $("answer-badge"),
   answerTitle: $("answer-title"),
@@ -67,6 +68,7 @@ let modalZoom = 1;
 let queryDetailsEnabled = false;
 let timelineEvents = [];
 let inspectionUpdates = new Map();
+let explorationTabTouched = false;
 let expandedStages = new Set();
 let graphScales = new Map();
 let activeExplorationTab = "schema";
@@ -270,7 +272,10 @@ async function ask(question) {
   inspectionUpdates = new Map();
   expandedStages = new Set();
   graphScales = new Map();
+  // 새 질문은 처음부터 다시 재생한다.
+  autoplayedGraphs.clear();
   activeExplorationTab = "schema";
+  explorationTabTouched = false;
   lastResult = null;
   clarificationPresentation = null;
   renderTimelines();
@@ -362,7 +367,7 @@ async function ask(question) {
     try {
       renderAnswer(result);
       renderTimelines();
-      renderExplorationPanel(el.answerExploration);
+      renderExplorationPanels();
     } catch (error) {
       showNotice(
         el.progressError,
@@ -692,6 +697,9 @@ function renderInspectionUpdate(update) {
     summary: update.summary || {},
   });
   renderTimelines();
+  // 승인 그래프는 처리가 끝나기 전에 도착한다. 도착하는 즉시 처리 중 화면에
+  // 그려야 "탐색 중"으로 보인다.
+  renderExplorationPanels();
 }
 
 function addExplorationLink(container, label, tab) {
@@ -701,7 +709,7 @@ function addExplorationLink(container, label, tab) {
   button.textContent = label;
   button.addEventListener("click", () => {
     activeExplorationTab = tab;
-    renderExplorationPanel(el.answerExploration);
+    renderExplorationPanels();
     el.answerExploration.scrollIntoView({ behavior: "smooth", block: "start" });
   });
   container.append(button);
@@ -716,6 +724,14 @@ function explorationState() {
     explain: explain && explain.status === "COMPLETED" ? explain.summary : null,
     claims: claims && claims.status === "COMPLETED" ? claims.summary : null,
   };
+}
+
+// 처리 중 화면과 결과 화면에 같은 그래프가 떠야 한다. 두 컨테이너를 항상 함께
+// 갱신해, 어느 화면으로 넘어가도 같은 것이 보이게 한다.
+function renderExplorationPanels() {
+  [el.progressExploration, el.answerExploration].forEach((container) => {
+    if (container) renderExplorationPanel(container);
+  });
 }
 
 function renderExplorationPanel(container) {
@@ -736,15 +752,27 @@ function renderExplorationPanel(container) {
       state.schema.labels.length
     ),
     cypher: Boolean(state.explain && typeof state.explain.approved_cypher === "string"),
+    // 실제로 그래프를 탐색한 질문에만 연다. 되묻기처럼 조회가 일어나지 않은
+    // 요청에는 보여 줄 탐색이 없다. 조회했는데 결과가 0건인 경우는 탐색을 한
+    // 것이므로 연다(EXPLAIN 승인이 그 증거다).
     graph: Boolean(
-      state.explain &&
-      state.explain.query_graph &&
-      state.claims &&
-      state.claims.provenance_graph
+      (state.explain && state.explain.query_graph) ||
+      (state.claims && state.claims.provenance_graph)
     ),
   };
   const availableTabs = Object.keys(availability).filter((key) => availability[key]);
-  if (!availability[activeExplorationTab] && availableTabs.length) {
+  // 보여 줄 승인 정보가 하나도 없으면 상자 자체를 내린다. 되묻기처럼 조회가
+  // 실행되지 않은 요청에서 비활성 탭과 "없습니다" 문구만 남은 빈 껍데기가
+  // 화면을 차지하던 문제를 없앤다.
+  if (!availableTabs.length) {
+    container.hidden = true;
+    return;
+  }
+  // 탐색이 있었으면 그림이 먼저 보여야 한다. 종전 기본값이 "선택 스키마" 라서
+  // 경로 그래프가 있어도 사용자가 탭을 눌러야 나왔다.
+  if (!explorationTabTouched && availability.graph) {
+    activeExplorationTab = "graph";
+  } else if (!availability[activeExplorationTab]) {
     activeExplorationTab = availableTabs[0];
   }
 
@@ -780,7 +808,8 @@ function renderExplorationPanel(container) {
     button.textContent = label;
     button.addEventListener("click", () => {
       activeExplorationTab = key;
-      renderExplorationPanel(el.answerExploration);
+      explorationTabTouched = true;
+      renderExplorationPanels();
     });
     tabs.append(button);
   });
@@ -810,12 +839,12 @@ function renderExplorationPanel(container) {
   } else if (activeExplorationTab === "cypher") {
     renderCypherTab(panel, state.explain);
   } else {
-    renderGraphTab(panel, state);
+    renderGraphTab(panel, state, container === el.progressExploration);
   }
   container.append(head, tabs, pending, panel);
 }
 
-function addBadges(container, title, values, kind) {
+function addBadges(container, title, values, kind, usedSet) {
   if (!Array.isArray(values) || !values.length) return;
   const group = document.createElement("section");
   group.className = "badge-group";
@@ -824,8 +853,12 @@ function addBadges(container, title, values, kind) {
   const list = document.createElement("ul");
   values.forEach((value) => {
     const item = document.createElement("li");
-    item.className = `schema-badge is-${kind}`;
-    item.textContent = value;
+    const used = usedSet ? usedSet.has(value) : true;
+    item.className = `schema-badge is-${kind}${used ? " is-used" : " is-unused"}`;
+    item.textContent = used ? `${value} · 사용됨` : `${value} · 미사용`;
+    item.title = used
+      ? "승인된 질의가 실제로 사용했습니다"
+      : "후보로 제시했지만 최종 질의에는 쓰이지 않았습니다";
     list.append(item);
   });
   group.append(heading, list);
@@ -834,8 +867,21 @@ function addBadges(container, title, values, kind) {
 
 function renderSchemaTab(container, summary) {
   if (!summary) return;
-  addBadges(container, "선택된 node label", summary.labels, "node");
-  addBadges(container, "선택된 relationship type", summary.relationships, "relationship");
+  // 이 목록은 "쓴 것"이 아니라 "이 안에서만 고르라고 모델에 건넨 후보"다. 종전의
+  // `선택된 node label` 표기는 실제 사용으로 읽혀 오해를 불렀다. 승인된 질의가
+  // 실제로 쓴 것만 따로 표시한다.
+  const explain = latestInspection("NEO4J_EXPLAIN");
+  const used = explain && explain.summary ? explain.summary : {};
+  const usedLabels = new Set(used.labels || []);
+  const usedRels = new Set(used.relationships || []);
+  const note = document.createElement("p");
+  note.className = "projection-note";
+  note.textContent =
+    "질의를 만들 때 모델에게 건넨 후보 목록입니다. 이 안에서만 고를 수 있으며, " +
+    "실제 사용 여부는 각 항목에 표시했습니다.";
+  container.append(note);
+  addBadges(container, "후보 node label", summary.labels, "node", usedLabels);
+  addBadges(container, "후보 relationship type", summary.relationships, "relationship", usedRels);
 }
 
 function renderCypherTab(container, summary) {
@@ -855,14 +901,54 @@ function renderCypherTab(container, summary) {
   });
 }
 
-function renderGraphTab(container, state) {
+// 탐색이 어디까지 갔고 어디서 끊겼는지. 승인된 경로는 있는데 결과가 없거나 단계가
+// 실패한 경우, 경로를 그대로 그리고 끊긴 지점을 ✗ 로 표시한다.
+// 어느 hop 에서 0건이 됐는지는 Neo4j 가 EXPLAIN 으로 알려주지 않으므로 추정하지
+// 않는다. "경로 끝까지 갔지만 일치가 없었다"까지만 말한다.
+function traversalOutcome() {
+  const execution = latestInspection("GRAPH_EXECUTION");
+  const validation = latestInspection("RESULT_VALIDATION");
+  const claims = latestInspection("CLAIM_BUILDING");
+  for (const [stage, item] of [
+    ["그래프 조회", execution],
+    ["결과 검증", validation],
+    ["사실 구성", claims],
+  ]) {
+    if (item && item.status === "FAILED") {
+      return { failed: true, label: `${stage} 단계에서 중단됨` };
+    }
+  }
+  if (
+    execution &&
+    execution.status === "COMPLETED" &&
+    execution.summary &&
+    execution.summary.row_count === 0
+  ) {
+    return {
+      failed: true,
+      label: "경로는 끝까지 승인됐지만 조건에 맞는 사실이 0건입니다",
+    };
+  }
+  return { failed: false, label: "" };
+}
+
+function renderGraphTab(container, state, autoplay = false) {
+  const outcome = traversalOutcome();
   const note = document.createElement("p");
-  note.className = "projection-note";
-  note.textContent =
-    "현재 질문에 대해 실제 승인된 구조와 VERIFIED provenance만 표시한 projection입니다.";
+  note.className = outcome.failed ? "projection-note is-failed" : "projection-note";
+  note.textContent = outcome.failed
+    ? `실행한 질의가 밟은 경로입니다. ${outcome.label}.`
+    : "실제로 실행한 질의가 그래프를 밟은 경로와, 그 결과의 VERIFIED provenance입니다.";
   container.append(note);
+  // 루트에서 실제 매칭된 노드까지 한 장으로. 통합 그래프를 못 만든 경우에만
+  // 종전처럼 스키마 경로와 provenance 를 따로 그린다.
+  const unified = state.claims ? state.claims.traversal_graph : null;
+  if (unified) {
+    renderGraphPanel(container, "탐색 경로", unified, { autoplay, outcome });
+    return;
+  }
   if (state.explain && state.explain.query_graph) {
-    renderGraphPanel(container, "1. 질의 구조", state.explain.query_graph);
+    renderGraphPanel(container, "1. 질의 구조", state.explain.query_graph, { autoplay, outcome });
   }
   if (state.claims && state.claims.provenance_graph) {
     renderGraphPanel(
@@ -917,6 +1003,25 @@ function addInspectionItem(container, label, value, options = {}) {
 
 const SVG_NS = "http://www.w3.org/2000/svg";
 
+// 간선 표기: `①근거 연결` 처럼 탐색 순서와 한국어 관계명을 붙인다. 순서는 승인된
+// MATCH 경로가 쓰인 차례이며 Neo4j 내부 실행 순서가 아니다. 한국어 이름이나 순서가
+// 없으면(구 payload) 종전처럼 영어 관계명만 쓴다.
+const ORDER_MARKS = "①②③④⑤⑥⑦⑧⑨⑩⑪⑫⑬⑭⑮";
+
+function orderMark(order) {
+  if (!Number.isInteger(order) || order < 1) return "";
+  return order <= ORDER_MARKS.length ? ORDER_MARKS[order - 1] : `(${order})`;
+}
+
+function edgeRelationshipText(edge) {
+  const name =
+    typeof edge.relationship_ko === "string" && edge.relationship_ko.trim()
+      ? edge.relationship_ko.trim()
+      : edge.relationship;
+  const mark = orderMark(edge.traversal_order);
+  return mark ? `${mark} ${name}` : name;
+}
+
 function svgNode(name, attributes = {}) {
   const node = document.createElementNS(SVG_NS, name);
   Object.entries(attributes).forEach(([key, value]) => node.setAttribute(key, String(value)));
@@ -924,6 +1029,8 @@ function svgNode(name, attributes = {}) {
 }
 
 function graphCategory(type) {
+  if (type === "Question") return "context";
+  if (type === "Candidate") return "other";
   if (type === "Evidence") return "evidence";
   if (["Course", "CourseOffering"].includes(type)) return "course";
   if (["Rule", "Requirement", "CreditRequirement"].includes(type)) return "rule";
@@ -990,7 +1097,7 @@ function renderGraphFallback(container, graph) {
     const target = nodes.get(edge.target);
     if (!source || !target) return;
     const item = document.createElement("li");
-    item.textContent = `${source.display_name} ──${edge.relationship}──> ${target.display_name}`;
+    item.textContent = `${source.display_name} ──${edgeRelationshipText(edge)}──> ${target.display_name}`;
     list.append(item);
   });
   if (!list.childElementCount) {
@@ -1004,13 +1111,18 @@ function renderGraphFallback(container, graph) {
   container.append(fallback);
 }
 
+function nodeBoxWidth(lines) {
+  const longest = lines.reduce((max, line) => Math.max(max, line.length), 0);
+  return Math.max(96, Math.min(210, longest * 14 + 26));
+}
+
 function graphLabelLines(value) {
   const text = String(value || "").replace(/\s+/g, " ").trim();
-  if (text.length <= 18) return [text];
-  const remainder = text.slice(18);
+  if (text.length <= 13) return [text];
+  const remainder = text.slice(13);
   return [
-    text.slice(0, 18),
-    remainder.length > 18 ? `${remainder.slice(0, 17)}…` : remainder,
+    text.slice(0, 13),
+    remainder.length > 13 ? `${remainder.slice(0, 12)}…` : remainder,
   ];
 }
 
@@ -1039,7 +1151,161 @@ function graphEdgeGeometry(source, target, nodeWidth, nodeHeight, mobile, offset
   };
 }
 
-function renderGraphPanel(container, title, graph) {
+// 승인된 경로를 한 hop 씩 재생한다. 여기서 재생하는 순서는 **승인된 MATCH 패턴이
+// 쓰인 차례**이며 Neo4j 엔진의 내부 실행 순서가 아니다. 화면 문구도 그렇게 적는다.
+const SIMULATION_STEP_MS = 900;
+const runningSimulations = new Map();
+// 같은 그래프를 두 번 자동재생하지 않는다. 재렌더가 잦아서 없으면 계속 처음부터 돈다.
+const autoplayedGraphs = new Set();
+
+function stopSimulation(svg) {
+  const timer = runningSimulations.get(svg);
+  if (timer) {
+    clearInterval(timer);
+    runningSimulations.delete(svg);
+  }
+}
+
+// 오른쪽 방문 순서 목록. 그래프에서 번호를 못 읽는 경우에도 순서를 글로 확인할 수
+// 있어야 하고, 재생 중에는 현재 hop 이 여기서도 같이 강조된다.
+function buildTraversalList(graph) {
+  const list = document.createElement("ol");
+  list.className = "traversal-list";
+  const nodes = new Map((graph.nodes || []).map((node) => [node.id, node]));
+  const ordered = (graph.edges || [])
+    .filter((edge) => Number.isInteger(edge.traversal_order))
+    .sort((left, right) => left.traversal_order - right.traversal_order);
+  ordered.forEach((edge) => {
+    const source = nodes.get(edge.source);
+    const target = nodes.get(edge.target);
+    if (!source || !target) return;
+    const item = document.createElement("li");
+    item.className = "traversal-step";
+    item.dataset.order = String(edge.traversal_order);
+    const mark = document.createElement("span");
+    mark.className = "traversal-mark";
+    mark.textContent = orderMark(edge.traversal_order) || edge.traversal_order;
+    const body = document.createElement("div");
+    body.className = "traversal-body";
+    const hop = document.createElement("p");
+    hop.className = "traversal-hop";
+    // 라벨 종류가 아니라 거쳐간 노드의 원본 이름을 그대로 적는다.
+    const from = document.createElement("span");
+    from.className = "traversal-node";
+    from.textContent = source.display_name;
+    if (source.node_type_ko) {
+      const c = document.createElement("i");
+      c.className = "traversal-cat";
+      c.textContent = source.node_type_ko;
+      from.append(c);
+    }
+    const arrow = document.createElement("span");
+    arrow.className = "traversal-arrow";
+    arrow.textContent = "→";
+    const to = document.createElement("span");
+    to.className = "traversal-node";
+    to.textContent = target.display_name;
+    if (target.node_type_ko) {
+      const c = document.createElement("i");
+      c.className = "traversal-cat";
+      c.textContent = target.node_type_ko;
+      to.append(c);
+    }
+    hop.append(from, arrow, to);
+    const rel = document.createElement("p");
+    rel.className = "traversal-rel";
+    // 영어 관계 타입은 목록에 찍지 않는다. 읽는 데 방해만 되고 tooltip 으로 충분하다.
+    rel.textContent = edge.relationship_ko || edge.relationship;
+    rel.title = edge.relationship;
+    body.append(hop, rel);
+    item.append(mark, body);
+    list.append(item);
+  });
+  return list.childElementCount ? list : null;
+}
+
+function applySimulationStep(svg, step) {
+  const split = svg.closest(".graph-split");
+  if (split) {
+    split.querySelectorAll(".traversal-step").forEach((item) => {
+      const order = Number(item.dataset.order);
+      item.classList.toggle("is-traversed", order <= step);
+      item.classList.toggle("is-active", order === step);
+    });
+  }
+  svg.querySelectorAll("[data-order]").forEach((element) => {
+    const order = Number(element.dataset.order);
+    element.classList.toggle("is-traversed", order <= step);
+    element.classList.toggle("is-active", order === step);
+  });
+  svg.querySelectorAll("[data-visit]").forEach((element) => {
+    // 간선 n 을 타면 그 끝점까지 방문한 것이므로 노드는 step+1 까지 켠다.
+    element.classList.toggle("is-visited", Number(element.dataset.visit) <= step + 1);
+  });
+}
+
+function startSimulation(svg, maxOrder, button) {
+  stopSimulation(svg);
+  svg.classList.add("is-simulating");
+  let step = 0;
+  applySimulationStep(svg, step);
+  button.textContent = "■ 정지";
+  const timer = setInterval(() => {
+    step += 1;
+    applySimulationStep(svg, step);
+    if (step > maxOrder) {
+      stopSimulation(svg);
+      svg.classList.remove("is-simulating");
+      svg.querySelectorAll(".is-active").forEach((element) =>
+        element.classList.remove("is-active")
+      );
+      button.textContent = "▶ 다시 재생";
+    }
+  }, SIMULATION_STEP_MS);
+  runningSimulations.set(svg, timer);
+}
+
+function addSimulationControl(controls, svg, graph, { autoplay = false } = {}) {
+  const orders = (graph.edges || [])
+    .map((edge) => edge.traversal_order)
+    .filter((value) => Number.isInteger(value));
+  if (!graph.ordered || !orders.length) return;
+  const maxOrder = Math.max(...orders);
+  const button = document.createElement("button");
+  button.type = "button";
+  button.className = "ghost compact graph-simulate";
+  button.textContent = "▶ 탐색 재생";
+  button.title = "승인된 질의가 그래프를 밟은 순서대로 재생합니다";
+  button.addEventListener("click", () => {
+    if (runningSimulations.has(svg)) {
+      stopSimulation(svg);
+      svg.classList.remove("is-simulating");
+      svg.querySelectorAll("[data-order], [data-visit]").forEach((element) => {
+        element.classList.remove("is-traversed", "is-active", "is-visited");
+      });
+      const split = svg.closest(".graph-split");
+      if (split) {
+        split.querySelectorAll(".traversal-step").forEach((item) =>
+          item.classList.remove("is-traversed", "is-active")
+        );
+      }
+      button.textContent = "▶ 탐색 재생";
+      return;
+    }
+    startSimulation(svg, maxOrder, button);
+  });
+  controls.append(button);
+  // 처리 중 화면은 사용자가 누르지 않아도 한 번 재생한다. 그 화면의 목적이
+  // "지금 무엇을 하고 있는지" 보여 주는 것이기 때문이다. 결과 화면은 사용자가
+  // 누를 때만 재생한다.
+  if (autoplay && !autoplayedGraphs.has(svg.dataset.graphKey)) {
+    autoplayedGraphs.add(svg.dataset.graphKey);
+    startSimulation(svg, maxOrder, button);
+  }
+}
+
+function renderGraphPanel(container, title, graph, options = {}) {
+  const outcome = options.outcome || { failed: false };
   if (!graph) return;
   const panel = document.createElement("section");
   panel.className = "graph-panel";
@@ -1082,148 +1348,196 @@ function renderGraphPanel(container, title, graph) {
     const columnIndex = new Map(
       orderedColumns.map((column, index) => [column, index])
     );
-    const nodeWidth = mobile ? 244 : 218;
-    const nodeHeight = 86;
-    const xGap = mobile ? 0 : 290;
-    const yGap = mobile ? 132 : 118;
-    let maxRows = 1;
-    [...columns.entries()].forEach(([column, nodes]) => {
-      maxRows = Math.max(maxRows, nodes.length);
-      nodes.forEach((node, index) => {
-        positions.set(node.id, {
-          x: 52 + columnIndex.get(column) * xGap,
-          y: 52 + index * yGap,
-        });
-      });
+    // 루트 위, 자식 아래로 내려가는 트리 배치. 승인된 MATCH 패턴은 한 시작 노드에서
+    // 여러 갈래로 뻗는 경우가 있어(예: CurriculumVersion -> Department 와
+    // CurriculumVersion -> CourseOffering) 일렬로 펴면 실제 구조가 사라진다.
+    // 리프를 왼쪽부터 차례로 놓고 부모를 자식들의 가운데에 세우는 방식이다.
+    const R = 27;
+    const xGap = mobile ? 150 : 235;
+    const yGap = mobile ? 110 : 124;
+
+    const children = new Map();
+    const indegree = new Map(graph.nodes.map((n) => [n.id, 0]));
+    graph.edges.forEach((e) => {
+      if (!indegree.has(e.source) || !indegree.has(e.target)) return;
+      if (!children.has(e.source)) children.set(e.source, []);
+      children.get(e.source).push(e.target);
+      indegree.set(e.target, indegree.get(e.target) + 1);
     });
-    const width = mobile ? 348 : Math.max(348, orderedColumns.length * xGap + 44);
-    const height = Math.max(210, maxRows * yGap + 56);
+    // 루트는 들어오는 간선이 없는 노드. 없으면 방문 순서가 가장 빠른 노드를 쓴다.
+    let roots = graph.nodes.filter((n) => indegree.get(n.id) === 0).map((n) => n.id);
+    if (!roots.length) {
+      const first = [...graph.nodes].sort(
+        (a, b) => (a.visit_order || 99) - (b.visit_order || 99)
+      )[0];
+      roots = first ? [first.id] : [];
+    }
+
+    const depth = new Map();
+    let leafSlot = 0;
+    const placed = new Set();
+    const assign = (id, level) => {
+      if (placed.has(id)) return positions.get(id).x;
+      placed.add(id);
+      depth.set(id, level);
+      const kids = (children.get(id) || []).filter((k) => !placed.has(k));
+      let x;
+      if (!kids.length) {
+        x = leafSlot * xGap;
+        leafSlot += 1;
+      } else {
+        const xs = kids.map((k) => assign(k, level + 1));
+        x = (Math.min(...xs) + Math.max(...xs)) / 2;
+      }
+      positions.set(id, { x, y: 0 });
+      return x;
+    };
+    roots.forEach((id) => assign(id, 0));
+    // 트리에 닿지 않은 노드가 있으면 마지막 줄에 이어 붙인다.
+    graph.nodes.forEach((n) => {
+      if (!placed.has(n.id)) assign(n.id, 0);
+    });
+
+    const maxDepth = Math.max(0, ...[...depth.values()]);
+    const xs = [...positions.values()].map((p) => p.x);
+    const minX = Math.min(...xs, 0);
+    positions.forEach((p, id) => {
+      p.x = p.x - minX + 70;
+      p.y = 58 + depth.get(id) * yGap;
+    });
+    const width = Math.max(320, Math.max(...[...positions.values()].map((p) => p.x)) + 90);
+    const height = Math.max(200, 58 + maxDepth * yGap + 118);
     svg.setAttribute("viewBox", `0 0 ${width} ${height}`);
     svg.setAttribute("preserveAspectRatio", "xMidYMin meet");
     svg.style.aspectRatio = `${width} / ${height}`;
+    // 자연 크기를 CSS 에 알려 준다. 뷰포트가 더 좁으면 축소 대신 가로 스크롤이 된다.
+    svg.style.setProperty("--graph-natural-width", `${width}px`);
 
     const definitions = svgNode("defs");
+    const markerId = `arrow-${graphKey.replace(/[^a-zA-Z0-9]/g, "").slice(-20)}`;
     const marker = svgNode("marker", {
-      id: `arrow-${graphKey.replace(/[^a-zA-Z0-9]/g, "").slice(-20)}`,
-      markerWidth: 10,
-      markerHeight: 10,
-      refX: 8,
-      refY: 3,
-      orient: "auto",
-      markerUnits: "strokeWidth",
+      id: markerId, markerWidth: 10, markerHeight: 10,
+      refX: 9, refY: 3, orient: "auto", markerUnits: "strokeWidth",
     });
-    const arrow = svgNode("path", { d: "M0,0 L0,6 L9,3 z", class: "graph-arrow" });
-    marker.append(arrow);
+    marker.append(svgNode("path", { d: "M0,0 L0,6 L9,3 z", class: "graph-arrow" }));
     definitions.append(marker);
     svg.append(definitions);
 
     const edgeLayer = svgNode("g", { class: "graph-edges" });
     const nodeLayer = svgNode("g", { class: "graph-nodes" });
-    graph.edges.forEach((edge, index) => {
-      const source = positions.get(edge.source);
-      const target = positions.get(edge.target);
-      if (!source || !target) return;
-      const geometry = graphEdgeGeometry(
-        source,
-        target,
-        nodeWidth,
-        nodeHeight,
-        mobile,
-        ((index % 3) - 1) * 14
-      );
-      const path = svgNode("path", {
-        d: geometry.path,
+
+    const boxOf = (node) => {
+      const lines = graphLabelLines(node.display_name);
+      return { w: nodeBoxWidth(lines), h: lines.length > 1 ? 54 : 40 };
+    };
+    const nodeById = new Map(graph.nodes.map((n) => [n.id, n]));
+
+    graph.edges.forEach((edge) => {
+      const a = positions.get(edge.source);
+      const b = positions.get(edge.target);
+      const na = nodeById.get(edge.source);
+      const nb = nodeById.get(edge.target);
+      if (!a || !b || !na || !nb) return;
+      const group = svgNode("g", { class: "graph-edge-group" });
+      if (Number.isInteger(edge.traversal_order)) {
+        group.dataset.order = String(edge.traversal_order);
+      }
+      const dx = b.x - a.x, dy = b.y - a.y;
+      const len = Math.hypot(dx, dy) || 1;
+      const ux = dx / len, uy = dy / len;
+      const trim = (box) => {
+        const tx = Math.abs(ux) < 1e-6 ? Infinity : box.w / 2 / Math.abs(ux);
+        const ty = Math.abs(uy) < 1e-6 ? Infinity : box.h / 2 / Math.abs(uy);
+        return Math.min(tx, ty);
+      };
+      const ta = trim(boxOf(na)), tb = trim(boxOf(nb));
+      const x1 = a.x + ux * ta, y1 = a.y + uy * ta;
+      const x2 = b.x - ux * (tb + 8), y2 = b.y - uy * (tb + 8);
+      group.append(svgNode("path", {
         class: "graph-edge",
-        "marker-end": `url(#${marker.id})`,
-      });
-      const relationshipLabel = edge.relationship.length > 22
-        ? `${edge.relationship.slice(0, 21)}…`
-        : edge.relationship;
-      const labelWidth = Math.min(
-        178,
-        Math.max(70, relationshipLabel.length * 7 + 18)
-      );
-      const labelX = Math.min(
-        width - labelWidth / 2 - 8,
-        Math.max(labelWidth / 2 + 8, geometry.labelX)
-      );
-      const labelGroup = svgNode("g", { class: "graph-edge-label-group" });
-      const labelTitle = svgNode("title");
-      labelTitle.textContent = edge.relationship;
-      const labelBox = svgNode("rect", {
-        x: labelX - labelWidth / 2,
-        y: geometry.labelY - 13,
-        width: labelWidth,
-        height: 22,
-        rx: 6,
-        ry: 6,
-      });
+        d: `M${x1},${y1} L${x2},${y2}`,
+        "marker-end": `url(#${markerId})`,
+      }));
+      // 거쳐간 순서는 간선 위 배지로. 노드 안에는 이름만 둔다.
+      const mx = (x1 + x2) / 2, my = (y1 + y2) / 2;
+      if (Number.isInteger(edge.traversal_order)) {
+        group.append(svgNode("circle", { class: "graph-edge-badge", cx: mx, cy: my, r: 11 }));
+        const bt = svgNode("text", {
+          class: "graph-edge-badge-text", x: mx, y: my + 4, "text-anchor": "middle",
+        });
+        bt.textContent = edge.traversal_order;
+        group.append(bt);
+      }
+      const relText = edge.relationship_ko || edge.relationship;
+      const lw = Math.min(140, relText.length * 11.5 + 14);
+      group.append(svgNode("rect", {
+        class: "graph-edge-label-bg",
+        x: mx - lw / 2, y: my - 30, width: lw, height: 18, rx: 5,
+      }));
       const label = svgNode("text", {
-        x: labelX,
-        y: geometry.labelY + 2,
-        class: "graph-edge-label",
-        "text-anchor": "middle",
+        class: "graph-edge-label", x: mx, y: my - 17, "text-anchor": "middle",
       });
-      label.textContent = relationshipLabel;
-      labelGroup.append(labelTitle, labelBox, label);
-      edgeLayer.append(path, labelGroup);
+      label.textContent = relText;
+      const title = svgNode("title");
+      title.textContent = `${edge.traversal_order || ""} ${relText} (${edge.relationship})`.trim();
+      group.append(title, label);
+      edgeLayer.append(group);
     });
 
     const selected = document.createElement("p");
     selected.className = "graph-selected";
     selected.textContent = "노드를 선택하면 공개 가능한 상세가 표시됩니다.";
-    graph.nodes.forEach((node) => {
-      const position = positions.get(node.id);
+
+    const drawOrder = [...graph.nodes].sort(
+      (a, b) => (depth.get(a.id) || 0) - (depth.get(b.id) || 0)
+    );
+    drawOrder.forEach((node) => {
+      const pos = positions.get(node.id);
+      const lines = graphLabelLines(node.display_name);
+      // 카테고리 = 이 노드가 속한 온톨로지 라벨의 한국어 이름. 색만으로는 어느
+      // 종류인지 알 수 없어 글로도 적는다.
+      const category = node.node_type_ko || "";
+      const w = Math.max(nodeBoxWidth(lines), category.length * 11 + 26);
+      const h = (lines.length > 1 ? 54 : 40) + (category ? 16 : 0);
       const group = svgNode("g", {
-        class: "graph-node",
-        tabindex: 0,
-        role: "button",
+        class: "graph-node", tabindex: 0, role: "button",
         "aria-label": `${node.display_name}, ${node.node_type}, ${node.verification_status}`,
         "data-kind": graphCategory(node.node_type),
-        transform: `translate(${position.x} ${position.y})`,
+        transform: `translate(${pos.x} ${pos.y})`,
       });
-      const visual = svgNode("g", { class: "graph-node-visual" });
-      const tooltip = svgNode("title");
-      tooltip.textContent = `${node.display_name} · ${node.node_type}`;
-      const box = svgNode("rect", {
-        width: nodeWidth,
-        height: nodeHeight,
-        rx: 11,
-        ry: 11,
-      });
-      const name = svgNode("text", { x: 12, y: 25, class: "graph-node-name" });
-      graphLabelLines(node.display_name).forEach((line, lineIndex) => {
-        const textLine = svgNode("tspan", {
-          x: 12,
-          dy: lineIndex === 0 ? 0 : 18,
+      if (Number.isInteger(node.visit_order)) {
+        group.dataset.visit = String(node.visit_order);
+      }
+      const tip = svgNode("title");
+      // 영어 라벨은 화면에 찍지 않고 tooltip 으로만 남긴다. 노드 아래에 같이 그리면
+      // 간선 라벨과 겹쳐 오히려 읽기 어려웠다.
+      tip.textContent = `${node.display_name} · ${node.node_type} · ${node.verification_status}`;
+      group.append(tip);
+      group.append(svgNode("rect", {
+        class: "graph-node-box",
+        x: -w / 2, y: -h / 2, width: w, height: h, rx: 14, ry: 14,
+      }));
+      if (category) {
+        const cat = svgNode("text", {
+          class: "graph-node-category", x: 0, y: -h / 2 + 16, "text-anchor": "middle",
         });
-        textLine.textContent = line;
-        name.append(textLine);
+        cat.textContent = category;
+        group.append(cat);
+      }
+      const name = svgNode("text", {
+        class: "graph-node-name", x: 0,
+        y: (category ? 6 : 0) + (lines.length > 1 ? -2 : 5), "text-anchor": "middle",
       });
-      const type = svgNode("text", { x: 12, y: 69, class: "graph-node-type" });
-      type.textContent = node.node_type;
-      const verified = svgNode("text", {
-        x: nodeWidth - 14,
-        y: 20,
-        class: "graph-node-check",
-        "text-anchor": "end",
+      lines.forEach((line, i) => {
+        const ts = svgNode("tspan", { x: 0, dy: i === 0 ? 0 : 16 });
+        ts.textContent = line;
+        name.append(ts);
       });
-      verified.textContent = node.citation_used ? "✓ 근거" : "✓";
-      const selectNode = () => {
-        const page = Number.isInteger(node.excerpt_page)
-          ? ` · 발췌 PDF ${node.excerpt_page}쪽`
-          : "";
-        selected.textContent = `${node.display_name} · ${node.node_type} · ${node.verification_status}${page}`;
-      };
-      group.addEventListener("click", selectNode);
-      group.addEventListener("keydown", (event) => {
-        if (event.key === "Enter" || event.key === " ") {
-          event.preventDefault();
-          selectNode();
-        }
+      group.append(name);
+      group.addEventListener("click", () => {
+        selected.textContent =
+          `${node.display_name} · ${node.node_type} · ${node.verification_status}`;
       });
-      visual.append(box, name, type, verified);
-      group.append(tooltip, visual);
       nodeLayer.append(group);
     });
     svg.append(edgeLayer, nodeLayer);
@@ -1260,6 +1574,8 @@ function renderGraphPanel(container, title, graph) {
         selected.textContent = "노드를 선택하면 공개 가능한 상세가 표시됩니다.";
       })
     );
+    svg.dataset.graphKey = `${container.id || "panel"}:${graphKey}`;
+    addSimulationControl(controls, svg, graph, options);
     setScale(graphScales.get(graphKey) || 1);
     viewport.fitGraph = () => {
       if ((graphScales.get(graphKey) || 1) === 1) setScale(1);
@@ -1278,7 +1594,19 @@ function renderGraphPanel(container, title, graph) {
       item.append(span(`legend-dot is-${kind}`, ""), span("", label));
       legend.append(item);
     });
-    panel.append(controls, viewport, selected, legend);
+    const split = document.createElement("div");
+    split.className = "graph-split";
+    split.append(viewport);
+    const traversal = buildTraversalList(graph);
+    if (traversal) {
+      const side = document.createElement("aside");
+      side.className = "traversal-side";
+      const sideHead = document.createElement("h5");
+      sideHead.textContent = "방문 순서";
+      side.append(sideHead, traversal);
+      split.append(side);
+    }
+    panel.append(controls, split, selected, legend);
   } catch (_) {
     renderGraphFallback(panel, graph);
   }

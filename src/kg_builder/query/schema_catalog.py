@@ -29,6 +29,10 @@ class NodeDefinition:
     properties: frozenset[str]
     required_properties: frozenset[str]
     parent_labels: tuple[str, ...]
+    # 화면에 찍을 한국어 표기. 명세가 이미 26/26을 들고 있으므로 표시 계층에서
+    # 따로 사전을 만들지 않는다. 라벨 원형(label)은 영어로 남겨 CSS·data 속성과
+    # 계약 검증이 계속 같은 값을 쓴다.
+    name_ko: str = ""
 
 
 @dataclass(frozen=True, slots=True)
@@ -37,6 +41,7 @@ class RelationshipDefinition:
     from_labels: frozenset[str]
     to_labels: frozenset[str]
     properties: frozenset[str]
+    name_ko: str = ""
 
 
 class SchemaCatalog:
@@ -52,6 +57,7 @@ class SchemaCatalog:
                 properties=frozenset(prop["name"] for prop in item.get("properties", [])),
                 required_properties=frozenset(item.get("required_properties", [])),
                 parent_labels=tuple(item.get("parent_labels", [])),
+                name_ko=item.get("name_ko") or "",
             )
             for item in source["node_labels"]
         }
@@ -61,6 +67,7 @@ class SchemaCatalog:
                 from_labels=frozenset(item["from_labels"]),
                 to_labels=frozenset(item["to_labels"]),
                 properties=frozenset(prop["name"] for prop in item.get("properties", [])),
+                name_ko=item.get("name_ko") or "",
             )
             for item in source["relationship_types"]
         }
@@ -77,6 +84,18 @@ class SchemaCatalog:
             (item["name"], prop["name"]): prop.get("controlled_vocabulary")
             for item in source["node_labels"]
             for prop in item.get("properties", [])
+        }
+        # 속성과 통제어휘 값의 한국어 표기. 명세가 147/147 속성에 description_ko 를
+        # 들고 있으므로 표시 계층은 이것만 읽으면 된다.
+        self.property_labels_ko = {
+            (item["name"], prop["name"]): prop.get("description_ko") or ""
+            for item in source["node_labels"]
+            for prop in item.get("properties", [])
+        }
+        self.vocabulary_labels_ko = {
+            (name, entry["value"]): entry.get("description_ko") or ""
+            for name, body in source["controlled_vocabularies"].items()
+            for entry in body["values"]
         }
 
     @classmethod
@@ -115,6 +134,26 @@ class SchemaCatalog:
             found.update(definition.properties)
             pending.extend(definition.parent_labels)
         return frozenset(found)
+
+    def label_ko(self, label: str) -> str:
+        """Return the Korean display name for a node label, falling back to the label.
+
+        표기가 없으면 라벨 원형을 그대로 돌려준다. 화면이 빈 칸을 그리는 것보다
+        영어 라벨이라도 보이는 편이 낫다.
+        """
+
+        definition = self.nodes.get(label)
+        return definition.name_ko if definition and definition.name_ko else label
+
+    def relationship_ko(self, relationship_type: str) -> str:
+        """Return the Korean display name for a relationship type."""
+
+        definition = self.relationships.get(relationship_type)
+        return (
+            definition.name_ko
+            if definition and definition.name_ko
+            else relationship_type
+        )
 
     @property
     def all_node_properties(self) -> frozenset[str]:

@@ -80,6 +80,14 @@ class ResultValidator:
                 self._fail(
                     "RESULT_FIELD_NULL", f"row {index} has null requested fields: {sorted(null_fields)}"
                 )
+            identity = row.get("scope_identity")
+            if identity is not None and (
+                not isinstance(identity, str) or not identity.strip()
+            ):
+                self._fail(
+                    "RESULT_SCOPE_IDENTITY_INVALID",
+                    f"row {index} has an invalid scope_identity",
+                )
             self._validate_scope(index, plan, row)
             self._validate_fact(index, row, provenance)
             if plan.selection_mode is SelectionMode.SINGLE_COURSE:

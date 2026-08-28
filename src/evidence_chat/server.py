@@ -23,6 +23,7 @@ from threading import Thread
 from typing import Any, Protocol
 
 import anyio
+from dotenv import load_dotenv
 from neo4j import GraphDatabase
 from starlette.applications import Starlette
 from starlette.requests import Request
@@ -55,6 +56,7 @@ from . import pdf_evidence
 from .chat_adapter import ChatResponseAdapter
 from .graph_projection import (
     build_provenance_projection,
+    build_traversal_projection,
     build_query_structure_projection,
 )
 
@@ -67,6 +69,9 @@ DEFAULT_MAX_CONCURRENT = 1
 MAX_BODY_BYTES = 16 * 1024
 # 되묻기로 채울 수 있는 항목 수 상한. 이 이상은 정상 흐름이 아니다.
 MAX_RESOLVED_ENTRIES = 8
+# 승인된 MATCH 경로의 최대 hop 수. 검증기가 허용하는 경로보다 넉넉하다.
+MAX_PATH_EDGES = 32
+_SAFE_TYPE_NAME = re.compile(r"[A-Za-z][A-Za-z0-9_]{0,79}\Z")
 
 EXAMPLE_QUESTIONS = (
     "2026학년도 교양 최소 이수학점은?",
@@ -97,6 +102,7 @@ class InspectionCollector:
             "parameters",
             "labels",
             "relationship_types",
+            "path_edges",
             "limit",
         }
     )
@@ -191,6 +197,43 @@ class InspectionCollector:
         if not isinstance(value, (list, tuple)):
             return []
         return sorted({item for item in value if isinstance(item, str) and len(item) <= 80})
+
+    @staticmethod
+    def _safe_path_edges(value: Any) -> list[dict[str, Any]]:
+        """Keep the approved MATCH hops in order, dropping anything malformed.
+
+        _safe_strings 와 달리 정렬하지 않는다. 순서 자체가 이 값의 내용이다.
+        """
+
+        if not isinstance(value, (list, tuple)):
+            return []
+        steps: list[dict[str, Any]] = []
+        for item in list(value)[:MAX_PATH_EDGES]:
+            if not isinstance(item, dict):
+                continue
+            order = item.get("order")
+            start = item.get("start_label")
+            relationship = item.get("relationship_type")
+            end = item.get("end_label")
+            if (
+                not isinstance(order, int)
+                or isinstance(order, bool)
+                or order < 1
+                or not all(
+                    isinstance(name, str) and _SAFE_TYPE_NAME.fullmatch(name)
+                    for name in (start, relationship, end)
+                )
+            ):
+                continue
+            steps.append(
+                {
+                    "order": order,
+                    "start_label": start,
+                    "relationship_type": relationship,
+                    "end_label": end,
+                }
+            )
+        return steps
 
     @staticmethod
     def _safe_count(value: Any) -> int:
@@ -308,12 +351,19 @@ class InspectionCollector:
                 self._pending_attempt = None
                 self.stage_timings_ms[event.phase.value] = event.elapsed_ms
                 if self._approved_query:
+                    approved_path = self._safe_path_edges(
+                        self._approved_query.get("path_edges")
+                    )
                     query_graph = build_query_structure_projection(
                         self._safe_strings(self._approved_query.get("labels")),
                         self._safe_strings(
                             self._approved_query.get("relationship_types")
                         ),
                         opaque_key=self._opaque_key,
+                        path_edges=approved_path,
+                        parameters=self._safe_mapping(
+                            self._approved_query.get("parameters")
+                        ),
                     )
                     return self._update(
                         event,
@@ -332,6 +382,7 @@ class InspectionCollector:
                                 self._approved_query.get("relationship_types")
                             ),
                             "limit": self._approved_query["limit"],
+                            "path": approved_path,
                             "query_graph": query_graph,
                         },
                     )
@@ -412,7 +463,17 @@ class InspectionCollector:
                     pairs,
                     opaque_key=self._opaque_key,
                 )
+            traversal_graph = None
+            if self._result_validation_approved and isinstance(rows, (list, tuple)) and isinstance(pairs, (list, tuple)):
+                traversal_graph = build_traversal_projection(
+                    self._safe_path_edges(self._approved_query.get("path_edges")),
+                    self._safe_mapping(self._approved_query.get("parameters")),
+                    rows,
+                    pairs,
+                    opaque_key=self._opaque_key,
+                )
             summary = {
+                "traversal_graph": traversal_graph,
                 "claim_count": self._safe_count(event.details.get("claim_count")),
                 "claim_types": self._safe_strings(event.details.get("claim_types")),
                 "aggregate": event.details.get("aggregate") is True,
@@ -498,6 +559,12 @@ class ChatState:
 
     def open(self) -> None:
         try:
+            # `.env` 를 먼저 읽는다. 종전에는 load_dotenv 가 LLMSettings.from_env()
+            # 안에서만 불렸고 그 호출이 아래에 있어서, KG_CHAT_* 네 개는 프로세스
+            # 환경변수로 넘길 때만 적용되고 `.env` 값은 조용히 무시됐다. 그래서
+            # `.env.example` 과 배포 문서가 안내하는 KG_CHAT_SHOW_QUERY_DETAILS 를
+            # 켜도 처리 과정 상세가 열리지 않았다(2026-08-28 실측).
+            load_dotenv(override=False)
             self.debug = _env_bool("KG_CHAT_DEBUG")
             self.show_query_details = _env_bool("KG_CHAT_SHOW_QUERY_DETAILS")
             self.max_concurrent = _env_int(
@@ -617,7 +684,18 @@ def _clarification_options_event(event: ProgressEvent) -> dict[str, Any] | None:
         item
         for item in raw_missing if isinstance(item, str) and re.fullmatch(r"[A-Z_]{1,80}", item)
     ] if isinstance(raw_missing, (list, tuple)) else []
-    raw_options = event.details.get("clarification_options")
+    options = safe_choice_dicts(event.details.get("clarification_options"))
+    return {
+        "type": "clarification_options",
+        "version": 1,
+        "missing": missing,
+        "options": options,
+    }
+
+
+def safe_choice_dicts(raw_options: Any) -> list[dict[str, Any]]:
+    """Normalise planner Choice objects into the browser-safe option shape."""
+
     options: list[dict[str, Any]] = []
     if isinstance(raw_options, (list, tuple)):
         for option in raw_options[:100]:
@@ -652,12 +730,7 @@ def _clarification_options_event(event: ProgressEvent) -> dict[str, Any] | None:
                     else None,
                 }
             )
-    return {
-        "type": "clarification_options",
-        "version": 1,
-        "missing": missing,
-        "options": options,
-    }
+    return options
 
 
 async def ask(request: Request) -> Response:

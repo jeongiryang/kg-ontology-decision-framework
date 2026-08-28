@@ -641,6 +641,14 @@ class PdfEvidenceTests(unittest.TestCase):
 class StarletteRouteTests(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):
         self.chat = _ChatStub(_answerable_response())
+        # ChatState 가 `.env` 를 읽으므로 기본값을 기대하는 테스트는 값을 직접 고정한다.
+        # 고정하지 않으면 개발자 로컬 `.env` 에 따라 결과가 달라지고, `.env` 가 없는
+        # CI 와 서로 다른 것을 검증하게 된다.
+        self._env = mock.patch.dict(
+            "os.environ", {"KG_CHAT_SHOW_QUERY_DETAILS": "false", "KG_CHAT_DEBUG": "false"}
+        )
+        self._env.start()
+        self.addCleanup(self._env.stop)
         self.app = create_app(lambda: ChatState(self.chat))
         self.lifespan = self.app.router.lifespan_context(self.app)
         await self.lifespan.__aenter__()
@@ -685,6 +693,11 @@ class StarletteRouteTests(unittest.IsolatedAsyncioTestCase):
         chat = _ClarificationChatStub(
             ChatResponse.clarification_required("request-clarify", "어느 학과를 말씀하시나요?")
         )
+        env = mock.patch.dict(
+            "os.environ", {"KG_CHAT_SHOW_QUERY_DETAILS": "false", "KG_CHAT_DEBUG": "false"}
+        )
+        env.start()
+        self.addCleanup(env.stop)
         app = create_app(lambda: ChatState(chat))
         async with app.router.lifespan_context(app):
             async with httpx2.AsyncClient(
@@ -777,6 +790,7 @@ class StarletteRouteTests(unittest.IsolatedAsyncioTestCase):
                 "query_plan",
                 "missing",
                 "clarification_available",
+            
             },
             "SCHEMA_SELECTION": {
                 "labels",
@@ -805,6 +819,7 @@ class StarletteRouteTests(unittest.IsolatedAsyncioTestCase):
                 "labels",
                 "relationships",
                 "limit",
+                "path",
                 "query_graph",
             },
             "GRAPH_EXECUTION": {"row_count", "query_elapsed_ms"},
@@ -823,6 +838,7 @@ class StarletteRouteTests(unittest.IsolatedAsyncioTestCase):
                 "aggregate",
                 "citation_target_count",
                 "provenance_graph",
+                "traversal_graph",
             },
             "ANSWER_RENDERING": {
                 "citation_count",
@@ -925,7 +941,11 @@ class StarletteRouteTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn('setAttribute("aria-expanded"', script)
         self.assertIn('setAttribute("aria-controls"', script)
         self.assertIn('setAttribute("role", "tablist"', script)
-        self.assertNotIn("progress-exploration", markup)
+        # 2026-08-18 에는 처리 중 화면에 그래프를 두지 않기로 하고 그 부재를 여기서
+        # 고정했다. 2026-08-28 담당자 지시로 "탐색 중에도 뜨고 결과창에도 같은 것이
+        # 보여야 한다"로 바뀌어, 이제는 컨테이너가 **있어야** 한다.
+        self.assertIn('id="progress-exploration"', markup)
+        self.assertIn("renderExplorationPanels", script)
         self.assertIn("answer-exploration", markup)
         self.assertIn("ResizeObserver", script)
         self.assertNotIn("graph-path-traverse", style)

@@ -150,6 +150,10 @@ def build_syntax_scaffold(plan: QueryPlan, schema_subset: Mapping[str, Any]) -> 
     returns = requested_returns + scope_returns + [
         item.format(fact=fact_alias, fact_id=fact_id) for item in PROVENANCE_RETURNS
     ]
+    # 탐색 화면이 뿌리 노드를 "2026학년도 대학 공통 교양 교육과정" 처럼 실제 이름으로
+    # 부를 수 있게 한다. 검증기가 선택 별칭으로 허용한다.
+    if aliases.get("CurriculumVersion") == "cv":
+        returns.append("cv.version_name AS scope_identity")
     if plan.selection_mode is SelectionMode.SINGLE_COURSE:
         if family != "CourseOffering":
             raise LLMResponseError(

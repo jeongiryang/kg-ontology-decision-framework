@@ -72,6 +72,15 @@
         </div>
         <blockquote class="asked" id="asked"></blockquote>
         <ol class="steps progress-steps" id="progress-steps" aria-label="실제 처리 단계"></ol>
+
+        <!-- 처리 중에도 같은 그래프를 보여 준다. 승인 단계가 끝나기 전에는 그릴
+             경로가 없으므로 그때까지는 비어 있다가, 승인되는 즉시 나타난다. -->
+        <section
+          class="exploration"
+          id="progress-exploration"
+          aria-label="처리 중 지식그래프 탐색"
+          hidden
+        ></section>
         <p class="notice error" id="progress-error" hidden></p>
         <button class="ghost" id="progress-back" type="button">요청 취소</button>
       </div>
