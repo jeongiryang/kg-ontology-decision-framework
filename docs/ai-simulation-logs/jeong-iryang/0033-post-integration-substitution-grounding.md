@@ -66,9 +66,16 @@ PR #32~#35 병합 뒤 최종 `main`의 PR #10 50문항을 다시 실행하던 �
 - 다중 턴 20개 시나리오·65턴 전체 실행: 기대 taxonomy 61/65에서 공통 원인 수정 후
   `M01`, `M08`, `M09`, `M13`의 영향 턴이 모두 기대 상태로 복구됐다. 전체 실행 측정은
   평균 12.830초, 중앙값 13.655초, P95 25.028초였다.
+- `uv sync --locked`, `uv lock --check`: 통과
+- 전체 unittest: 393건 통과, 외부 통합 6건 skip
+- 전체 pytest: 387건 통과, 402 subtests 통과, 외부 통합 6건 skip
+- schema exporter·Verified migration·bundle validate: 통과, 1,536 nodes / 3,287
+  relationships / 520 Evidence
+- Neo4j opt-in: 3건·6 subtests 통과
+- 실제 Ollama·Neo4j·Starlette opt-in: 3건·18 subtests 통과, 185.96초
 - `git diff --check`: 통과
 
-전체 회귀와 GitHub Actions 결과는 완료 뒤 이 로그에 갱신한다.
+GitHub Actions 결과는 완료 뒤 이 로그에 갱신한다.
 
 ## 제한사항
 
