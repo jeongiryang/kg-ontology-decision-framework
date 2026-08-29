@@ -8,6 +8,7 @@ __pycache__/
 *.hwp
 .DS_Store
 AGENTS.md
+CLAUDE.md
 logs/query-runs/
 
 # 테스트 커버리지 산출물

@@ -5,7 +5,7 @@
 - 파일명 규칙: `NNNN-short-task-name.md`
   - `NNNN`은 이 폴더에서 독립적으로 증가하는 4자리 번호다.
   - 작업명은 영문 소문자 kebab-case로 작성한다.
-- 현재 다음 로그 번호: `0015`
+- 현재 다음 로그 번호: `0016`
 - 중앙 템플릿: [AI 시뮬레이션 로그 템플릿](../_template.md)
 - 중앙 운영 규칙: [AI 시뮬레이션 로그 운영 규칙](../README.md)
 
@@ -25,3 +25,4 @@
 - [0012. 지어낸 연출을 걷어내고 엔진이 실제 실행한 순서로 재생](0012-engine-operator-replay.md)
 - [0013. 실시간 hop 탐색을 하지 않는 이유](0013-no-realtime-hop-traversal.md)
 - [0014. 처리 중 화면에서 단계마다 자라는 그래프와 계약 문서 반영](0014-stagewise-narrowing-graph.md)
+- [0015. PR #33 마감, 시간 분포 기록, 수동 확인 환경 기동](0015-pr33-wrapup-and-manual-verification.md)
