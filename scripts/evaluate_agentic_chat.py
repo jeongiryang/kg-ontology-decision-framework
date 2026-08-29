@@ -89,15 +89,25 @@ def _turn(
         None,
     )
     wire = result["response"]
+    trace = [item for item in events if item.get("type") == "agent_trace"]
+    narrative = next(
+        (item.get("metadata", {}) for item in reversed(trace)
+         if item.get("tool") == "grounded_narrative"),
+        {},
+    )
     record = {
         "question": question,
         "outcome_status": outcome.get("status"),
         "wire_status": wire.get("status"),
         "answer": update.get("display_answer") if update else outcome.get("message"),
         "citation_count": len(wire.get("citations") or []),
-        "tool_order": [
-            item.get("tool") for item in events if item.get("type") == "agent_trace"
-        ],
+        "tool_order": [item.get("tool") for item in trace],
+        "agent_trace": trace,
+        "tool_call_count": len(trace),
+        "evidence_assessment_count": sum(
+            item.get("tool") == "assess_evidence" for item in trace
+        ),
+        "narrative_metrics": narrative,
         "cypher_executed": any(
             item.get("type") == "progress" and item.get("phase") == "GRAPH_EXECUTION"
             for item in events

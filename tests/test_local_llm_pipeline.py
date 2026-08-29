@@ -13,7 +13,7 @@ from kg_builder.llm.client import (
     LLMSettings,
 )
 from kg_builder.llm.cypher_generator import LocalCypherGenerator, build_syntax_scaffold
-from kg_builder.query.cypher_validator import CypherValidator
+from kg_builder.query.cypher_validator import CypherValidationError, CypherValidator
 from kg_builder.llm.models import (
     GraduationQuestionClass,
     PlanningOutcome,
@@ -108,6 +108,15 @@ class LocalLLMContractTests(unittest.TestCase):
         self.assertEqual(outcome.plan.selection_mode, SelectionMode.COURSE_LIST)
         self.assertEqual(outcome.plan.filters["completion_type"], "MAJOR_REQUIRED")
 
+    def test_required_course_list_with_requested_credits_is_deterministic(self):
+        outcome = LocalQueryPlanner(SequenceClient([])).plan(
+            "전공필수 목록과 각 과목의 학점을 한꺼번에 알려 줘."
+        )
+        self.assertEqual(outcome.status, PlanningStatus.READY)
+        self.assertEqual(outcome.plan.selection_mode, SelectionMode.COURSE_LIST)
+        self.assertEqual(outcome.plan.filters["completion_type"], "MAJOR_REQUIRED")
+        self.assertIn("credits", outcome.plan.requested_fields)
+
     def test_general_graduation_and_major_credit_criteria_resolve_from_rule_index(self):
         questions = (
             "컴퓨터공학과 졸업학점 최소 기준을 확인해 줘.",
@@ -167,6 +176,18 @@ class LocalLLMContractTests(unittest.TestCase):
         self.assertTrue(
             {"grade_year", "semester", "completion_type"}
             .issubset(outcome.plan.requested_fields)
+        )
+
+    def test_multi_course_bare_credit_noun_is_a_requested_field(self):
+        outcome = LocalQueryPlanner(SequenceClient([])).plan(
+            "알고리즘하고 운영체제의 학점과 이수구분을 같이 보고 싶어."
+        )
+        self.assertEqual(outcome.status, PlanningStatus.READY)
+        self.assertEqual(outcome.plan.selection_mode, SelectionMode.COURSE_LIST)
+        self.assertTrue(
+            {"credits", "completion_type", "name_ko"}.issubset(
+                outcome.plan.requested_fields
+            )
         )
 
     def test_numeric_rule_plan_is_enriched_with_semantic_claim_fields(self) -> None:
@@ -446,6 +467,34 @@ class LocalLLMContractTests(unittest.TestCase):
         validated = CypherValidator(SchemaCatalog.from_generated()).validate(plan, scaffold)
         self.assertEqual(validated.provenance.fact_label, "CourseOffering")
         self.assertIn("c.course_id AS course_identity", scaffold)
+
+    def test_single_course_code_lookup_adds_grounded_subject_without_answer_slot(self) -> None:
+        payload = plan_payload()
+        payload["selection_mode"] = "SINGLE_COURSE"
+        payload["filters"] = {
+            "academic_year": 2026,
+            "department_id": "department:cwnu:cse",
+            "course_code": "CDA0008",
+        }
+        payload["requested_fields"] = ["completion_type"]
+        plan = QueryPlan.from_dict(payload, SchemaCatalog.from_generated())
+
+        self.assertEqual(plan.requested_fields, ("completion_type",))
+        scaffold = build_syntax_scaffold(plan, QuerySchemaSelector().select(plan))
+        validated = CypherValidator(SchemaCatalog.from_generated()).validate(
+            plan, scaffold
+        )
+
+        self.assertIn("c.name_ko AS name_ko", scaffold)
+        self.assertIn("c.course_id AS course_identity", scaffold)
+        self.assertEqual(validated.provenance.fact_label, "CourseOffering")
+
+        missing_subject = scaffold.replace(",\n       c.name_ko AS name_ko", "")
+        with self.assertRaises(CypherValidationError) as raised:
+            CypherValidator(SchemaCatalog.from_generated()).validate(
+                plan, missing_subject
+            )
+        self.assertEqual(raised.exception.code, "CYPHER_RETURN_FIELD_MISMATCH")
 
     def test_unique_common_course_identity_uses_common_curriculum_path(self) -> None:
         client = SequenceClient([])

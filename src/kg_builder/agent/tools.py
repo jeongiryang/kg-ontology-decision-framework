@@ -113,6 +113,23 @@ TOOL_SPECS: Mapping[ToolName, ToolSpec] = {
         },
         _STATUS_OUTPUT,
     ),
+    ToolName.ASSESS_EVIDENCE: ToolSpec(
+        ToolName.ASSESS_EVIDENCE,
+        {
+            "type": "object",
+            "properties": {
+                "result_count": {"type": "integer", "minimum": 1, "maximum": 6},
+                "remaining_query_budget": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "maximum": 5,
+                },
+            },
+            "required": ["result_count", "remaining_query_budget"],
+            "additionalProperties": False,
+        },
+        _STATUS_OUTPUT,
+    ),
     ToolName.GROUNDED_NARRATIVE: ToolSpec(
         ToolName.GROUNDED_NARRATIVE,
         {
@@ -162,6 +179,20 @@ def validate_tool_input(name: ToolName, value: Mapping[str, Any]) -> None:
     if name is ToolName.ASK_CLARIFICATION:
         _string_list(value, "missing_fields", 8, 80)
         _only(value, {"missing_fields"})
+        return
+    if name is ToolName.ASSESS_EVIDENCE:
+        _only(value, {"result_count", "remaining_query_budget"})
+        result_count = value.get("result_count")
+        remaining = value.get("remaining_query_budget")
+        if (
+            isinstance(result_count, bool)
+            or not isinstance(result_count, int)
+            or not 1 <= result_count <= 6
+            or isinstance(remaining, bool)
+            or not isinstance(remaining, int)
+            or not 0 <= remaining <= 5
+        ):
+            raise ValueError("evidence assessment input is invalid")
         return
     if name is ToolName.GROUNDED_NARRATIVE:
         _only(value, {"claim_count", "evidence_count"})

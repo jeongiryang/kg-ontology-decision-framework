@@ -219,7 +219,9 @@ _COURSE_FIELD_HINTS: Mapping[str, re.Pattern[str]] = {
     "course_code": re.compile(r"(?:과목\s*코드|학수번호)"),
     "grade_year": re.compile(r"(?:학년|권장\s*시기|언제\s*(?:들|듣|개설|수강|편성|배치))"),
     "semester": re.compile(r"(?:학기|개설\s*시기|언제\s*(?:들|듣|개설|수강|편성|배치))"),
-    "credits": re.compile(r"(?:몇\s*학점|\d+\s*학점|학점은|학점이|0학점)"),
+    "credits": re.compile(
+        r"(?:몇\s*학점|\d+\s*학점|학점(?:은|이|을|를|과|와|도)?|0학점)"
+    ),
     "completion_type": re.compile(
         r"(?:이수\s*구분|전공\s*필수|필수\s*전공|전공\s*선택|교양\s*선택|필수\s*과목|"
         r"필수(?:가|인|인지|인가|이야|맞)|졸업|"
@@ -228,7 +230,8 @@ _COURSE_FIELD_HINTS: Mapping[str, re.Pattern[str]] = {
     ),
 }
 _COURSE_LIST_HINT = re.compile(
-    r"(?:과목(?:은|이|을|들|\s*목록)|어떤\s*과목|정확히\s*어떤|중\s*어떤|"
+    r"(?:(?:전공\s*필수|필수\s*전공)\s*(?:과목\s*)?목록|"
+    r"과목(?:은|이|을|들|\s*목록)|어떤\s*과목|정확히\s*어떤|중\s*어떤|"
     r"과목\s*중|지정된\s*과목|빠뜨|순서|둘\s*다|"
     r"(?:중|가운데).{0,12}(?:하나|아무거나))"
 )

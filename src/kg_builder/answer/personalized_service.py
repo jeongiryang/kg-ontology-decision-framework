@@ -33,7 +33,7 @@ DEFAULT_BUNDLE = Path("data/verified/2026/2026_curriculum_kg_data.json")
 # decide whether a question needs user state or unavailable live data; they never
 # supply an academic answer value, Fact ID, Evidence ID, or Cypher.
 _ACADEMIC_DOMAIN = re.compile(
-    r"(?:학사|교육과정|교양|전공|졸업|학점|과목|수강|학년|학기|학번|학과|"
+    r"(?:학사|교육과정|교양|전공|졸업|학점|과목|수강|이수|학년|학기|학번|학과|"
     r"면제|영어|TOEIC|토익|TOEFL|토플|TEPS|텝스|OPIc|오픽|진로|공부)",
     re.IGNORECASE,
 )
@@ -50,9 +50,22 @@ _COURSE_IDENTITY_QUESTION = re.compile(
     r"표기.{0,12}다르|어떤\s*것으로\s*검색|둘\s*다.{0,12}(?:신청|수강)|"
     r"(?:같은|동일한)\s*(?:거|것)(?:야|인가|맞))"
 )
+_COURSE_OMISSION_NECESSITY = re.compile(
+    r"(?:안[ \t]*(?:들|이수|수강)(?:으면|어도|고)?[ \t]*안[ \t]*(?:돼|되)|"
+    r"(?:반드시|꼭)[ \t]*.{0,18}(?:들|이수|수강)(?:해야|할)|"
+    r"(?:들|이수|수강)(?:어야|해야)[ \t]*(?:돼|되))"
+)
 _GENERAL_WITHOUT_PERSONAL_RECORD = re.compile(
     r"(?:성적표|개인[ \t]*(?:이력|정보)|수강[ \t]*내역)[ \t]*(?:없이|제외).{0,24}"
     r"(?:가능한[ \t]*)?(?:일반|공통|전체)[ \t]*(?:기준|요건|규정)"
+)
+_CURRICULUM_APPLICATION = re.compile(
+    r"(?:교육과정.{0,24}(?:적용|확정)|(?:적용|확정).{0,24}교육과정|"
+    r"학번.{0,24}(?:판단|필요|말해야))"
+)
+_UNAVAILABLE_ADMINISTRATIVE_RULE = re.compile(
+    r"(?:(?:휴학|복학|전과).{0,32}(?:교육과정|졸업|요건|적용)|"
+    r"(?:교육과정|졸업|요건|적용).{0,32}(?:휴학|복학|전과))"
 )
 _CREDENTIAL_QUERY_NAMES = {
     "TOEIC": "TOEIC",
@@ -191,6 +204,14 @@ class PersonalizedCurriculumChatService:
                 "현재 PDF와 Verified KG에는 성적·재수강에 따른 개인별 졸업요건 적용 규정이 없습니다.",
                 limitations=("성적·재수강 적용 규정 근거 없음",),
             )
+        if _UNAVAILABLE_ADMINISTRATIVE_RULE.search(question):
+            return DecisionOutcome(
+                OutcomeStatus.INSUFFICIENT_EVIDENCE,
+                "질문은 현재 교육과정과 관련 있지만, 휴학·복학·전과에 따른 적용 여부를 "
+                "확정할 VERIFIED 근거가 현재 PDF와 KG에 없습니다. 학사 담당 부서 확인이 "
+                "필요합니다.",
+                limitations=("학적 변동에 따른 적용 규정 근거 없음",),
+            )
         if _LIVE_REGISTRATION.search(question):
             if self._is_advisory(question) and re.search(
                 r"(?:우선|추천|순서)", question
@@ -222,9 +243,19 @@ class PersonalizedCurriculumChatService:
         missing = self._required_profile_fields(question, extraction.profile)
         if missing:
             labels = ", ".join(self._profile_label(name) for name in missing)
+            if _CURRICULUM_APPLICATION.search(question):
+                message = (
+                    f"적용 교육과정을 확인하려면 {labels} 정보가 필요합니다. "
+                    "확인 가능한 값부터 알려 주세요."
+                )
+            else:
+                message = (
+                    f"개인별 계산에는 {labels} 정보가 필요합니다. "
+                    "확인 가능한 값부터 알려 주세요."
+                )
             return DecisionOutcome(
                 OutcomeStatus.NEEDS_USER_INFO,
-                f"개인별 계산에는 {labels} 정보가 필요합니다. 확인 가능한 값부터 알려 주세요.",
+                message,
                 tuple(missing),
             )
         return None
@@ -250,7 +281,8 @@ class PersonalizedCurriculumChatService:
         if profile_course_reference and not profile.completed_courses:
             return ["completed_courses"]
         if re.search(
-            r"(?:내[ \t]*성적표|개인[ \t]*(?:수강|이수)[ \t]*내역|"
+            r"(?:내[ \t]*성적표|내[ \t]*(?:수강|이수)[ \t]*내역|"
+            r"개인[ \t]*(?:수강|이수)[ \t]*내역|"
             r"남은[ \t]*졸업요건|졸업요건.{0,12}(?:모두|전체)[ \t]*판정)",
             question,
         ):
@@ -274,11 +306,7 @@ class PersonalizedCurriculumChatService:
             return []
         # Questions about which curriculum applies explicitly require admission
         # scope even when they are not asking for a numeric completion calculation.
-        if re.search(
-            r"(?:적용되는\s*교육과정|어느\s*교육과정|학번별\s*기준|"
-            r"학번.{0,24}(?:판단|필요|말해야))",
-            question,
-        ):
+        if _CURRICULUM_APPLICATION.search(question):
             required: list[str] = []
             if profile.admission_year is None:
                 required.append("admission_year")
@@ -287,7 +315,8 @@ class PersonalizedCurriculumChatService:
             return required
 
         personal_history = re.search(
-            r"(?:내가|나는|현재|지금까지|들었|이수했|수강한|내\s*학점|졸업까지|남은\s*요건|"
+            r"(?:내가|나는|현재|지금까지|들었|이수했|수강한|"
+            r"내\s*(?:학점|수강\s*내역|이수\s*내역)|졸업까지|남은\s*요건|"
             r"무엇을\s*더|뭐\s*더|영역별로\s*몇\s*학점)",
             question,
         )
@@ -524,12 +553,15 @@ class PersonalizedCurriculumChatService:
             and node.get("properties", {}).get("completion_type")
             == "MAJOR_ELECTIVE"
         ]
-        if elective_offerings and re.search(
-            r"(?:안[ \t]*(?:들|이수|수강)|못[ \t]*(?:들|이수|수강)|"
-            r"듣지|이수하지|수강하지|누락|빠뜨).{0,36}(?:졸업|필수)|"
-            r"(?:졸업|필수).{0,36}(?:안[ \t]*(?:들|이수|수강)|"
-            r"못[ \t]*(?:들|이수|수강)|듣지|이수하지|수강하지|누락|빠뜨)",
-            question,
+        if elective_offerings and (
+            _COURSE_OMISSION_NECESSITY.search(question)
+            or re.search(
+                r"(?:안[ \t]*(?:들|이수|수강)|못[ \t]*(?:들|이수|수강)|"
+                r"듣지|이수하지|수강하지|누락|빠뜨).{0,36}(?:졸업|필수)|"
+                r"(?:졸업|필수).{0,36}(?:안[ \t]*(?:들|이수|수강)|"
+                r"못[ \t]*(?:들|이수|수강)|듣지|이수하지|수강하지|누락|빠뜨)",
+                question,
+            )
         ):
             return (
                 f"{response.answer_text} 조회된 이수구분은 전공선택이므로 이 과목 "
@@ -635,7 +667,7 @@ class PersonalizedCurriculumChatService:
             r"(?:영역별|남은\s*\d*\s*학점|몇\s*학점이\s*더|몇\s*학점\s*남|"
             r"몇\s*학점(?:이)?\s*(?:부족|모자라|남)|"
             r"얼마나\s*(?:부족|모자라|남)|(?:부족|모자란)\s*학점|"
-            r"(?:다시\s*)?(?:계산|판단)|부족분)",
+            r"(?:다시\s*)?(?:계산|판단)|부족분|(?:뭐|무엇|어디)가?\s*부족)",
             question,
         ):
             thresholds: dict[str, float] = {}

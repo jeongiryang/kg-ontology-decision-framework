@@ -26,6 +26,11 @@ HTTP_REDIRECT_STATUS_CODES = frozenset({301, 302, 303, 307, 308})
 # materialize their typed contracts; omitting it from the provider grammar avoids
 # turning otherwise valid plans into HTTP 400 responses and deterministic fallback.
 OPENAI_GRAMMAR_OMITTED_KEYWORDS = frozenset({"uniqueItems"})
+# Ollama 0.32 rejects string-length assertions in its structured-output grammar
+# with HTTP 400. These constraints remain authoritative in the typed application
+# contracts; this projection only prevents an unsupported grammar keyword from
+# disabling otherwise valid agent planning and FactPacket rendering.
+OLLAMA_GRAMMAR_OMITTED_KEYWORDS = frozenset({"minLength", "maxLength"})
 
 
 class LLMConfigurationError(ValueError):
@@ -269,6 +274,26 @@ def _project_openai_grammar_schema(value: Any) -> Any:
     return value
 
 
+def _project_ollama_grammar_schema(value: Any) -> Any:
+    """Return the JSON Schema subset accepted by Ollama's grammar parser.
+
+    The original schema is never mutated and callers still materialize and validate
+    the complete typed contract after generation.
+    """
+
+    if isinstance(value, Mapping):
+        return {
+            key: _project_ollama_grammar_schema(item)
+            for key, item in value.items()
+            if key not in OLLAMA_GRAMMAR_OMITTED_KEYWORDS
+        }
+    if isinstance(value, list):
+        return [_project_ollama_grammar_schema(item) for item in value]
+    if isinstance(value, tuple):
+        return [_project_ollama_grammar_schema(item) for item in value]
+    return value
+
+
 class OllamaClient(_HTTPStructuredClient):
     """Ollama adapter; raw model content is parsed in memory and never traced."""
 
@@ -289,7 +314,7 @@ class OllamaClient(_HTTPStructuredClient):
             {
                 "model": self.model,
                 "stream": False,
-                "format": dict(response_schema),
+                "format": _project_ollama_grammar_schema(response_schema),
                 "messages": [
                     {"role": "system", "content": system_prompt},
                     {"role": "user", "content": user_prompt},

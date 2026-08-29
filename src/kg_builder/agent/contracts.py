@@ -37,6 +37,7 @@ class AgentMode(StrEnum):
 
     CONSERVATIVE = "conservative"
     EXPANDED = "expanded"
+    AGENTIC = "agentic"
 
 
 @dataclass(frozen=True, slots=True)
@@ -48,35 +49,44 @@ class AgentPolicy:
     max_kg_queries: int = MAX_KG_QUERIES_PER_TURN
     max_subquestions: int = 3
     max_turn_seconds: float = 120.0
+    max_iterations: int = 1
+    max_narrative_repairs: int = 0
 
     def __post_init__(self) -> None:
-        ceilings = (
-            (6, 6, 5, 150.0)
-            if self.mode is AgentMode.EXPANDED
-            else (MAX_TOOL_CALLS, MAX_KG_QUERIES_PER_TURN, 3, 120.0)
-        )
+        ceilings = {
+            AgentMode.CONSERVATIVE: (MAX_TOOL_CALLS, MAX_KG_QUERIES_PER_TURN, 3, 120.0, 1, 0),
+            AgentMode.EXPANDED: (6, 6, 5, 150.0, 1, 0),
+            AgentMode.AGENTIC: (6, 6, 3, 180.0, 3, 1),
+        }.get(self.mode)
         values = (
             self.max_tool_calls,
             self.max_kg_queries,
             self.max_subquestions,
             self.max_turn_seconds,
+            self.max_iterations,
+            self.max_narrative_repairs,
         )
-        if not isinstance(self.mode, AgentMode) or any(
+        if ceilings is None or any(
             isinstance(value, bool) or not isinstance(value, (int, float))
             for value in values
         ):
             raise ValueError("agent policy is invalid")
-        if any(value <= 0 or value > ceiling for value, ceiling in zip(values, ceilings)):
+        if any(
+            value < 0 or value > ceiling or (index < 5 and value == 0)
+            for index, (value, ceiling) in enumerate(zip(values, ceilings))
+        ):
             raise ValueError("agent policy exceeds its bounded mode")
 
     @classmethod
     def from_env(cls, environ: Mapping[str, str] | None = None) -> "AgentPolicy":
         source = os.environ if environ is None else environ
-        raw_mode = source.get("KG_AGENT_MODE", AgentMode.CONSERVATIVE.value)
+        raw_mode = source.get("KG_AGENT_MODE", AgentMode.AGENTIC.value)
         try:
             mode = AgentMode(raw_mode.strip().lower())
         except (AttributeError, ValueError) as exc:
-            raise ValueError("KG_AGENT_MODE must be conservative or expanded") from exc
+            raise ValueError(
+                "KG_AGENT_MODE must be conservative, expanded, or agentic"
+            ) from exc
         if mode is AgentMode.EXPANDED:
             return cls(
                 mode=mode,
@@ -84,6 +94,16 @@ class AgentPolicy:
                 max_kg_queries=6,
                 max_subquestions=5,
                 max_turn_seconds=150.0,
+            )
+        if mode is AgentMode.AGENTIC:
+            return cls(
+                mode=mode,
+                max_tool_calls=6,
+                max_kg_queries=6,
+                max_subquestions=3,
+                max_turn_seconds=180.0,
+                max_iterations=3,
+                max_narrative_repairs=1,
             )
         return cls()
 
@@ -94,6 +114,7 @@ class ToolName(StrEnum):
     QUERY_CURRICULUM = "query_curriculum"
     CALCULATE_REMAINING_CREDITS = "calculate_remaining_credits"
     ASK_CLARIFICATION = "ask_clarification"
+    ASSESS_EVIDENCE = "assess_evidence"
     GROUNDED_NARRATIVE = "grounded_narrative"
 
 
@@ -235,15 +256,19 @@ class AgentTraceEvent:
     state: str
     elapsed_ms: int
     detail: str
+    metadata: Mapping[str, Any] = field(default_factory=dict)
 
     def to_public_dict(self) -> dict[str, Any]:
-        return {
+        payload = {
             "sequence": self.sequence,
             "tool": self.tool.value,
             "state": self.state,
             "elapsed_ms": max(0, self.elapsed_ms),
             "detail": self.detail,
         }
+        if self.metadata:
+            payload["metadata"] = dict(self.metadata)
+        return payload
 
 
 @dataclass(frozen=True, slots=True)

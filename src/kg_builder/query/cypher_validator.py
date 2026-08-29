@@ -669,7 +669,7 @@ class CypherValidator:
             "evidence_verification_status",
         }
         if plan.selection_mode is SelectionMode.SINGLE_COURSE:
-            required.add("course_identity")
+            required.update({"course_identity", "name_ko"})
         if set(sources) != required:
             self._fail(
                 "CYPHER_RETURN_FIELD_MISMATCH",
@@ -723,6 +723,7 @@ class CypherValidator:
                     "SINGLE_COURSE must return one explicitly labeled Course identity",
                 )
             expected["course_identity"] = (course_variables[0], "course_id")
+            expected["name_ko"] = (course_variables[0], "name_ko")
         for alias, source in expected.items():
             if sources[alias] != source:
                 self._fail(

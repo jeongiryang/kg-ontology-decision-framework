@@ -9,13 +9,13 @@
 → Starlette POST /api/ask
 → 브라우저 UserProfile 검증·현재 메시지 정보 추출
 → AgenticCurriculumChatService
-→ 대화 문맥 해석·제한된 도구 계획
+→ 대화 문맥 해석·도구 계획·결과 기반 재탐색
 → PersonalizedCurriculumChatService → CurriculumChatService
 → 자연어 QueryPlan·동적 Cypher·SafetyPipeline
 → ResultValidator
-→ 구조화 Claim·결정론적 한국어 답변
+→ 구조화 Claim·결정론적 승인 답변
 → 승인 ChatResponse
-→ Claim 의미를 재검증한 자연어 표시 문장 또는 canonical fallback
+→ FactPacket별 Claim 의미를 재검증한 자연어 표시 문장 또는 부분 canonical fallback
 → 표시 전용 adapter·SSE
 → 상태·Citation·PDF 근거 UI
 ```
@@ -37,6 +37,7 @@ KG_LLM_TIMEOUT_SECONDS=180
 KG_LLM_MAX_RETRIES=1
 KG_LLM_CONTEXT_LENGTH=8192
 KG_LLM_MAX_OUTPUT_TOKENS=2048
+KG_AGENT_MODE=agentic
 
 KG_CHAT_PDF_PATH=/local/ignored/path/2026_curriculum_excerpt.pdf
 KG_CHAT_SHOW_QUERY_DETAILS=false
@@ -68,6 +69,7 @@ Starlette lifespan에서 다음 객체를 한 번 구성하고 `app.state`에 �
 | 변수 | 기본값 | 역할 |
 |---|---:|---|
 | `KG_CHAT_MAX_CONCURRENT` | `1` | 동시에 실행할 전체 chat 요청 수(1~4) |
+| `KG_AGENT_MODE` | `agentic` | 승인 결과를 보고 중단·재탐색하는 bounded Agent 정책 |
 | `KG_CHAT_CLIENT_TIMEOUT_SECONDS` | `180` | 브라우저 대기 제한(60~900초) |
 | `KG_CHAT_DEBUG` | `false` | 정제된 request ID/error code 표시 |
 | `KG_CHAT_SHOW_QUERY_DETAILS` | `false` | 처리 완료 후 승인된 Cypher와 정적 조회 정보 표시 |
@@ -86,7 +88,7 @@ request_id, status, answer_text, citations,
 used_fact_ids, used_evidence_ids, clarification, error_code
 ```
 
-일반 화면에는 `answer_text`, 상태, clarification과 Citation만 표시한다. 내부 Fact/Evidence ID, request ID와 error code는 숨긴다. `KG_CHAT_DEBUG=true`일 때만 정제된 request ID와 allowlist 오류 코드를 개발 정보로 표시한다. 개인 수강 이력·개인별 졸업 판정은 `SAFE_FAILURE`가 아니라 결정론적 `UNSUPPORTED` 안내로 처리한다. `내가`, `학생`, `졸업` 같은 단어만으로 개인 이력 질문으로 판정하지 않으며, 일반 규정 조회·단일 조건 비교·전체 개인 이력 판정을 구분한다. 단일 점수와 규정의 자동 비교가 미지원이면 개인 수강 이력 부재가 아닌 별도의 고정 한국어 안내를 사용한다.
+일반 화면에는 `answer_text`, 상태, clarification과 Citation만 표시한다. 내부 Fact/Evidence ID, request ID와 error code는 숨긴다. `KG_CHAT_DEBUG=true`일 때만 정제된 request ID와 allowlist 오류 코드를 개발 정보로 표시한다. `내가`, `학생`, `졸업` 같은 단어만으로 개인 이력 질문을 차단하지 않으며, 일반 규정 조회·단일 조건 비교·전체 개인 이력 판정을 구분한다. 브라우저 프로필에 검증된 영역별 학점이 있으면 Verified 기준과의 차이는 Python이 계산하고, 필요한 이수과목·학점이 없으면 `NEEDS_USER_INFO`, 성적·재수강처럼 현재 KG에 규정 근거가 없으면 `INSUFFICIENT_EVIDENCE`로 구분한다. 사용자 진술만으로 전체 졸업 가능 여부를 확정하지 않는다.
 
 화면의 기본 검색 범위는 `2026`, `department:cwnu:cse`다. 사용자가 연도·학과를 생략한 과목 질문에만 기본값을 채우며, 사용자가 명시한 다른 범위를 덮어쓰지 않고 `OUT_OF_SCOPE`로 판정한다. planner 계약은 검색에 이미 주어진 `filters`와 사용자가 답으로 요구한 `requested_fields`를 분리한다. 따라서 “몇 학년·몇 학기”는 누락 필터가 아니라 조회 필드다. 동명 여부는 질문 문자열이 아니라 ResultValidator가 반환된 stable `course_identity` 수로 판단한다.
 
@@ -110,7 +112,9 @@ sealed 응답과 별도로 `profile_update version=1`과 `outcome version=1` SSE
 
 다중 턴에서는 브라우저가 `ConversationContext version=1`을 함께 보내고 서버가
 `agent_trace version=1`, `conversation_update version=1`을 별도 envelope로 반환한다.
-프로필은 기존 `localStorage`, 채팅방과 메시지는 versioned `IndexedDB`에만 저장된다.
+프로필은 기존 `localStorage`, 채팅방과 메시지는 schema version 2 `IndexedDB`에만
+저장된다. 각 assistant message의 presentation snapshot이 그 turn의 Citation, progress,
+inspection과 Agent trace를 함께 보존하므로 다음 답변이 이전 근거를 덮어쓰지 않는다.
 새 채팅은 이전 채팅의 주제를 사용하지 않지만 프로필은 유지된다. 서버는 채팅 내용을
 영구 저장하지 않으며 이전 assistant 문장을 학교 규정 Evidence로 사용하지 않는다.
 도구·문맥·자연어 초안 검증의 상세 계약은
@@ -154,7 +158,8 @@ QUESTION_ANALYSIS → SCHEMA_SELECTION → CYPHER_GENERATION
 `POST /api/ask`는 `progress`, 선택적 `clarification_options`, 선택적 `inspection_update`, `result`, `error` SSE 이벤트를 보낸 뒤 스트림을 종료한다. `result.response`는 승인된 8개 wire 필드이고 `result.presentation`은 상태 라벨, PDF page group, 공개 PDF 상태와 선택적 debug metadata다. `inspection_update`는 단계별 allowlist 요약만 담으며 실제 확정 시점에 `result`보다 먼저 전송될 수 있다.
 
 각 실제 단계 행은 기본적으로 접힌 disclosure button이다. 키보드로 열고 닫을 수 있으며
-`aria-expanded`와 `aria-controls`가 연결된다. 완료된 행은 답변 화면에도 남는다. 상세
+`aria-expanded`와 `aria-controls`가 연결된다. 완료된 행은 해당 assistant message에도
+남는다. 상세
 정보가 없는 단계에는 disclosure를 만들거나 임의 설명을 생성하지 않고 상태·실제
 소요시간만 표시한다.
 
@@ -171,8 +176,8 @@ Cypher는 lexer가 실제 주석을 제거한 comment-free canonical 문자열�
 
 승인된 Cypher는 가로 스크롤, 접기·펼치기와 키보드 접근 가능한 복사 버튼을 제공한다. 검증 전·실패 후보 Cypher, 접속 URI·계정, 로컬 경로, 비밀번호·토큰·API key, system prompt, 모델 원문, traceback, 내부 승인 seal·digest는 상세 모드에서도 포함하지 않는다. sealed `ChatResponse` 8필드는 변경하지 않는다.
 
-상세 모드에는 답변이 완료된 뒤 단계 목록과 별도로 `선택 스키마`, `승인 Cypher`,
-`조회 그래프` 탭을 제공한다. 처리 중 화면은 실제 callback의 텍스트 타임라인만 표시하고
+상세 모드에는 해당 assistant message의 단계 목록과 함께 `선택 스키마`, `승인 Cypher`,
+`조회 그래프` 탭을 제공한다. 처리 중에는 실제 callback의 텍스트 타임라인만 표시하고
 graph를 점진적으로 다시 그리거나 탐색 경로를 재생하지 않는다. 선택 스키마 탭은 실제
 `SCHEMA_SELECTION`의 label·relationship, 승인 Cypher 탭은 같은 후보의 정적 검증과
 EXPLAIN을 통과한 canonical Cypher, 조회 그래프 탭은 EXPLAIN 승인 질의 구조와
@@ -231,7 +236,7 @@ KG_CHAT_PDF_PATH=/local/ignored/path/2026_curriculum_excerpt.pdf
 
 - 빈 질문과 2,000자 초과 질문을 서버에서 거부한다.
 - 질문 JSON은 `question`, 서버가 발급한 clarification 선택을 되돌려 보내는 선택적
-  `resolved`, version 1 브라우저 `profile`만 허용한다.
+  `resolved`, version 1 브라우저 `profile`과 bounded `conversation`만 허용한다.
 - 프로필은 localStorage에만 보존하며 서버 DB나 Neo4j에 영구 저장하지 않는다. 손상된
   저장값은 빈 프로필로 fallback하고 서버는 타입·범위·controlled vocabulary를 재검증한다.
 - 채팅에서 추출한 학적·이수 정보는 `USER_ASSERTION`으로 표시하고 KG 사실과 합치지 않는다.
@@ -242,7 +247,21 @@ KG_CHAT_PDF_PATH=/local/ignored/path/2026_curriculum_excerpt.pdf
 - 전송 중 `inFlight`와 비활성 버튼으로 중복 제출을 막는다.
 - `AbortController`와 최소 60초 client timeout을 사용한다.
 - 질문 입력창은 한 줄에서 시작해 최대 5줄까지 자동 확장하고 그 이후에만 내부
-  스크롤을 사용한다. Enter 전송·Shift+Enter 줄바꿈과 예시 질문 chip을 유지한다.
+  스크롤을 사용한다. Enter 전송·Shift+Enter 줄바꿈을 유지하며 한글 IME 조합 중 Enter는
+  전송하지 않는다. 입력창은 첫 질문 전부터 오류·답변 완료 후까지 계속 화면에 남는다.
+
+## 연속 채팅 화면
+
+UI는 질문 입력·진행·결과의 별도 3단계 화면과 `새 질문하기` 버튼을 사용하지 않는다.
+사용자 질문은 전송 즉시 현재 채팅에 추가되고, assistant placeholder에 실제 progress가
+누적된 뒤 같은 turn의 최종 답변으로 교체된다. 하단 입력창에서 바로 다음 질문을 보내며
+동일한 `conversation_id`를 유지한다. 새 대화 문맥은 `새 채팅` 버튼으로만 만든다.
+
+각 assistant turn 아래에서 그 turn의 근거·PDF, 처리 과정, 승인 Cypher·inspection,
+Agent 도구 기록을 독립적으로 열 수 있다. PDF modal과 상세 패널을 열어도 입력창과 대화
+위치를 잃지 않는다. 사용자가 과거 메시지를 읽고 있으면 스트리밍 중 강제로 아래로
+이동하지 않고 최신 메시지 이동 버튼을 표시한다. 채팅방 생성·최근순 선택·개별/전체 삭제,
+새로고침 복원과 모바일 레이아웃을 제공하며 프로필 초기화는 채팅 삭제와 분리한다.
 
 ## 테스트
 

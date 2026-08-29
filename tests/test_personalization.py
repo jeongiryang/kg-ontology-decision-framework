@@ -8,7 +8,10 @@ from pathlib import Path
 from typing import Any
 
 from kg_builder.answer.contracts import ChatResponse
-from kg_builder.answer.personalized_service import PersonalizedCurriculumChatService
+from kg_builder.answer.personalized_service import (
+    PersonalizedCurriculumChatService,
+    _COURSE_OMISSION_NECESSITY,
+)
 from kg_builder.personalization import (
     OutcomeStatus,
     ProfileExtractor,
@@ -167,6 +170,15 @@ class UserProfileTests(unittest.TestCase):
 
 
 class PersonalizedOutcomeTests(unittest.TestCase):
+    def test_course_omission_necessity_wording_is_general_not_question_specific(self):
+        for question in (
+            "이 과목 안 들으면 안 되는지 알려 줘.",
+            "이 수업을 꼭 이수해야 하나요?",
+            "반드시 수강해야 돼?",
+        ):
+            with self.subTest(question=question):
+                self.assertIsNotNone(_COURSE_OMISSION_NECESSITY.search(question))
+
     def test_personal_calculation_asks_only_for_missing_user_information(self):
         base = _ResponseService(ChatResponse.not_found("unused"))
         service = PersonalizedCurriculumChatService(base, bundle_path=BUNDLE)
@@ -228,7 +240,22 @@ class PersonalizedOutcomeTests(unittest.TestCase):
         result = service.ask("휴학 후 교육과정 적용 규정을 알려줘")
         self.assertEqual(result.outcome.status, OutcomeStatus.INSUFFICIENT_EVIDENCE)
         self.assertEqual(result.outcome.required_user_fields, ())
-        self.assertEqual(base.calls, 1)
+        self.assertEqual(base.calls, 0)
+        self.assertIn("휴학·복학·전과", result.outcome.message)
+
+    def test_curriculum_application_asks_for_only_missing_scope_in_korean(self):
+        base = _ResponseService(ChatResponse.not_found("unused"))
+        service = PersonalizedCurriculumChatService(base, bundle_path=BUNDLE)
+        result = service.ask(
+            "학번을 말하지 않았는데 적용 교육과정을 확정할 수 있어?"
+        )
+        self.assertEqual(result.outcome.status, OutcomeStatus.NEEDS_USER_INFO)
+        self.assertEqual(
+            result.outcome.required_user_fields,
+            ("admission_year", "department_id"),
+        )
+        self.assertIn("적용 교육과정을 확인하려면", result.outcome.message)
+        self.assertEqual(base.calls, 0)
 
     def test_career_question_uses_advisory_status_without_inventing_facts(self):
         base = _ResponseService(ChatResponse.not_found("request"))
@@ -316,6 +343,19 @@ class PersonalizedOutcomeTests(unittest.TestCase):
         )
         self.assertEqual(result.outcome.status, OutcomeStatus.NEEDS_USER_INFO)
         self.assertEqual(result.outcome.required_user_fields, ("completed_courses",))
+        self.assertEqual(base.calls, 0)
+
+    def test_personal_completion_record_wording_is_academic_and_requests_minimum_fields(self):
+        base = _ResponseService(ChatResponse.not_found("request"))
+        service = PersonalizedCurriculumChatService(base, bundle_path=BUNDLE)
+
+        result = service.ask("그러면 내 이수내역 기준으로 무엇이 부족해?")
+
+        self.assertEqual(result.outcome.status, OutcomeStatus.NEEDS_USER_INFO)
+        self.assertEqual(
+            result.outcome.required_user_fields,
+            ("completed_courses", "credits"),
+        )
         self.assertEqual(base.calls, 0)
 
 

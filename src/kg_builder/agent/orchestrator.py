@@ -1,8 +1,8 @@
 """LLM-led, bounded orchestration over the existing grounded query service.
 
-The model may resolve dialogue references, choose a small set of tools, and draft a
-natural rendering of a small approved Claim set.  It cannot create school facts or
-bypass the canonical Cypher/SafetyPipeline inside
+The model may resolve dialogue references, decompose a bounded request, choose the
+next approved retrieval, and render complete FactPacket sections.  It cannot create
+school facts or bypass the canonical Cypher/SafetyPipeline inside
 ``PersonalizedCurriculumChatService``.  A factual draft is displayed only after Python
 rechecks its subject, enum/polarity, numeric roles, and Claim/Citation approval; every
 unsupported combination falls back to the deterministic Claim renderer.
@@ -47,6 +47,10 @@ from .tools import validate_tool_input
 
 
 _REFERENCE = re.compile(r"(?:그[ \t]*과목|그거|그것|그러면|앞의[ \t]*과목|둘[ \t]*중)")
+_COURSE_SUBSTITUTION = re.compile(
+    r"(?:(?:대신|대체).{0,24}(?:인정|가능|돼|되)|"
+    r"(?:인정|가능).{0,24}(?:대신|대체))"
+)
 _ELLIPTICAL_FOLLOWUP = re.compile(
     r"^[ \t]*(?:학수번호|과목코드|학점|이수구분|언제|몇[ \t]*학점|"
     r"다시|둘의|둘[ \t]*다|그중|그[ \t]*추천|그[ \t]*기준|같은[ \t]*거|"
@@ -128,12 +132,19 @@ _ACADEMIC_LIVE_CONTRAST = re.compile(
     r"(?=.*(?:교육과정|학년|학기|과목|개설))(?=.*(?:실시간|잔여석|시간표|증원))",
     re.DOTALL,
 )
+_LIVE_INFORMATION = re.compile(
+    r"(?:잔여\s*석|남은\s*자리|자리.{0,8}(?:있|없|남)|증원|시간표|시간대|"
+    r"실시간\s*개설|이번\s*학기.{0,8}(?:열리|개설))"
+)
 _SAFE_DISCOURSE = re.compile(r"^[가-힣A-Za-z0-9\s.,?!·()%-]{0,320}$")
 _FACT_NUMBER = re.compile(r"(?<![A-Za-z0-9_])\d+(?:\.\d+)?")
 _COURSE_CODE = re.compile(r"(?<![A-Z0-9_])[A-Z]{2,}[A-Z0-9_-]*\d[A-Z0-9_-]*(?![A-Z0-9_])")
 _FACT_CONTROL_TOKEN = re.compile(
     r"전공필수|전공선택|교양필수|교양선택|자유선택|"
     r"최소|최대|이상|이하|초과|미만|면제|의무|없|있|아니|않|불가|가능|충족"
+)
+_ASSERTION_CONTROL_TOKEN = re.compile(
+    r"인정|대체|승인|권장|추천|재수강"
 )
 _FORBIDDEN_NARRATIVE = re.compile(
     r"(?:system\s*prompt|api\s*key|password|token|cypher|neo4j|traceback|"
@@ -146,11 +157,14 @@ _TOOL_DETAIL = {
     ToolName.QUERY_CURRICULUM: "승인된 읽기 전용 KG 질의 경로를 실행했습니다.",
     ToolName.CALCULATE_REMAINING_CREDITS: "검증된 기준과 사용자 진술을 분리해 계산했습니다.",
     ToolName.ASK_CLARIFICATION: "답변에 필요한 최소 정보를 확인했습니다.",
+    ToolName.ASSESS_EVIDENCE: "확보한 근거를 평가하고 다음 탐색 필요 여부를 결정했습니다.",
     ToolName.GROUNDED_NARRATIVE: "검증된 사실 문장을 유지하며 대화형 표현을 구성했습니다.",
 }
 
 _PLANNER_TOOLS = tuple(
-    item for item in ToolName if item is not ToolName.GROUNDED_NARRATIVE
+    item
+    for item in ToolName
+    if item not in {ToolName.ASSESS_EVIDENCE, ToolName.GROUNDED_NARRATIVE}
 )
 
 
@@ -194,6 +208,49 @@ _NARRATIVE_SCHEMA: Mapping[str, Any] = {
         "closing": {"type": "string", "maxLength": 320},
     },
     "required": ["grounded_answer", "intro", "closing"],
+    "additionalProperties": False,
+}
+
+_EVIDENCE_DECISION_SCHEMA: Mapping[str, Any] = {
+    "type": "object",
+    "properties": {
+        "action": {"type": "string", "enum": ["STOP", "QUERY"]},
+        "next_question": {"type": ["string", "null"], "maxLength": 2000},
+        "reason": {
+            "type": "string",
+            "enum": [
+                "SUFFICIENT_EVIDENCE",
+                "MISSING_EVIDENCE",
+                "INDEPENDENT_SUBQUESTION",
+                "NO_SAFE_QUERY",
+            ],
+        },
+    },
+    "required": ["action", "next_question", "reason"],
+    "additionalProperties": False,
+}
+
+_FACT_PACKET_NARRATIVE_SCHEMA: Mapping[str, Any] = {
+    "type": "object",
+    "properties": {
+        "sections": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "packet_id": {"type": "string", "pattern": "^fact:[1-4]$"},
+                    "text": {"type": "string", "minLength": 1, "maxLength": 5000},
+                },
+                "required": ["packet_id", "text"],
+                "additionalProperties": False,
+            },
+            "maxItems": 4,
+            "uniqueItems": True,
+        },
+        "intro": {"type": "string", "maxLength": 160},
+        "closing": {"type": "string", "maxLength": 320},
+    },
+    "required": ["sections", "intro", "closing"],
     "additionalProperties": False,
 }
 
@@ -307,6 +364,78 @@ class AgenticCurriculumChatService:
                 current_topic=conversation.current_topic if conversation else None,
                 recent_course_codes=self._course_codes(
                     conversation, empty_plan, personalized
+                ),
+            )
+        # Profile completeness and service-scope gates must be evaluated against the
+        # user's actual turn before an LLM is allowed to rewrite it into a narrower
+        # retrieval question.  Otherwise a request such as "내가 들은 과목에서 무엇을
+        # 더 들어야 하나" can be reduced to a generic recommendation lookup and lose
+        # the missing-credit requirement.  This gate supplies no academic answer: it
+        # only preserves typed user assertions and the deterministic five-state
+        # boundary already owned by PersonalizedCurriculumChatService.
+        preliminary = (
+            self.service._preflight(question, extraction)
+            if extraction is not None
+            else None
+        )
+        if preliminary is not None:
+            personalized = self.service.ask(
+                question,
+                profile=current_profile,
+                resolved=resolved,
+                progress_callback=progress_callback,
+            )
+            if profile is not None or personalized.changed_profile_fields:
+                self._record(
+                    trace,
+                    trace_callback,
+                    ToolName.READ_USER_PROFILE,
+                    "COMPLETED",
+                    0,
+                )
+            if personalized.outcome.status is OutcomeStatus.NEEDS_USER_INFO:
+                validate_tool_input(
+                    ToolName.ASK_CLARIFICATION,
+                    {
+                        "missing_fields": list(
+                            personalized.outcome.required_user_fields
+                        )
+                    },
+                )
+                self._record(
+                    trace,
+                    trace_callback,
+                    ToolName.ASK_CLARIFICATION,
+                    "COMPLETED",
+                    0,
+                )
+            direct_plan = _Plan(
+                question,
+                tuple(
+                    item.course_code
+                    for item in personalized.profile.completed_courses
+                ),
+                tuple(item.tool for item in trace),
+                conversation.current_topic if conversation else None,
+            )
+            return AgentChatResult(
+                personalized=personalized,
+                conversation_id=(
+                    conversation.conversation_id
+                    if conversation
+                    else "conversation:single"
+                ),
+                turn_id=conversation.turn_id if conversation else "turn:single",
+                display_answer=personalized.outcome.message,
+                trace=tuple(trace),
+                summary=self._summary(
+                    conversation,
+                    conversation.current_topic if conversation else None,
+                    personalized,
+                ),
+                current_topic=conversation.current_topic if conversation else None,
+                recent_course_codes=self._course_codes(
+                    conversation, direct_plan, personalized
                 ),
             )
         if _SERVICE_SCOPE_QUESTION.search(question):
@@ -489,8 +618,8 @@ class AgenticCurriculumChatService:
         tool_results = [personalized]
         query_executions = 1
         executed_questions = {" ".join(plan.question.split())}
+        calculation_results: list[PersonalizedChatResult] = []
         if ToolName.CALCULATE_REMAINING_CREDITS in calls:
-            calculation_results: list[PersonalizedChatResult] = []
             categories = [
                 category
                 for category in ("general", "major", "total")
@@ -533,7 +662,13 @@ class AgenticCurriculumChatService:
                 item.response.status is ChatStatus.ANSWERABLE
                 for item in calculation_results
             ):
-                tool_results = calculation_results
+                # Keep the original semantic result alongside deterministic credit
+                # lookups.  It can carry an evidence-completeness limitation (for
+                # example, a total-credit rule does not establish which curriculum
+                # area the remaining credits must come from).  Replacing it here
+                # would turn a supported partial calculation into an incorrectly
+                # complete answer.
+                tool_results.extend(calculation_results)
         subquestions = list(plan.subquestions)
         for item in self._fact_family_subquestions(question):
             if item != plan.question and item not in subquestions:
@@ -545,61 +680,87 @@ class AgenticCurriculumChatService:
             and _MAJOR_REQUIRED_LIST_QUERY not in subquestions
         ):
             subquestions.append(_MAJOR_REQUIRED_LIST_QUERY)
-        for subquestion in (
-            () if profile_statement else subquestions[: self.policy.max_subquestions]
-        ):
-            if not self._query_budget_available(query_executions, turn_started):
-                break
-            normalized_question = " ".join(subquestion.split())
-            if normalized_question in executed_questions:
-                continue
-            validate_tool_input(ToolName.QUERY_CURRICULUM, {"question": subquestion})
-            sub_started = perf_counter()
-            subresult = self.service.ask(
-                subquestion,
+        if self.policy.mode is AgentMode.AGENTIC and not profile_statement:
+            pending = list(dict.fromkeys(subquestions[: self.policy.max_subquestions]))
+            if plan.followup_question:
+                pending.append(plan.followup_question)
+            (
+                tool_results,
+                personalized,
+                query_executions,
+            ) = self._run_result_driven_loop(
+                question=question,
+                plan=plan,
+                conversation=conversation,
+                pending_questions=pending,
+                tool_results=tool_results,
+                fallback=personalized,
                 profile=tool_results[-1].profile,
-                resolved=None,
-                progress_callback=progress_callback,
-            )
-            tool_results.append(subresult)
-            query_executions += 1
-            executed_questions.add(normalized_question)
-            self._record(
-                trace,
-                trace_callback,
-                ToolName.QUERY_CURRICULUM,
-                "COMPLETED",
-                int((perf_counter() - sub_started) * 1000),
-            )
-        if (
-            not profile_statement
-            and plan.followup_question
-            and self._query_budget_available(query_executions, turn_started)
-            and personalized.response.status in {ChatStatus.UNRESOLVED, ChatStatus.NOT_FOUND}
-            and " ".join(plan.followup_question.split()) not in executed_questions
-        ):
-            retry_started = perf_counter()
-            validate_tool_input(
-                ToolName.QUERY_CURRICULUM, {"question": plan.followup_question}
-            )
-            retry = self.service.ask(
-                plan.followup_question,
-                profile=personalized.profile,
                 resolved=resolved,
                 progress_callback=progress_callback,
+                trace=trace,
+                trace_callback=trace_callback,
+                executed_questions=executed_questions,
+                query_executions=query_executions,
+                turn_started=turn_started,
             )
-            query_executions += 1
-            executed_questions.add(" ".join(plan.followup_question.split()))
-            self._record(
-                trace,
-                trace_callback,
-                ToolName.QUERY_CURRICULUM,
-                "COMPLETED",
-                int((perf_counter() - retry_started) * 1000),
-            )
-            if retry.response.status is ChatStatus.ANSWERABLE:
-                personalized = retry
-                tool_results[0] = retry
+        else:
+            for subquestion in (
+                () if profile_statement else subquestions[: self.policy.max_subquestions]
+            ):
+                if not self._query_budget_available(query_executions, turn_started):
+                    break
+                normalized_question = " ".join(subquestion.split())
+                if normalized_question in executed_questions:
+                    continue
+                validate_tool_input(ToolName.QUERY_CURRICULUM, {"question": subquestion})
+                sub_started = perf_counter()
+                subresult = self.service.ask(
+                    subquestion,
+                    profile=tool_results[-1].profile,
+                    resolved=None,
+                    progress_callback=progress_callback,
+                )
+                tool_results.append(subresult)
+                query_executions += 1
+                executed_questions.add(normalized_question)
+                self._record(
+                    trace,
+                    trace_callback,
+                    ToolName.QUERY_CURRICULUM,
+                    "COMPLETED",
+                    int((perf_counter() - sub_started) * 1000),
+                )
+            if (
+                not profile_statement
+                and plan.followup_question
+                and self._query_budget_available(query_executions, turn_started)
+                and personalized.response.status
+                in {ChatStatus.UNRESOLVED, ChatStatus.NOT_FOUND}
+                and " ".join(plan.followup_question.split()) not in executed_questions
+            ):
+                retry_started = perf_counter()
+                validate_tool_input(
+                    ToolName.QUERY_CURRICULUM, {"question": plan.followup_question}
+                )
+                retry = self.service.ask(
+                    plan.followup_question,
+                    profile=personalized.profile,
+                    resolved=resolved,
+                    progress_callback=progress_callback,
+                )
+                query_executions += 1
+                executed_questions.add(" ".join(plan.followup_question.split()))
+                self._record(
+                    trace,
+                    trace_callback,
+                    ToolName.QUERY_CURRICULUM,
+                    "COMPLETED",
+                    int((perf_counter() - retry_started) * 1000),
+                )
+                if retry.response.status is ChatStatus.ANSWERABLE:
+                    personalized = retry
+                    tool_results[0] = retry
         personalized = self._combine_grounded(
             tool_results, personalized, question=question
         )
@@ -612,14 +773,27 @@ class AgenticCurriculumChatService:
                 message = grounded_message(
                     question, personalized.profile, personalized.response
                 )
+                calculation_complete = bool(
+                    calculation_results
+                    and any(
+                        item.response.status is ChatStatus.ANSWERABLE
+                        for item in calculation_results
+                    )
+                    and "사용자 진술" in message
+                    and "학점이 남습니다" in message
+                )
                 personalized = PersonalizedChatResult(
                     response=personalized.response,
                     outcome=DecisionOutcome(
-                        personalized.outcome.status,
+                        OutcomeStatus.ANSWERED
+                        if calculation_complete
+                        else personalized.outcome.status,
                         message,
                         required_user_fields=personalized.outcome.required_user_fields,
                         used_profile_fields=personalized.outcome.used_profile_fields,
-                        limitations=personalized.outcome.limitations,
+                        limitations=()
+                        if calculation_complete
+                        else personalized.outcome.limitations,
                     ),
                     profile=personalized.profile,
                     changed_profile_fields=personalized.changed_profile_fields,
@@ -681,7 +855,11 @@ class AgenticCurriculumChatService:
             )
             self._record(trace, trace_callback, ToolName.ASK_CLARIFICATION, "COMPLETED", 0)
         narrative_started = perf_counter()
-        display = self._narrative(question, personalized)
+        display, narrative_metadata = self._narrative(
+            question,
+            personalized,
+            sources=tool_results,
+        )
         validate_tool_input(
             ToolName.GROUNDED_NARRATIVE,
             {
@@ -695,6 +873,7 @@ class AgenticCurriculumChatService:
             ToolName.GROUNDED_NARRATIVE,
             "COMPLETED",
             int((perf_counter() - narrative_started) * 1000),
+            metadata=narrative_metadata,
         )
         summary = self._summary(conversation, plan.topic, personalized)
         codes = self._course_codes(conversation, plan, personalized)
@@ -710,6 +889,236 @@ class AgenticCurriculumChatService:
             current_topic=plan.topic or (conversation.current_topic if conversation else None),
             recent_course_codes=codes,
         )
+
+    def _run_result_driven_loop(
+        self,
+        *,
+        question: str,
+        plan: _Plan,
+        conversation: ConversationContext | None,
+        pending_questions: list[str],
+        tool_results: list[PersonalizedChatResult],
+        fallback: PersonalizedChatResult,
+        profile: UserProfile,
+        resolved: Mapping[str, Any] | None,
+        progress_callback: ProgressCallback | None,
+        trace: list[AgentTraceEvent],
+        trace_callback: Callable[[AgentTraceEvent], None] | None,
+        executed_questions: set[str],
+        query_executions: int,
+        turn_started: float,
+    ) -> tuple[list[PersonalizedChatResult], PersonalizedChatResult, int]:
+        """Let the model choose the next grounded query after seeing safe results.
+
+        The decision can only select a validated question.  It never supplies Cypher,
+        Facts, Claims, or citations, and every selected question re-enters the sole
+        personalized query/SafetyPipeline path.
+        """
+
+        pending = [
+            item
+            for item in dict.fromkeys(pending_questions)
+            if " ".join(item.split()) not in executed_questions
+        ]
+        current = fallback
+        for iteration in range(1, self.policy.max_iterations + 1):
+            if not self._query_budget_available(query_executions, turn_started):
+                break
+            # One approved answer with no independently requested part is already
+            # sufficient.  Avoid paying for an assessment call on a simple question.
+            if (
+                not pending
+                and current.response.status is ChatStatus.ANSWERABLE
+                and current.response._is_approved()
+            ):
+                break
+            assessment_started = perf_counter()
+            remaining = self.policy.max_kg_queries - query_executions
+            validate_tool_input(
+                ToolName.ASSESS_EVIDENCE,
+                {
+                    "result_count": min(6, len(tool_results)),
+                    "remaining_query_budget": max(0, min(5, remaining)),
+                },
+            )
+            next_question, reason = self._assess_evidence(
+                question=question,
+                plan=plan,
+                conversation=conversation,
+                results=tool_results,
+                pending=pending,
+                executed_questions=executed_questions,
+                remaining_query_budget=remaining,
+            )
+            self._record(
+                trace,
+                trace_callback,
+                ToolName.ASSESS_EVIDENCE,
+                "COMPLETED",
+                int((perf_counter() - assessment_started) * 1000),
+                metadata={
+                    "iteration": iteration,
+                    "decision": "QUERY" if next_question else "STOP",
+                    "reason": reason,
+                },
+            )
+            if not next_question:
+                break
+            normalized = " ".join(next_question.split())
+            if normalized in executed_questions:
+                break
+            validate_tool_input(ToolName.QUERY_CURRICULUM, {"question": next_question})
+            query_started = perf_counter()
+            result = self.service.ask(
+                next_question,
+                profile=profile,
+                resolved=resolved if next_question == plan.followup_question else None,
+                progress_callback=progress_callback,
+            )
+            tool_results.append(result)
+            if result.response.status is ChatStatus.ANSWERABLE:
+                current = result
+                # A narrower recovery query replaces the failed lookup it was
+                # designed to repair.  Keeping that predecessor would downgrade a
+                # successfully grounded answer to INSUFFICIENT_EVIDENCE.  Failed
+                # independent subquestions remain so partially answered compound
+                # questions still report their missing part.
+                recovery = reason == "MISSING_EVIDENCE" or (
+                    plan.followup_question is not None
+                    and next_question == plan.followup_question
+                    and reason != "INDEPENDENT_SUBQUESTION"
+                )
+                if recovery:
+                    for index in range(len(tool_results) - 2, -1, -1):
+                        if tool_results[index].response.status is not ChatStatus.ANSWERABLE:
+                            del tool_results[index]
+                            break
+            profile = result.profile
+            query_executions += 1
+            executed_questions.add(normalized)
+            pending = [item for item in pending if " ".join(item.split()) != normalized]
+            self._record(
+                trace,
+                trace_callback,
+                ToolName.QUERY_CURRICULUM,
+                "COMPLETED",
+                int((perf_counter() - query_started) * 1000),
+                metadata={"iteration": iteration},
+            )
+        return tool_results, current, query_executions
+
+    def _assess_evidence(
+        self,
+        *,
+        question: str,
+        plan: _Plan,
+        conversation: ConversationContext | None,
+        results: list[PersonalizedChatResult],
+        pending: list[str],
+        executed_questions: set[str],
+        remaining_query_budget: int,
+    ) -> tuple[str | None, str]:
+        packet = [
+            {
+                "result": index,
+                "wire_status": item.response.status.value,
+                "outcome_status": item.outcome.status.value,
+                "approved_claims": self._public_claim_packet(item.response),
+                "citation_count": len(item.response.citations),
+                "limitations": list(item.outcome.limitations),
+            }
+            for index, item in enumerate(results[-6:], start=1)
+        ]
+        try:
+            generation = self.client.generate_json(
+                system_prompt=(
+                    "당신은 근거 탐색 제어기다. 결과 packet과 원래 질문을 비교해 독립된 "
+                    "요구가 아직 남았을 때만 QUERY를 선택한다. 이미 답한 내용을 다시 "
+                    "조회하지 않는다. next_question은 pending_questions 중 하나를 그대로 "
+                    "고르거나 같은 주제의 더 좁은 근거 조회여야 한다. 학교 규정값, 답변, "
+                    "Cypher, Evidence ID를 만들지 않는다. 충분한 VERIFIED Claim과 Citation이 "
+                    "있거나 안전한 추가 질문을 만들 수 없으면 STOP한다."
+                ),
+                user_prompt=json.dumps(
+                    {
+                        "original_question": question,
+                        "resolved_question": plan.question,
+                        "topic": plan.topic,
+                        "conversation": conversation.prompt_context()
+                        if conversation
+                        else {},
+                        "results": packet,
+                        "pending_questions": pending,
+                        "remaining_query_budget": remaining_query_budget,
+                    },
+                    ensure_ascii=False,
+                ),
+                response_schema=_EVIDENCE_DECISION_SCHEMA,
+            )
+            payload = generation.payload
+            action = payload.get("action")
+            reason = payload.get("reason")
+            candidate = payload.get("next_question")
+            if action == "STOP" and candidate is None and isinstance(reason, str):
+                return None, reason
+            if action != "QUERY" or not isinstance(candidate, str):
+                raise ValueError("agent evidence decision is invalid")
+            candidate = candidate.strip()
+            if not candidate or len(candidate) > 2000:
+                raise ValueError("agent next question is invalid")
+            normalized = " ".join(candidate.split())
+            if normalized in executed_questions:
+                raise ValueError("agent repeated a grounded query")
+            if candidate not in pending and not self._related_followup(
+                question, plan, conversation, candidate
+            ):
+                raise ValueError("agent next question changed the user topic")
+            return candidate, reason if isinstance(reason, str) else "MISSING_EVIDENCE"
+        except (LLMResponseError, ValueError, TypeError):
+            # A failed control decision cannot create a new free-form query.  The
+            # first already-validated planner subquestion is the only safe fallback.
+            for candidate in pending:
+                if " ".join(candidate.split()) not in executed_questions:
+                    return candidate, "INDEPENDENT_SUBQUESTION"
+            return None, "NO_SAFE_QUERY"
+
+    def _related_followup(
+        self,
+        question: str,
+        plan: _Plan,
+        conversation: ConversationContext | None,
+        candidate: str,
+    ) -> bool:
+        allowed_text = " ".join(
+            [
+                question,
+                plan.question,
+                plan.topic or "",
+                *(
+                    (message.content for message in conversation.recent_messages)
+                    if conversation
+                    else ()
+                ),
+            ]
+        )
+        allowed_terms = set(re.findall(r"[가-힣A-Za-z]{2,}", allowed_text))
+        candidate_terms = set(re.findall(r"[가-힣A-Za-z]{2,}", candidate))
+        if not candidate_terms or not allowed_terms.intersection(candidate_terms):
+            return False
+        mentioned = self.service.course_resolver.find_mentions(candidate)
+        known_codes = {item.course_code for item in self.service.course_resolver.courses}
+        if any(item.course_code not in known_codes for item in mentioned):
+            return False
+        if mentioned:
+            allowed_codes = {
+                item.course_code
+                for item in self.service.course_resolver.find_mentions(allowed_text)
+            } | set(plan.course_codes)
+            if conversation is not None:
+                allowed_codes.update(conversation.recent_course_codes)
+            if not {item.course_code for item in mentioned}.issubset(allowed_codes):
+                return False
+        return True
 
     def _query_budget_available(self, executions: int, started: float) -> bool:
         return (
@@ -833,6 +1242,13 @@ class AgenticCurriculumChatService:
                     f"{previous}\n후속 요청: {original}" if previous else original
                 )
         topic = payload.get("topic")
+        if topic is not None and (
+            not isinstance(topic, str)
+            or not topic.strip()
+            or len(topic.strip()) > 160
+            or not _SAFE_DISCOURSE.fullmatch(topic.strip())
+        ):
+            raise ValueError("agent topic is invalid")
         followup = payload.get("followup_question")
         if followup is not None:
             if not isinstance(followup, str) or not followup.strip() or len(followup) > 2000:
@@ -849,6 +1265,12 @@ class AgenticCurriculumChatService:
         ):
             raise ValueError("agent subquestions are invalid")
         raw_subquestions = list(dict.fromkeys(raw_subquestions))
+        # Independent subqueries may expand only an actual compound request or a
+        # request to re-ground several earlier topics. A model suggestion that merely
+        # shares a generic word such as "교육과정" must not attach an unrelated but
+        # valid school rule to a simple answer.
+        if not self._independent_subquestions_allowed(original, context):
+            raw_subquestions = []
         allowed_terms = set(re.findall(r"[가-힣A-Za-z]{2,}", original))
         for message in context.recent_messages:
             if message.role.value == "user":
@@ -867,9 +1289,15 @@ class AgenticCurriculumChatService:
             if normalized not in subquestions and normalized != resolved.strip():
                 subquestions.append(normalized)
         if _MULTI_TOPIC_SUMMARY.search(original):
-            subquestions = list(
-                self._summary_subquestions(context, tuple(subquestions))
+            # When several explicit user turns exist, replay those exact requests;
+            # a generic model proposal must not replace them. A single compound turn
+            # may still use the validated model decomposition, and a first-turn
+            # compound summary has no prior messages to replay.
+            prior_user_turns = sum(
+                message.role.value == "user" for message in context.recent_messages
             )
+            proposed = tuple(subquestions) if prior_user_turns < 2 else ()
+            subquestions = list(self._summary_subquestions(context, proposed))
         return _Plan(
             self._append_codes(resolved.strip(), tuple(raw_codes)),
             tuple(raw_codes),
@@ -880,6 +1308,28 @@ class AgenticCurriculumChatService:
             else None,
             tuple(subquestions),
         )
+
+    @staticmethod
+    def _independent_subquestions_allowed(
+        question: str, context: ConversationContext
+    ) -> bool:
+        if _MULTI_TOPIC_SUMMARY.search(question):
+            return True
+        if len(AgenticCurriculumChatService._fact_family_subquestions(question)) > 1:
+            return True
+        clauses = [
+            item.strip()
+            for item in _CLAUSE_SPLIT.split(question)
+            if item.strip() and _ACADEMIC_CLAUSE.search(item)
+        ]
+        if len(clauses) > 1:
+            return True
+        # A short "정리해 줘" turn is handled above using the current question.
+        # Explicitly checking the prior user request here supports equivalent summary
+        # wording while never treating the assistant answer as a factual source.
+        if context.recent_messages and re.search(r"(?:각각|두\s*가지|여러\s*가지)", question):
+            return True
+        return False
 
     def _fallback_plan(self, question: str, context: ConversationContext | None) -> _Plan:
         codes: tuple[str, ...] = ()
@@ -960,11 +1410,14 @@ class AgenticCurriculumChatService:
                 )
             else:
                 match = _REQUIREMENT_TOPIC.search(message.content)
-                if match is None:
+                if match is None and _LIVE_INFORMATION.search(message.content):
+                    topic_key = "live-information"
+                elif match is None:
                     # Pronoun-only turns do not create another topic; their grounded
                     # subject is represented by the preceding explicit turn.
                     continue
-                topic_key = "requirement:" + re.sub(r"[ \t]", "", match.group(0))
+                else:
+                    topic_key = "requirement:" + re.sub(r"[ \t]", "", match.group(0))
             if topic_key in seen_topics or any(key == topic_key for key, _ in recent):
                 continue
             recent.append((topic_key, message.content))
@@ -991,6 +1444,32 @@ class AgenticCurriculumChatService:
 
         hints: list[str] = []
         explicit_courses = self.service.course_resolver.find_mentions(question)
+        if (
+            explicit_courses
+            and context.recent_course_codes
+            and _COURSE_SUBSTITUTION.search(question)
+        ):
+            codes = tuple(
+                dict.fromkeys(
+                    (
+                        *(item.course_code for item in explicit_courses),
+                        *context.recent_course_codes,
+                    )
+                )
+            )
+            tools = tuple(
+                dict.fromkeys(
+                    (*plan.tools, ToolName.RESOLVE_COURSE, ToolName.QUERY_CURRICULUM)
+                )
+            )
+            return _Plan(
+                self._append_codes(question, codes),
+                codes,
+                tools,
+                plan.topic,
+                None,
+                (),
+            )
         if (
             not explicit_courses
             and context.recent_course_codes
@@ -1179,7 +1658,7 @@ class AgenticCurriculumChatService:
         statuses = {item.outcome.status for item in selected}
         status = (
             OutcomeStatus.INSUFFICIENT_EVIDENCE
-            if ungrounded
+            if ungrounded or OutcomeStatus.INSUFFICIENT_EVIDENCE in statuses
             else OutcomeStatus.ADVISORY
             if OutcomeStatus.ADVISORY in statuses
             else OutcomeStatus.ANSWERED
@@ -1216,6 +1695,17 @@ class AgenticCurriculumChatService:
         )
         if not message.strip():
             message = "\n\n".join(messages)
+        partial_limitations = tuple(
+            dict.fromkeys(
+                limitation
+                for item in selected
+                if item.outcome.status is OutcomeStatus.INSUFFICIENT_EVIDENCE
+                for limitation in item.outcome.limitations
+                if limitation not in message
+            )
+        )
+        if partial_limitations:
+            message = "\n\n".join((message, *partial_limitations))
         if ungrounded:
             message = "\n\n".join(
                 dict.fromkeys(
@@ -1235,7 +1725,20 @@ class AgenticCurriculumChatService:
             changed_profile_fields=changed,
         )
 
-    def _narrative(self, question: str, result: PersonalizedChatResult) -> str:
+    def _narrative(
+        self,
+        question: str,
+        result: PersonalizedChatResult,
+        *,
+        sources: list[PersonalizedChatResult],
+    ) -> tuple[str, dict[str, Any]]:
+        if self.policy.mode is AgentMode.AGENTIC:
+            return self._fact_packet_narrative(question, result, sources)
+        return self._legacy_narrative(question, result)
+
+    def _legacy_narrative(
+        self, question: str, result: PersonalizedChatResult
+    ) -> tuple[str, dict[str, Any]]:
         canonical = result.outcome.message
         approved_fact_text = (
             result.response.answer_text
@@ -1269,7 +1772,9 @@ class AgenticCurriculumChatService:
                 result.response,
                 expanded=self.policy.mode is AgentMode.EXPANDED,
             )
-            intro = self._safe_discourse(generation.payload.get("intro"), canonical)
+            intro = self._safe_discourse(
+                generation.payload.get("intro"), canonical, max_length=160
+            )
             closing = self._safe_discourse(generation.payload.get("closing"), canonical)
             normalized_question = question.strip().rstrip(".?!？ ")
             if intro and normalized_question and normalized_question in intro.rstrip(".?!？ "):
@@ -1280,7 +1785,169 @@ class AgenticCurriculumChatService:
         core = canonical
         if rewritten and approved_fact_text and approved_fact_text in canonical:
             core = canonical.replace(approved_fact_text, rewritten, 1)
-        return " ".join(item for item in (intro, core, closing) if item).strip()
+        display = " ".join(item for item in (intro, core, closing) if item).strip()
+        return display, {
+            "packet_count": 1 if approved_fact_text else 0,
+            "rewritten_sections": int(bool(rewritten and rewritten != approved_fact_text)),
+            "canonical_fallback_sections": int(bool(approved_fact_text and not rewritten)),
+            "repair_attempts": 0,
+        }
+
+    def _fact_packet_narrative(
+        self,
+        question: str,
+        result: PersonalizedChatResult,
+        sources: list[PersonalizedChatResult],
+    ) -> tuple[str, dict[str, Any]]:
+        canonical = result.outcome.message
+        approved: list[PersonalizedChatResult] = []
+        seen: set[tuple[tuple[str, ...], tuple[str, ...]]] = set()
+        for source in [*sources, result]:
+            response = source.response
+            if response.status is not ChatStatus.ANSWERABLE or not response._is_approved():
+                continue
+            signature = (response.used_fact_ids, response.used_evidence_ids)
+            if signature in seen:
+                continue
+            seen.add(signature)
+            approved.append(source)
+            if len(approved) == 4:
+                break
+        if not approved:
+            return canonical, {
+                "packet_count": 0,
+                "rewritten_sections": 0,
+                "canonical_fallback_sections": 0,
+                "repair_attempts": 0,
+            }
+        packets = [
+            {
+                "packet_id": f"fact:{index}",
+                "approved_fact_text": source.response.answer_text,
+                "claims": self._public_claim_packet(source.response),
+                "citation_count": len(source.response.citations),
+                "limitations": list(source.outcome.limitations),
+            }
+            for index, source in enumerate(approved, start=1)
+        ]
+        sections: dict[str, str] = {}
+        intro = closing = ""
+        repair_attempts = 0
+        try:
+            payload = self.client.generate_json(
+                system_prompt=(
+                    "FactPacket 각각의 approved_fact_text만 자연스러운 한국어로 다시 쓴다. "
+                    "packet_id를 바꾸거나 합치지 않는다. 과목명, 학수번호, 숫자·단위, enum, "
+                    "비교 연산자, 면제·의무·대체·인정 의미를 추가·삭제·교환하지 않는다. "
+                    "FactPacket 밖 학교 규정과 계산을 만들지 않는다. 각 section이 안전하게 "
+                    "재작성되지 않으면 해당 approved_fact_text를 그대로 반환한다. intro와 "
+                    "closing은 새로운 사실이 없는 짧은 대화 연결 문구다."
+                ),
+                user_prompt=json.dumps(
+                    {
+                        "question": question,
+                        "outcome_status": result.outcome.status.value,
+                        "fact_packets": packets,
+                    },
+                    ensure_ascii=False,
+                ),
+                response_schema=_FACT_PACKET_NARRATIVE_SCHEMA,
+            ).payload
+            sections = self._validated_packet_sections(payload, approved)
+            intro = self._safe_discourse(
+                payload.get("intro"), canonical, max_length=160
+            )
+            closing = self._safe_discourse(payload.get("closing"), canonical)
+        except (LLMResponseError, ValueError, TypeError):
+            sections = {}
+        missing = [
+            index
+            for index in range(1, len(approved) + 1)
+            if f"fact:{index}" not in sections
+        ]
+        if missing and self.policy.max_narrative_repairs:
+            repair_attempts = 1
+            repair_packets = [packets[index - 1] for index in missing]
+            try:
+                repaired = self.client.generate_json(
+                    system_prompt=(
+                        "앞선 초안에서 검증되지 않은 FactPacket만 다시 쓴다. packet_id와 "
+                        "approved_fact_text의 사실 토큰을 모두 유지하고 새로운 학교 규정, "
+                        "계산, 조건을 추가하지 않는다. 안전한 재작성이 어렵다면 원문을 "
+                        "그대로 반환한다."
+                    ),
+                    user_prompt=json.dumps(
+                        {"question": question, "fact_packets": repair_packets},
+                        ensure_ascii=False,
+                    ),
+                    response_schema=_FACT_PACKET_NARRATIVE_SCHEMA,
+                ).payload
+                repaired_sections = self._validated_packet_sections(
+                    repaired,
+                    approved,
+                    allowed_indexes=set(missing),
+                )
+                sections.update(repaired_sections)
+            except (LLMResponseError, ValueError, TypeError):
+                pass
+        core = canonical
+        rewritten_count = 0
+        fallback_count = 0
+        for index, source in enumerate(approved, start=1):
+            packet_id = f"fact:{index}"
+            original = source.response.answer_text
+            rewritten = sections.get(packet_id)
+            replacement = rewritten or original
+            if rewritten and rewritten != original:
+                rewritten_count += 1
+            elif not rewritten:
+                fallback_count += 1
+            if original in core:
+                core = core.replace(original, replacement, 1)
+        normalized_question = question.strip().rstrip(".?!？ ")
+        if intro and normalized_question and normalized_question in intro.rstrip(".?!？ "):
+            intro = ""
+        display = " ".join(item for item in (intro, core, closing) if item).strip()
+        return display, {
+            "packet_count": len(approved),
+            "rewritten_sections": rewritten_count,
+            "canonical_fallback_sections": fallback_count,
+            "repair_attempts": repair_attempts,
+        }
+
+    def _validated_packet_sections(
+        self,
+        payload: Mapping[str, Any],
+        approved: list[PersonalizedChatResult],
+        *,
+        allowed_indexes: set[int] | None = None,
+    ) -> dict[str, str]:
+        raw_sections = payload.get("sections")
+        if not isinstance(raw_sections, list) or len(raw_sections) > len(approved):
+            raise ValueError("FactPacket sections are invalid")
+        output: dict[str, str] = {}
+        for raw in raw_sections:
+            if not isinstance(raw, Mapping) or set(raw) != {"packet_id", "text"}:
+                raise ValueError("FactPacket section contract is invalid")
+            packet_id = raw.get("packet_id")
+            match = re.fullmatch(r"fact:([1-4])", packet_id or "")
+            if match is None:
+                raise ValueError("FactPacket ID is invalid")
+            index = int(match.group(1))
+            if index > len(approved) or (
+                allowed_indexes is not None and index not in allowed_indexes
+            ):
+                raise ValueError("FactPacket section is out of scope")
+            if packet_id in output:
+                raise ValueError("FactPacket section is duplicated")
+            validated = self._validated_grounded_answer(
+                raw.get("text"),
+                approved[index - 1].response,
+                expanded=True,
+            )
+            if validated:
+                output[packet_id] = validated
+        return output
 
     @staticmethod
     def _public_claim_packet(response: ChatResponse) -> list[dict[str, Any]]:
@@ -1309,8 +1976,17 @@ class AgenticCurriculumChatService:
             item is None or isinstance(item, (str, int, float, bool)) for item in value
         ):
             return list(value)
-        # Lists of courses/rules deliberately remain opaque.  Their deterministic
-        # renderer output is not eligible for a free-form rewrite.
+        if isinstance(value, tuple) and all(
+            isinstance(getattr(item, "display_name", None), str) for item in value
+        ):
+            return [
+                {
+                    "display_name": item.display_name,
+                    "course_code": getattr(item, "course_code", None),
+                    "credits": getattr(item, "credits", None),
+                }
+                for item in value
+            ]
         return "APPROVED_COMPLEX_VALUE"
 
     @staticmethod
@@ -1336,7 +2012,7 @@ class AgenticCurriculumChatService:
             return ""
         draft = " ".join(value.split()).strip()
         source = " ".join(response.answer_text.split()).strip()
-        if not draft or not source or draft == source:
+        if not draft or not source or len(draft) > 5000 or draft == source:
             return source if draft == source else ""
         if len(draft) < max(8, int(len(source) * 0.55)) or len(draft) > len(source) * 1.65:
             return ""
@@ -1353,6 +2029,10 @@ class AgenticCurriculumChatService:
             return ""
         if Counter(_FACT_CONTROL_TOKEN.findall(draft)) != Counter(
             _FACT_CONTROL_TOKEN.findall(source)
+        ):
+            return ""
+        if Counter(_ASSERTION_CONTROL_TOKEN.findall(draft)) != Counter(
+            _ASSERTION_CONTROL_TOKEN.findall(source)
         ):
             return ""
         subjects = {
@@ -1459,17 +2139,24 @@ class AgenticCurriculumChatService:
         return False
 
     @staticmethod
-    def _safe_discourse(value: Any, canonical: str = "") -> str:
+    def _safe_discourse(
+        value: Any, canonical: str = "", *, max_length: int = 320
+    ) -> str:
         if not isinstance(value, str):
             return ""
         text = value.strip()
-        if not text or not _SAFE_DISCOURSE.fullmatch(text):
+        if not text or len(text) > max_length or not _SAFE_DISCOURSE.fullmatch(text):
             return ""
         if text in canonical:
             return ""
         # Narrative glue may not introduce factual tokens.  Numbers and curriculum
         # entities stay in the approved deterministic text.
-        if re.search(r"\d|학점|점수|학년|학기|과목|필수|선택|면제|졸업", text):
+        if (
+            re.search(r"\d|학점|점수|학년|학기|과목|필수|선택|면제|졸업", text)
+            or _FACT_CONTROL_TOKEN.search(text)
+            or _ASSERTION_CONTROL_TOKEN.search(text)
+            or _OUT_OF_SCOPE_CLAUSE.search(text)
+        ):
             return ""
         if _FORBIDDEN_NARRATIVE.search(text):
             return ""
@@ -1545,6 +2232,8 @@ class AgenticCurriculumChatService:
         tool: ToolName,
         state: str,
         elapsed_ms: int,
+        *,
+        metadata: Mapping[str, Any] | None = None,
     ) -> None:
         event = AgentTraceEvent(
             sequence=len(trace) + 1,
@@ -1552,6 +2241,7 @@ class AgenticCurriculumChatService:
             state=state,
             elapsed_ms=elapsed_ms,
             detail=_TOOL_DETAIL[tool],
+            metadata=dict(metadata or {}),
         )
         trace.append(event)
         if callback is not None:

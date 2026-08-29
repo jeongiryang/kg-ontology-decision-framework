@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import statistics
 from collections import Counter
 from pathlib import Path
 from typing import Any
@@ -20,6 +21,34 @@ def _load(path: Path) -> dict[str, Any]:
 def _cell(value: Any, limit: int = 220) -> str:
     text = str(value or "-").replace("\n", " ").replace("|", "\\|")
     return text if len(text) <= limit else text[: limit - 1].rstrip() + "…"
+
+
+def _latency(rows: list[dict[str, Any]]) -> tuple[float, float, float]:
+    values = sorted(float(row["elapsed_seconds"]) for row in rows)
+    p95_index = max(0, min(len(values) - 1, int(len(values) * 0.95 + 0.999) - 1))
+    return (
+        round(statistics.fmean(values), 3),
+        round(statistics.median(values), 3),
+        round(values[p95_index], 3),
+    )
+
+
+def _agent_metrics(rows: list[dict[str, Any]]) -> dict[str, int]:
+    metrics = Counter()
+    for row in rows:
+        metrics["tool_calls"] += int(row.get("tool_call_count") or 0)
+        metrics["evidence_assessments"] += int(
+            row.get("evidence_assessment_count") or 0
+        )
+        narrative = row.get("narrative_metrics") or {}
+        for key in (
+            "packet_count",
+            "rewritten_sections",
+            "canonical_fallback_sections",
+            "repair_attempts",
+        ):
+            metrics[key] += int(narrative.get(key) or 0)
+    return dict(metrics)
 
 
 def main() -> int:
@@ -44,6 +73,14 @@ def main() -> int:
     single_counts = Counter(row["outcome_status"] for row in single.values())
     multi_turns = [turn for case in multi.values() for turn in case["turns"]]
     multi_counts = Counter(row["outcome_status"] for row in multi_turns)
+    single_rows = list(single.values())
+    all_rows = [*single_rows, *multi_turns]
+    single_latency = _latency(single_rows)
+    multi_latency = _latency(multi_turns)
+    answered = [row for row in all_rows if row["outcome_status"] == "ANSWERED"]
+    answered_with_citation = sum(int(row["citation_count"]) > 0 for row in answered)
+    errors = sum(bool(row.get("error")) for row in all_rows)
+    agent_metrics = _agent_metrics(all_rows)
     lines = [
         "# Agentic GraphRAG 미공개 일반화 평가",
         "",
@@ -55,10 +92,19 @@ def main() -> int:
         f"- 단일 턴: 50/50 전송 성공, 상태 분포 `{dict(sorted(single_counts.items()))}`",
         f"- 다중 턴: 20개 시나리오·{len(multi_turns)}개 턴 전송 성공, "
         f"상태 분포 `{dict(sorted(multi_counts.items()))}`",
-        "- `ANSWERED`는 모두 Citation을 포함했고, 사용자 진술·권고·근거 부족은 "
-        "각각 별도 상태와 provenance로 유지했다.",
-        "- 문장별 예외 대신 과목 identity, 요청 필드, 사용자 scope, 최근 대화 주제와 "
-        "Evidence 재조회 규칙을 사용했다.",
+        f"- 응답시간 평균/중앙값/P95: 단일 `{single_latency[0]}/{single_latency[1]}/"
+        f"{single_latency[2]}초`, 다중 턴 `{multi_latency[0]}/{multi_latency[1]}/"
+        f"{multi_latency[2]}초`",
+        f"- `ANSWERED` Citation: {answered_with_citation}/{len(answered)}, "
+        f"공개 오류: {errors}",
+        f"- Agent trace 합계: 도구 {agent_metrics.get('tool_calls', 0)}회, 근거 평가 "
+        f"{agent_metrics.get('evidence_assessments', 0)}회, FactPacket "
+        f"{agent_metrics.get('packet_count', 0)}개",
+        f"- 자연어 구성: 검증된 LLM section {agent_metrics.get('rewritten_sections', 0)}개, "
+        f"부분 재작성 {agent_metrics.get('repair_attempts', 0)}회, canonical fallback "
+        f"{agent_metrics.get('canonical_fallback_sections', 0)}개",
+        "- 사용자 진술·권고·근거 부족은 별도 상태와 provenance로 유지했고, 문장별 "
+        "예외 대신 identity·slot·scope·결과 기반 Evidence 재조회 규칙을 사용했다.",
         "",
         "## 단일 턴 50개",
         "",
