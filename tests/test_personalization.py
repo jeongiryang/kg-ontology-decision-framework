@@ -197,6 +197,31 @@ class PersonalizedOutcomeTests(unittest.TestCase):
         self.assertIsNotNone(limitation)
         self.assertIn("직접 VERIFIED 근거", limitation)
 
+    def test_named_mandatory_rule_answers_generic_credit_substitution_safely(self):
+        from tests.test_evidence_chat import _answerable_response
+
+        response = _answerable_response(count=1)
+        service = PersonalizedCurriculumChatService(
+            _ResponseService(response), bundle_path=BUNDLE
+        )
+        service.nodes[response.used_fact_ids[0]] = {
+            "id": response.used_fact_ids[0],
+            "labels": ["Rule"],
+            "properties": {
+                "status": "VERIFIED",
+                "description_ko": (
+                    "기초교양 미래설계 영역에서 대학생활의설계를 필수로 이수하며 "
+                    "최소 1학점이다."
+                ),
+            },
+        }
+
+        limitation = service._grounding_limitation(
+            "지정 과목 대신 다른 3학점 교양과목으로 대체해도 가능해?", response
+        )
+
+        self.assertIsNone(limitation)
+
     def test_course_omission_necessity_wording_is_general_not_question_specific(self):
         for question in (
             "이 과목 안 들으면 안 되는지 알려 줘.",

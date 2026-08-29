@@ -768,6 +768,18 @@ class PersonalizedCurriculumChatService:
             str(self.nodes.get(fact_id, {}).get("properties", {}).get("description_ko", ""))
             for fact_id in response.used_fact_ids
         )
+        if (
+            _COURSE_SUBSTITUTION_JUDGMENT.search(question)
+            and "필수로 이수" in descriptions
+        ):
+            # A VERIFIED rule that names the requested course as mandatory is
+            # sufficient to explain that unrelated credits do not establish the
+            # named-course requirement.  The presentation deliberately says only
+            # that substitution is *not confirmed*; it does not invent a separate
+            # prohibition.  Pairwise course-substitution questions still require
+            # direct replacement evidence because offering metadata alone cannot
+            # establish equivalence.
+            return None
         checks = (
             (
                 r"(?:대신\s*(?:채워|채울|들|하|해|했|할)|"
