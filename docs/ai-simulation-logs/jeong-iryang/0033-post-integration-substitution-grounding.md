@@ -25,17 +25,24 @@ PR #32~#35 병합 뒤 최종 `main`의 PR #10 50문항을 다시 실행하던 �
   근거가 확인되지 않았다고만 말한다.
 - 단순 CourseOffering 두 건만 있는 pairwise 대체 질문은 계속 직접 replacement Evidence를
   요구하고 `INSUFFICIENT_EVIDENCE`로 유지한다.
+- 같은 재평가에서 총 부족학점을 계산했지만 어느 교양 영역인지 답하지 못한 결과가
+  `ANSWERED`로 다시 승격되는 두 번째 회귀를 발견했다. Agent의 결정론적 학점 계산은
+  기존 outcome에 Evidence limitation이 있으면 그 상태·문구를 지우지 못하도록 수정했다.
 
 ## 변경 파일
 
 - `src/kg_builder/answer/personalized_service.py`
+- `src/kg_builder/agent/orchestrator.py`
+- `tests/test_agentic_graphrag.py`
 - `tests/test_personalization.py`
 - 이 로그와 정이량 로그 인덱스
 
 ## 검증
 
-- 관련 agent·personalization·chat 테스트: 117 passed, 44 subtests passed
+- 관련 agent·personalization·chat 테스트: 118 passed, 44 subtests passed
 - 실제 PR #10 20번 `/api/ask`: `ANSWERED`, Citation 1건, 공개 오류 없음
+- 실제 PR #10 25번 `/api/ask`: `INSUFFICIENT_EVIDENCE`, 확인된 학점 계산과 미확정 영역을
+  구분하고 Citation 3건 유지
 - `git diff --check`: 통과
 
 최종 50+50+65 재평가와 전체 회귀·GitHub Actions 결과는 완료 뒤 이 로그에 갱신한다.

@@ -822,17 +822,25 @@ class AgenticCurriculumChatService:
                     and "사용자 진술" in message
                     and "학점이 남습니다" in message
                 )
+                calculation_resolves_outcome = bool(
+                    calculation_complete
+                    and not personalized.outcome.limitations
+                    and personalized.outcome.status
+                    is not OutcomeStatus.INSUFFICIENT_EVIDENCE
+                )
                 personalized = PersonalizedChatResult(
                     response=personalized.response,
                     outcome=DecisionOutcome(
                         OutcomeStatus.ANSWERED
-                        if calculation_complete
+                        if calculation_resolves_outcome
                         else personalized.outcome.status,
-                        message,
+                        message
+                        if calculation_resolves_outcome
+                        else personalized.outcome.message,
                         required_user_fields=personalized.outcome.required_user_fields,
                         used_profile_fields=personalized.outcome.used_profile_fields,
                         limitations=()
-                        if calculation_complete
+                        if calculation_resolves_outcome
                         else personalized.outcome.limitations,
                     ),
                     profile=personalized.profile,

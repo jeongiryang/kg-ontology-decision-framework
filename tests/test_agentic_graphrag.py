@@ -387,6 +387,74 @@ class AgentOrchestratorTests(unittest.TestCase):
         )
         self.assertEqual(combined.response.status, ChatStatus.ANSWERABLE)
 
+    def test_credit_calculation_cannot_erase_area_evidence_gap(self):
+        """A numeric remainder does not answer which curriculum area supplies it."""
+
+        from tests.test_evidence_chat import _answerable_response
+
+        limitation = "어느 교양 영역인지 확정할 직접 근거가 없습니다."
+
+        class PartialCalculationService(FakePersonalizedService):
+            def ask(
+                self,
+                question,
+                *,
+                profile=None,
+                resolved=None,
+                progress_callback=None,
+            ):
+                del question, resolved, progress_callback
+                current = profile or UserProfile(credits=(("general", 31.0),))
+                response = _answerable_response(count=1)
+                return PersonalizedChatResult(
+                    response,
+                    DecisionOutcome(
+                        OutcomeStatus.INSUFFICIENT_EVIDENCE,
+                        f"3학점이 남지만 {limitation}",
+                        used_profile_fields=("credits",),
+                        limitations=(limitation,),
+                    ),
+                    current,
+                )
+
+            @staticmethod
+            def _grounding_limitation(question, response):
+                del response
+                return limitation if "어느" in question else None
+
+            @staticmethod
+            def _grounded_message(question, profile, response):
+                del question, profile, response
+                return "사용자 진술 31학점에서 3학점이 남습니다."
+
+        llm = FakeLLM(
+            [
+                {
+                    "resolved_question": "남은 학점을 어느 교양 영역에서 들어야 해?",
+                    "referenced_course_codes": [],
+                    "tools": [
+                        "query_curriculum",
+                        "calculate_remaining_credits",
+                    ],
+                    "topic": "교양 영역별 잔여학점",
+                    "subquestions": [],
+                }
+            ]
+        )
+        result = AgenticCurriculumChatService(
+            PartialCalculationService(), llm
+        ).ask(
+            "남은 학점을 어느 교양 영역에서 들어야 해?",
+            profile=UserProfile(credits=(("general", 31.0),)),
+            conversation=context(codes=()),
+        )
+
+        self.assertEqual(
+            result.personalized.outcome.status,
+            OutcomeStatus.INSUFFICIENT_EVIDENCE,
+        )
+        self.assertIn(limitation, result.display_answer)
+
     def test_registered_fact_families_are_split_without_question_fixture_lookup(self):
         queries = AgenticCurriculumChatService._fact_family_subquestions(
             "학과 인재상뿐 아니라 졸업 후 진출 분야도 함께 확인하고 싶어."
