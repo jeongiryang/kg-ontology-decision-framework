@@ -159,6 +159,9 @@ class CourseClaimItem:
     display_name: str
     course_code: str | None
     credits: int | float | None
+    grade_year: int | tuple[int, ...] | None = None
+    semester: str | None = None
+    completion_type: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -570,7 +573,36 @@ class ChatResponse:
     ) -> "ChatResponse":
         # Local import avoids a contracts/renderer import cycle.  The payload type and
         # issuer remain internal; public callers can only read the resulting DTO.
-        from .renderer import _ApprovedAnswerPayload
+        from .renderer import _ApprovedAnswerPayload, _ApprovedCompositePayload
+
+        if isinstance(approved_payload, _ApprovedCompositePayload) and (
+            approved_payload._is_approved()
+        ):
+            return cls._issue(
+                request_id=request_id,
+                status=ChatStatus.ANSWERABLE,
+                answer_text=approved_payload.answer_text,
+                citations=approved_payload.citations,
+                used_fact_ids=tuple(
+                    sorted(
+                        {
+                            fact_id
+                            for claim in approved_payload.claims
+                            for fact_id in claim.fact_ids
+                        }
+                    )
+                ),
+                used_evidence_ids=tuple(
+                    sorted(
+                        {
+                            evidence_id
+                            for claim in approved_payload.claims
+                            for evidence_id in claim.evidence_ids
+                        }
+                    )
+                ),
+                grounded_claims=approved_payload.claims,
+            )
 
         if not isinstance(approved_payload, _ApprovedAnswerPayload) or not (
             approved_payload._is_approved()

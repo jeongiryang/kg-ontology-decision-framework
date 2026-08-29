@@ -50,7 +50,7 @@ class QueryIntegrationTests(unittest.TestCase):
         return row["nodes"], row["relationships"], evidence
 
     def test_all_supported_intents_against_verified_graph(self) -> None:
-        self.assertEqual(self.before, (1518, 3260, 511))
+        self.assertEqual(self.before, (1536, 3287, 520))
         cases = [
             (
                 Intent.GET_GENERAL_EDUCATION_MIN_CREDITS,

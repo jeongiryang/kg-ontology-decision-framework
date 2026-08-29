@@ -80,8 +80,8 @@ def build_query_structure_projection(
     타는 경로는 하나로 뭉개졌다. 화면에 뜬 것은 경로가 아니라 스키마 도식이었다.
 
     이제 검증기가 승인한 hop 목록을 순서대로 받아 그대로 그린다. `order` 는 질의가
-    쓴 순서이며 Neo4j 내부 실행 순서가 아니다. 경로를 받지 못하면 종전 동작으로
-    물러난다.
+    쓴 순서이며 Neo4j 내부 실행 순서가 아니다. 승인된 경로를 받지 못하면 라벨만
+    표시하고 간선은 만들지 않는다.
     """
 
     safe_labels = sorted(
@@ -106,7 +106,11 @@ def build_query_structure_projection(
     except (OSError, ValueError, SchemaCatalogError):
         return None
 
-    steps = _approved_path_steps(path_edges, set(safe_labels))
+    steps = _approved_path_steps(
+        path_edges,
+        set(safe_labels),
+        set(safe_relationships),
+    )
     node_ids = {
         label: _opaque_id(opaque_key, "query-node", label) for label in safe_labels
     }
@@ -146,10 +150,8 @@ def build_query_structure_projection(
                     "traversal_order": step["order"],
                 }
             )
-    else:
-        edges = _schema_fallback_edges(
-            catalog, safe_relationships, node_ids, opaque_key
-        )
+    # 승인된 path가 없을 때 ontology endpoint의 교차곱으로 간선을 만들어 내지 않는다.
+    # 선택 label은 보여 줄 수 있지만 실제 query가 밟았다고 확인되지 않은 관계는 빈다.
     _assign_visit_order(nodes, edges, steps)
     return {
         "version": GRAPH_ENVELOPE_VERSION,
@@ -550,7 +552,9 @@ def _scoped_label(
 
 
 def _approved_path_steps(
-    path_edges: Sequence[Mapping[str, Any]], allowed_labels: set[str]
+    path_edges: Sequence[Mapping[str, Any]],
+    allowed_labels: set[str],
+    allowed_relationships: set[str],
 ) -> list[dict[str, Any]]:
     """Keep only well-formed hops whose endpoints are approved labels."""
 
@@ -572,6 +576,7 @@ def _approved_path_steps(
             )
             or start not in allowed_labels
             or end not in allowed_labels
+            or relationship not in allowed_relationships
         ):
             # 한 hop 이라도 계약을 벗어나면 순서 표기를 포기한다. 부분적으로 맞는
             # 경로는 틀린 경로보다 낫지 않다.
@@ -608,38 +613,6 @@ def _assign_visit_order(
                 reached[label] = position
     for node in nodes:
         node["visit_order"] = reached.get(node["node_type"])
-
-
-def _schema_fallback_edges(
-    catalog: SchemaCatalog,
-    relationships: list[str],
-    node_ids: Mapping[str, str],
-    opaque_key: bytes,
-) -> list[dict[str, Any]]:
-    """Pre-path behaviour: draw ontology-declared endpoints without an order."""
-
-    included = set(node_ids)
-    edges: list[dict[str, Any]] = []
-    for relationship in relationships:
-        definition = catalog.relationships.get(relationship)
-        if definition is None:
-            continue
-        for source in sorted(definition.from_labels & included):
-            for target in sorted(definition.to_labels & included):
-                raw_edge = f"{source}\x1f{relationship}\x1f{target}"
-                edges.append(
-                    {
-                        "id": _opaque_id(opaque_key, "query-edge", raw_edge),
-                        "source": node_ids[source],
-                        "target": node_ids[target],
-                        "relationship": relationship,
-                        "relationship_ko": catalog.relationship_ko(relationship),
-                        "traversal_order": None,
-                    }
-                )
-                if len(edges) >= MAX_GRAPH_EDGES:
-                    return edges
-    return edges
 
 
 def _fact_display(row: Mapping[str, Any], fact_label: str, fallback_ko: str = "") -> str:

@@ -144,6 +144,11 @@ def cypher_prompt(
     contract = {
         "requested_aliases": list(plan_payload["requested_fields"]),
         "scope_aliases": sorted(plan_payload["filters"]),
+        "required_subject_aliases": (
+            ["name_ko"]
+            if plan_payload.get("selection_mode") == "SINGLE_COURSE"
+            else []
+        ),
         "required_provenance_aliases": [
             "fact_id",
             "fact_status",

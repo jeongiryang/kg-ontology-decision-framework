@@ -72,6 +72,7 @@ BASE_FILTER_BINDINGS: dict[str, FilterBinding] = {
     "completion_type": FilterBinding("CourseOffering", "completion_type"),
     "credits": FilterBinding("CourseOffering", "credits"),
     "course_code": FilterBinding("Course", "course_code"),
+    "course_codes": FilterBinding("Course", "course_code", "PROPERTY_IN_PARAMETER"),
     "name_ko": FilterBinding("Course", "name_ko"),
     "rule_id": FilterBinding("Rule", "rule_id"),
     "rule_ids": FilterBinding("Rule", "rule_id", "PROPERTY_IN_PARAMETER"),
@@ -579,6 +580,7 @@ BASE_MODE_FILTERS: dict[SelectionMode, frozenset[str]] = {
         {
             "academic_year",
             "department_id",
+            "course_codes",
             "completion_type",
             "grade_year",
             "semester",

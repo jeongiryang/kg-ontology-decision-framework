@@ -143,7 +143,7 @@ uv run pytest
 KG_NEO4J_INTEGRATION=1 uv run pytest tests/test_query_integration.py
 ```
 
-통합 테스트는 실행 전후 노드 `1,518`, 관계 `3,260`, Evidence `511`이 동일한지 검사하며 데이터를 적재·수정·삭제하지 않는다.
+통합 테스트는 실행 전후 노드 `1,536`, 관계 `3,287`, Evidence `520`이 동일한지 검사하며 데이터를 적재·수정·삭제하지 않는다.
 
 ## 9. 현재 제한과 다음 단계
 

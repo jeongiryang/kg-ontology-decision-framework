@@ -12,11 +12,13 @@ from kg_builder.config import ConfigurationError, Neo4jSettings
 from kg_builder.graph_bundle import BundleValidationError, GraphBundle, validate_identifier
 from kg_builder.neo4j_ingest import _node_query, _relationship_query
 from kg_builder.neo4j_schema import render_schema, schema_statements
+from scripts.complete_english_waiver_rules import SOURCE_LABELS, migrate
 
 
 ROOT = Path(__file__).resolve().parents[1]
 SPEC = ROOT / "ontology/ontology_spec.json"
 DATA = ROOT / "data/verified/2026/2026_curriculum_kg_data.json"
+RAW = ROOT / "data/raw/2026_curriculum_kg_data.json"
 UNRESOLVED = ROOT / "data/verified/2026/2026_curriculum_unresolved.json"
 
 
@@ -41,9 +43,54 @@ class GraphBundleTests(unittest.TestCase):
 
     def test_valid_bundle_and_endpoint_lookup(self) -> None:
         bundle = GraphBundle.load(SPEC, DATA)
-        self.assertEqual(bundle.expected_counts, (1518, 3260, 511))
+        self.assertEqual(bundle.expected_counts, (1536, 3287, 520))
         course = bundle.node_lookup["course:cwnu:CDA0008"]
         self.assertEqual((course.match_label, course.id_property), ("Course", "course_id"))
+
+    def test_verified_bundle_retains_every_raw_identity_and_relationship(self) -> None:
+        raw = json.loads(RAW.read_text(encoding="utf-8"))
+        verified_ids = {node["id"] for node in self.source["nodes"]}
+        self.assertTrue({node["id"] for node in raw["nodes"]}.issubset(verified_ids))
+        verified_relationships = {
+            (item["type"], item["from_id"], item["to_id"])
+            for item in self.source["relationships"]
+        }
+        self.assertTrue(
+            {
+                (item["type"], item["from_id"], item["to_id"])
+                for item in raw["relationships"]
+            }.issubset(verified_relationships)
+        )
+
+    def test_english_waiver_conditions_have_atomic_verified_rules_and_evidence(self) -> None:
+        nodes = {node["id"]: node for node in self.source["nodes"]}
+        relations = {
+            (item["type"], item["from_id"], item["to_id"])
+            for item in self.source["relationships"]
+        }
+        threshold_rules = [
+            node
+            for node in self.source["nodes"]
+            if node["id"].startswith(
+                "rule:cwnu:2026:general:college-english-waiver-threshold:"
+            )
+        ]
+        self.assertEqual(len(threshold_rules), len(SOURCE_LABELS))
+        for rule in threshold_rules:
+            self.assertEqual(rule["properties"]["status"], "VERIFIED")
+            supported = [
+                target
+                for kind, source, target in relations
+                if kind == "SUPPORTED_BY" and source == rule["id"]
+            ]
+            self.assertEqual(len(supported), 1)
+            evidence = nodes[supported[0]]
+            self.assertEqual(evidence["properties"]["verification_status"], "VERIFIED")
+            self.assertEqual(evidence["properties"]["excerpt_page"], 1)
+
+    def test_english_waiver_migration_is_idempotent(self) -> None:
+        migrated = migrate(copy.deepcopy(self.source))
+        self.assertEqual(migrated, self.source)
 
     def test_unresolved_artifact_is_rejected(self) -> None:
         with self.assertRaisesRegex(BundleValidationError, "not ingestion inputs"):
@@ -75,8 +122,14 @@ class GraphBundleTests(unittest.TestCase):
         )
 
     def test_missing_required_property_is_rejected(self) -> None:
+        def remove_institution_id(data):
+            institution = next(
+                node for node in data["nodes"] if "Institution" in node["labels"]
+            )
+            institution["properties"].pop("institution_id")
+
         self.assert_invalid(
-            lambda data: data["nodes"][0]["properties"].pop("institution_id"),
+            remove_institution_id,
             "wrapper id differs",
         )
 

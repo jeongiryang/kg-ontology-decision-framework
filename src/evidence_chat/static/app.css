@@ -1,4 +1,4 @@
-/* 학사 교육과정 질의 챗봇 · 3단계 화면 스타일
+/* 학사 교육과정 질의 챗봇 · 연속 대화 화면 스타일
    외부 폰트나 CDN을 쓰지 않는다. 라이트·다크 테마를 모두 지원한다. */
 
 :root {
@@ -16,18 +16,6 @@
   --skip: #8b95a1;
   --mark: #e5484d;
   --radius: 14px;
-  /* 그래프 탐색 상태 색. 그래프와 범례가 같은 값을 쓴다. 한쪽만 바뀌지 않게
-     여기서만 정의한다. */
-  --graph-visited: #2f855a;
-  --graph-visited-fill: #e6fffa;
-  --graph-frontier: #dd6b20;
-  --graph-frontier-soft: rgba(221, 107, 32, 0.10);
-  --graph-dead: #c53030;
-  --graph-node-line: #94a3b0;
-  --graph-role-context: #3b6fb0;
-  --graph-role-course: #7a52c0;
-  --graph-role-rule: #c9761f;
-  --graph-role-evidence: #1f8f68;
   --shadow: 0 1px 2px rgba(16, 24, 40, 0.05), 0 8px 24px rgba(16, 24, 40, 0.06);
   color-scheme: light;
 }
@@ -48,16 +36,6 @@
     --skip: #7c8794;
     --mark: #ff5b60;
     --shadow: 0 1px 2px rgba(0, 0, 0, 0.4), 0 12px 32px rgba(0, 0, 0, 0.35);
-    --graph-visited: #4fd1a5;
-    --graph-visited-fill: #12312a;
-    --graph-frontier: #f6ad55;
-    --graph-frontier-soft: rgba(246, 173, 85, 0.12);
-    --graph-dead: #fc8181;
-    --graph-node-line: #55707f;
-    --graph-role-context: #7aa7d9;
-    --graph-role-course: #b096e0;
-    --graph-role-rule: #e8a34f;
-    --graph-role-evidence: #4fd1a5;
     color-scheme: dark;
   }
 }
@@ -98,6 +76,30 @@ button { font: inherit; cursor: pointer; }
   width: 34px; height: 34px; border-radius: 10px; flex: none;
   background: linear-gradient(135deg, var(--accent), #8b5cf6);
 }
+.topbar-actions { display: flex; align-items: center; gap: 8px; }
+.conversation-toggle {
+  border: 1px solid var(--line); background: var(--panel); color: var(--text);
+  border-radius: 999px; padding: 6px 12px; font-size: 0.78rem;
+}
+.conversation-toggle:focus-visible,
+.conversation-select:focus-visible,
+.conversation-delete:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.conversation-panel {
+  position: fixed; z-index: 20; right: 16px; top: 72px; width: min(360px, calc(100vw - 32px));
+  max-height: calc(100vh - 88px); overflow: auto; padding: 16px;
+  border: 1px solid var(--line); border-radius: 14px; background: var(--panel); box-shadow: var(--shadow);
+}
+.conversation-panel-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.conversation-panel h2 { font-size: 1rem; }
+.conversation-panel > p { margin-top: 6px; color: var(--muted); font-size: 0.76rem; }
+.conversation-list { list-style: none; padding: 0; margin: 12px 0; display: grid; gap: 6px; }
+.conversation-list li { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 6px; }
+.conversation-select, .conversation-delete {
+  border: 1px solid var(--line); border-radius: 9px; background: var(--panel-2); color: var(--text);
+  padding: 8px 10px; text-align: left; min-width: 0;
+}
+.conversation-select[aria-current="true"] { border-color: var(--accent); background: var(--accent-soft); }
+.conversation-delete { color: var(--danger); font-size: 0.76rem; }
 .status {
   display: flex; align-items: center; gap: 8px;
   font-size: 0.78rem; color: var(--muted);
@@ -109,44 +111,18 @@ button { font: inherit; cursor: pointer; }
 .dot[data-state="warn"] { background: var(--warn); }
 .dot[data-state="error"] { background: var(--danger); }
 
-/* ---------- 단계 표시 ---------- */
-.stages { padding: 18px clamp(16px, 4vw, 40px) 0; }
-.stages ol {
-  display: flex; flex-wrap: wrap; gap: 8px;
-  list-style: none; margin: 0 auto; padding: 0;
-  max-width: 960px; font-size: 0.82rem; color: var(--muted);
-}
-.stages li {
-  display: flex; align-items: center; gap: 8px;
-  padding: 6px 14px 6px 6px; border-radius: 999px;
-  border: 1px solid var(--line); background: var(--panel);
-}
-.stages li span {
-  display: grid; place-items: center;
-  width: 22px; height: 22px; border-radius: 50%;
-  background: var(--panel-2); font-size: 0.74rem; font-weight: 600;
-}
-.stages li.is-current { color: var(--text); border-color: var(--accent); background: var(--accent-soft); }
-.stages li.is-current span { background: var(--accent); color: #fff; }
-.stages li.is-done span { background: var(--ok); color: #fff; }
-
-/* ---------- 화면 전환 ---------- */
 main { padding: 20px clamp(16px, 4vw, 40px) 64px; }
-.screen { display: none; }
-.screen.is-active { display: block; animation: rise 0.28s ease both; }
-@keyframes rise {
-  from { opacity: 0; transform: translateY(10px); }
-  to { opacity: 1; transform: none; }
-}
-@media (prefers-reduced-motion: reduce) {
-  .screen.is-active { animation: none; }
-}
-
-/* ---------- 1단계 ---------- */
-.ask-wrap { max-width: 720px; margin: min(8vh, 72px) auto 0; text-align: center; }
-.ask-wrap h2 { font-size: clamp(1.5rem, 3.4vw, 2.1rem); }
 .ask-sub { margin-top: 10px; color: var(--muted); font-size: 0.94rem; }
 .scope-fixed { margin-top: 10px; color: var(--accent); font-size: 0.82rem; font-weight: 600; }
+.conversation-transcript {
+  margin: 20px auto 0; max-height: 320px; overflow-y: auto; display: grid; gap: 10px;
+  text-align: left; padding: 12px; border: 1px solid var(--line); border-radius: 14px;
+  background: var(--panel);
+}
+.conversation-message { max-width: 88%; padding: 9px 12px; border-radius: 12px; background: var(--panel-2); }
+.conversation-message.is-user { margin-left: auto; background: var(--accent-soft); }
+.conversation-message strong { display: block; color: var(--muted); font-size: 0.7rem; }
+.conversation-message p { white-space: pre-wrap; overflow-wrap: anywhere; font-size: 0.86rem; }
 .prompt {
   margin-top: 26px; display: flex; align-items: flex-end; gap: 8px;
   background: var(--panel); border: 1px solid var(--line);
@@ -183,30 +159,7 @@ kbd {
 .examples button:hover { color: var(--text); border-color: var(--accent); transform: translateY(-1px); }
 .examples button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 
-/* ---------- 2단계 ---------- */
-.progress-wrap { max-width: 820px; margin: 0 auto; }
-.progress-head { display: flex; align-items: center; gap: 16px; }
-.progress-head .elapsed { margin-left: auto; color: var(--muted); font-variant-numeric: tabular-nums; }
-.progress-head h2 { font-size: 1.2rem; }
-.progress-now { color: var(--muted); font-size: 0.88rem; }
-.spinner {
-  width: 34px; height: 34px; flex: none; border-radius: 50%;
-  border: 3px solid var(--line); border-top-color: var(--accent);
-  animation: spin 0.85s linear infinite;
-}
-.spinner.is-done { border-top-color: var(--ok); animation: none; }
 @keyframes spin { to { transform: rotate(360deg); } }
-@media (prefers-reduced-motion: reduce) { .spinner { animation-duration: 2.4s; } }
-
-.asked {
-  margin: 18px 0 0; padding: 12px 16px;
-  background: var(--panel); border: 1px solid var(--line);
-  border-left: 3px solid var(--accent); border-radius: 10px;
-  font-size: 0.92rem; color: var(--muted);
-}
-.bar { margin: 18px 0; height: 4px; border-radius: 999px; background: var(--panel-2); overflow: hidden; }
-.bar-fill { height: 100%; width: 0; background: var(--accent); transition: width 0.35s ease; }
-.progress-steps { margin: 18px 0; }
 
 .steps { list-style: none; margin: 0; padding: 0; display: grid; gap: 8px; }
 .step {
@@ -280,17 +233,70 @@ kbd {
   background: var(--panel-2); color: var(--muted); border: 1px solid var(--line);
 }
 .badge[data-state="ANSWERABLE"] { background: rgba(23, 128, 90, 0.12); color: var(--ok); border-color: transparent; }
+.badge[data-state="ANSWERED"] { background: rgba(23, 128, 90, 0.12); color: var(--ok); border-color: transparent; }
 .badge[data-state="CLARIFICATION_REQUIRED"],
-.badge[data-state="UNRESOLVED"] { background: rgba(154, 103, 0, 0.14); color: var(--warn); border-color: transparent; }
+.badge[data-state="UNRESOLVED"],
+.badge[data-state="NEEDS_USER_INFO"],
+.badge[data-state="INSUFFICIENT_EVIDENCE"],
+.badge[data-state="ADVISORY"] { background: rgba(154, 103, 0, 0.14); color: var(--warn); border-color: transparent; }
 .badge[data-state="OUT_OF_SCOPE"],
 .badge[data-state="UNSUPPORTED"],
 .badge[data-state="NOT_FOUND"],
-.badge[data-state="SAFE_FAILURE"] { background: rgba(198, 43, 43, 0.12); color: var(--danger); border-color: transparent; }
+.badge[data-state="SAFE_FAILURE"],
+.badge[data-state="OUT_OF_SCOPE"] { background: rgba(198, 43, 43, 0.12); color: var(--danger); border-color: transparent; }
 .intent { font-size: 0.78rem; color: var(--muted); }
 .answer-card h2 { margin-top: 12px; font-size: clamp(1.15rem, 2.4vw, 1.5rem); }
 .clarification, .scope-notice {
   margin-top: 14px; padding: 10px 12px; border-radius: 8px;
   color: var(--warn); background: rgba(154, 103, 0, 0.1);
+}
+
+.profile-panel {
+  width: min(760px, 100%);
+  margin-top: 1rem;
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  background: var(--panel);
+  padding: .8rem 1rem;
+}
+.profile-panel summary { cursor: pointer; font-weight: 700; }
+.profile-storage-note, .profile-summary { color: var(--muted); font-size: .9rem; }
+.profile-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: .75rem;
+}
+.profile-grid label { display: grid; gap: .35rem; font-size: .86rem; font-weight: 650; }
+.profile-grid input, .profile-grid select {
+  min-width: 0;
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  background: var(--panel-2);
+  color: inherit;
+  padding: .65rem .7rem;
+}
+.profile-grid input:focus-visible, .profile-grid select:focus-visible {
+  outline: 3px solid color-mix(in srgb, var(--accent) 28%, transparent);
+  outline-offset: 1px;
+}
+.profile-wide { grid-column: 1 / -1; }
+.profile-course-list { display: flex; flex-wrap: wrap; gap: .45rem; }
+.profile-course-item {
+  display: inline-flex; align-items: center; gap: .4rem; padding: .35rem .45rem .35rem .65rem;
+  border: 1px solid var(--line); border-radius: 999px; background: var(--panel-2); font-size: .85rem;
+}
+.profile-course-remove {
+  border: 0; border-radius: 999px; background: transparent; color: var(--muted);
+  padding: .2rem .35rem; cursor: pointer; font: inherit; font-size: .76rem;
+}
+.profile-course-remove:hover, .profile-course-remove:focus-visible {
+  color: var(--danger); outline: 2px solid color-mix(in srgb, var(--danger) 35%, transparent);
+}
+.profile-actions { display: flex; flex-wrap: wrap; gap: .6rem; margin-top: .8rem; }
+
+@media (max-width: 640px) {
+  .profile-grid { grid-template-columns: 1fr; }
+  .profile-wide { grid-column: auto; }
 }
 .debug-meta { margin-top: 12px; color: var(--muted); font-family: ui-monospace, monospace; font-size: 0.72rem; }
 .answer-details { margin: 14px 0 0; padding: 0; list-style: none; display: grid; gap: 6px; }
@@ -427,28 +433,35 @@ kbd {
 .graph-controls { display: flex; align-items: center; gap: 7px; flex-wrap: wrap; margin-bottom: 8px; }
 .graph-scale { min-width: 42px; text-align: center; color: var(--muted); font-size: 0.72rem; }
 .graph-viewport {
-  /* 노드가 잘리지 않게 가로 스크롤을 허용하고 높이를 넉넉히 준다. 종전에는
-     overflow-x:hidden 이라 폭을 넘어선 노드가 그대로 잘려 나갔다. */
-  width: 100%; max-width: 100%; max-height: 760px;
-  overflow-x: auto; overflow-y: auto; overscroll-behavior: contain;
+  width: 100%; max-width: 100%; max-height: 520px;
+  overflow-x: hidden; overflow-y: auto; overscroll-behavior: contain;
   border: 1px solid var(--line); border-radius: 8px; background: var(--panel);
 }
 .graph-viewport.is-pannable { overflow: auto; }
 .graph-viewport:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
-.graph-canvas { width: 100%; min-width: 0; margin: 0 auto; padding: 10px 14px; }
+.graph-canvas { width: 100%; min-width: 0; margin: 0 auto; }
 .graph-viewport svg {
-  /* 축소하지 않는다. 그래프가 뷰포트보다 넓으면 원래 크기를 유지하고 가로로
-     스크롤한다. 29노드처럼 넓은 트리를 폭에 맞추면 글자가 읽을 수 없을 만큼
-     작아진다(2026-08-29 실측). 좁은 그래프는 자연 크기 그대로 왼쪽 정렬된다. */
-  display: block; height: auto; max-width: none;
-  width: var(--graph-natural-width, 100%);
-  min-width: min(100%, var(--graph-natural-width, 100%));
-  transform-origin: left top;
+  display: block; width: 100%; height: auto; max-width: none; transform-origin: left top;
 }
 .graph-edge {
   fill: none; stroke: var(--muted); stroke-width: 1.5; opacity: 0.68;
   vector-effect: non-scaling-stroke;
 }
+.graph-edge-group, .graph-node { transition: opacity 180ms ease; }
+.graph-edge-group[data-kind="course"] .graph-edge { stroke: #8b5cf6; }
+.graph-edge-group[data-kind="rule"] .graph-edge { stroke: #cf6b1b; }
+.graph-edge-group[data-kind="evidence"] .graph-edge { stroke: var(--ok); }
+.graph-canvas svg.shows-traversal .graph-edge-group,
+.graph-canvas svg.shows-traversal .graph-node { opacity: 0.22; }
+.graph-canvas svg.shows-traversal .graph-edge-group.is-traversed,
+.graph-canvas svg.shows-traversal .graph-node.is-traversed { opacity: 1; }
+.graph-canvas svg.shows-traversal .graph-edge-group.is-active .graph-edge {
+  stroke: var(--accent); stroke-width: 3;
+  stroke-dasharray: 8 6; animation: graph-traversal-flow 700ms linear infinite;
+}
+@keyframes graph-traversal-flow { to { stroke-dashoffset: -28; } }
+.graph-order-badge { fill: var(--panel); stroke: var(--accent); stroke-width: 1.5; }
+.graph-order-text { fill: var(--accent); font: 700 9px system-ui, sans-serif; }
 .graph-arrow { fill: var(--muted); }
 .graph-edge-label-group rect {
   fill: var(--panel); stroke: var(--line); stroke-width: 1; opacity: 0.96;
@@ -479,6 +492,29 @@ kbd {
 .legend-dot.is-evidence { background: var(--ok); }
 .graph-fallback { color: var(--muted); font-size: 0.78rem; }
 .graph-fallback ul { margin: 8px 0 0; padding-left: 20px; max-height: 240px; overflow: auto; }
+.traversal-status { color: var(--muted); font-size: .72rem; }
+.traversal-summary { margin-top: 12px; }
+.traversal-summary h5 { margin: 0 0 7px; font-size: .78rem; color: var(--muted); }
+.traversal-list {
+  display: grid; gap: 6px; max-height: 280px; overflow-y: auto;
+  margin: 0; padding-left: 26px; color: var(--muted); font-size: .73rem;
+}
+.traversal-list li { padding: 6px 8px; border: 1px solid var(--line); border-radius: 7px; }
+.traversal-list li strong, .traversal-list li span { display: block; overflow-wrap: anywhere; }
+.traversal-list li.is-traversed { color: var(--text); border-color: var(--ok); }
+.traversal-list li.is-active { border-color: var(--accent); background: var(--accent-soft); }
+.operator-list { display: grid; gap: 6px; margin: 10px 0 0; padding-left: 22px; font-size: .74rem; }
+.operator-list strong, .operator-list span { display: block; }
+.operator-list span { color: var(--muted); }
+.stage-fivewoneh { margin-bottom: 10px; }
+.stage-fivewoneh h4 { margin: 0 0 7px; font-size: .78rem; color: var(--muted); }
+
+@media (prefers-reduced-motion: reduce) {
+  .graph-edge-group, .graph-node { transition: none; }
+  .graph-canvas svg.shows-traversal .graph-edge-group.is-active .graph-edge {
+    animation: none; stroke-dasharray: none;
+  }
+}
 
 @media (max-width: 600px) {
   .step-toggle { align-items: flex-start; flex-wrap: wrap; }
@@ -605,614 +641,100 @@ kbd {
   font-weight: 600;
 }
 
-/* 탐색 재생 -----------------------------------------------------------------
-   재생 중에는 아직 밟지 않은 노드·간선을 흐리게 두고, 지나간 것만 색을 준다.
-   순서는 승인된 MATCH 패턴이 쓰인 차례이며 Neo4j 내부 실행 순서가 아니다. */
-.graph-simulate { margin-left: auto; font-variant-numeric: tabular-nums; }
+/* ---------- 연속 채팅 화면 ---------- */
+.sr-only {
+  position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px;
+  overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0;
+}
+.chat-main { padding: 16px clamp(10px, 3vw, 28px) 20px; }
+.chat-shell {
+  width: min(1040px, 100%); height: calc(100dvh - 100px); min-height: 560px;
+  margin: 0 auto; display: grid; grid-template-rows: auto minmax(0, 1fr) auto auto auto;
+  border: 1px solid var(--line); border-radius: 18px; background: var(--panel);
+  box-shadow: var(--shadow); overflow: hidden;
+}
+.chat-intro { padding: 14px 18px 10px; border-bottom: 1px solid var(--line); }
+.chat-intro h2 { font-size: 1.05rem; }
+.chat-intro .ask-sub { margin-top: 3px; font-size: .82rem; }
+.chat-intro .scope-fixed { margin-top: 3px; font-size: .76rem; }
+.chat-intro .profile-panel { margin-top: 8px; width: 100%; padding: 7px 10px; box-shadow: none; }
+.chat-intro .profile-panel[open] { max-height: min(48vh, 480px); overflow-y: auto; }
+.conversation-transcript {
+  margin: 0; width: 100%; max-height: none; min-height: 0; padding: 20px clamp(12px, 4vw, 36px);
+  border: 0; border-radius: 0; background: var(--bg); align-content: start;
+  scroll-behavior: smooth; overscroll-behavior: contain;
+}
+.conversation-empty {
+  justify-self: center; align-self: center; max-width: 520px; margin: auto;
+  padding: 22px; color: var(--muted); text-align: center;
+}
+.conversation-message {
+  width: fit-content; max-width: min(88%, 780px); padding: 11px 14px;
+  border: 1px solid var(--line); box-shadow: 0 1px 2px rgba(16, 24, 40, .04);
+}
+.conversation-message.is-user {
+  max-width: min(76%, 650px); border-color: color-mix(in srgb, var(--accent) 24%, var(--line));
+}
+.conversation-message.is-assistant { margin-right: auto; background: var(--panel); }
+.conversation-message.is-pending { border-color: var(--accent); }
+.message-role { margin-bottom: 2px; }
+.message-content { line-height: 1.65; }
+.turn-status { display: inline-block; margin: 0 0 7px; }
+.message-clarification { margin-top: 8px; color: var(--warn); }
+.message-tools { display: flex; flex-wrap: wrap; gap: 7px; margin-top: 11px; }
+.turn-disclosure {
+  min-width: 0; max-width: 100%; border: 1px solid var(--line); border-radius: 9px;
+  background: var(--panel-2);
+}
+.turn-disclosure[open] { width: 100%; flex-basis: 100%; background: var(--panel); }
+.turn-disclosure > summary {
+  cursor: pointer; padding: 6px 10px; color: var(--accent); font-size: .78rem;
+  font-weight: 650; list-style-position: inside;
+}
+.turn-disclosure > summary:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.turn-disclosure-body { min-width: 0; padding: 4px 10px 12px; }
+.turn-disclosure-body .steps { max-height: 440px; overflow-y: auto; }
+.turn-disclosure-body .exploration { margin: 0; box-shadow: none; }
+.turn-evidence > h4 { margin: 4px 0 10px; font-size: .84rem; }
+.turn-choices { display: flex; flex-wrap: wrap; gap: 7px; padding: 9px; }
+.agent-trace-list { margin: 0; padding-left: 20px; color: var(--muted); font-size: .78rem; }
+.retry-turn { margin-top: 10px; }
+.jump-latest {
+  justify-self: center; margin-top: -46px; z-index: 2; border: 1px solid var(--line);
+  border-radius: 999px; padding: 7px 13px; background: var(--panel); color: var(--accent);
+  box-shadow: var(--shadow); font-size: .78rem;
+}
+.chat-shell > .examples {
+  margin: 0; padding: 7px 14px 5px; justify-content: flex-start; overflow-x: auto;
+  flex-wrap: nowrap; border-top: 1px solid var(--line); background: var(--panel);
+}
+.chat-shell > .examples button { flex: none; padding: 5px 10px; font-size: .74rem; }
+.chat-composer {
+  position: relative; z-index: 3; padding: 7px 14px 10px; background: var(--panel);
+}
+.chat-composer .prompt { margin: 0; padding-block: 7px; box-shadow: none; }
+.composer-meta { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.composer-meta .hint { margin-top: 5px; }
+.composer-status { margin-top: 5px; min-height: 1.2em; color: var(--muted); font-size: .74rem; }
+.chat-composer[aria-busy="true"] .prompt { background: var(--panel-2); }
 
-.graph-canvas svg.shows-state .graph-node,
-.graph-canvas svg.shows-state .graph-edge,
-.graph-canvas svg.shows-state .graph-edge-label-group {
-  opacity: 0.22;
-  transition: opacity 240ms ease, stroke 240ms ease, filter 240ms ease;
+@media (max-width: 640px) {
+  .topbar { padding: 9px 10px; }
+  .brand p, .status-text { display: none; }
+  .status { padding: 7px; }
+  .chat-main { padding: 0; }
+  .chat-shell { height: calc(100dvh - 58px); min-height: 460px; border: 0; border-radius: 0; }
+  .chat-intro { padding: 9px 12px 7px; }
+  .chat-intro .ask-sub { display: none; }
+  .conversation-transcript { padding: 14px 10px; }
+  .conversation-message { max-width: 94%; }
+  .conversation-message.is-user { max-width: 86%; }
+  .message-tools { display: grid; grid-template-columns: 1fr; }
+  .turn-disclosure[open], .turn-disclosure { width: 100%; }
+  .page-body { grid-template-columns: 1fr; }
+  .chat-shell > .examples { padding-inline: 10px; }
+  .chat-composer { padding: 6px 9px 9px; }
+  .composer-meta { align-items: flex-start; }
+  .composer-meta .hint { font-size: .68rem; }
+  .turn-disclosure-body { padding-inline: 6px; }
 }
-
-.graph-canvas svg.shows-state .graph-node.is-visited,
-.graph-canvas svg.shows-state .graph-edge.is-traversed,
-.graph-canvas svg.shows-state .graph-edge-label-group.is-traversed {
-  opacity: 1;
-}
-
-.graph-canvas svg.shows-state .graph-node.is-visited rect {
-  stroke: var(--graph-visited);
-  stroke-width: 2.5;
-  fill: var(--graph-visited-fill);
-}
-
-.graph-canvas svg.shows-state .graph-edge.is-traversed {
-  stroke: var(--graph-visited);
-  stroke-width: 2.6;
-}
-
-.graph-canvas svg.shows-state .graph-edge.is-active {
-  stroke: var(--graph-frontier);
-  stroke-width: 3.4;
-}
-
-.graph-canvas svg.shows-state .graph-edge-label-group.is-active rect {
-  fill: #fffaf0;
-  stroke: var(--graph-frontier);
-}
-
-@media (prefers-color-scheme: dark) {
-  .graph-canvas svg.shows-state .graph-node.is-visited rect {
-    fill: var(--graph-visited-fill);
-    stroke: var(--graph-visited);
-  }
-  .graph-canvas svg.shows-state .graph-edge.is-traversed { stroke: var(--graph-visited); }
-  .graph-canvas svg.shows-state .graph-edge.is-active { stroke: var(--graph-frontier); }
-  .graph-canvas svg.shows-state .graph-edge-label-group.is-active rect {
-    fill: #3a2a12;
-    stroke: var(--graph-frontier);
-  }
-}
-
-@media (prefers-reduced-motion: reduce) {
-  .graph-canvas svg.shows-state .graph-node,
-  .graph-canvas svg.shows-state .graph-edge,
-  .graph-canvas svg.shows-state .graph-edge-label-group { transition: none; }
-}
-
-/* 왼쪽 그래프 · 오른쪽 방문 순서 ------------------------------------------- */
-.graph-split {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(220px, 300px);
-  gap: 18px;
-  align-items: start;
-}
-@media (max-width: 900px) {
-  .graph-split { grid-template-columns: minmax(0, 1fr); }
-}
-
-.traversal-side {
-  border: 1px solid var(--line, #d5dde1);
-  border-radius: 10px;
-  padding: 14px 16px;
-  background: rgba(127, 127, 127, 0.05);
-}
-.traversal-side h5 {
-  margin: 0 0 10px;
-  font-size: 13px;
-  font-weight: 600;
-  letter-spacing: 0.02em;
-}
-
-.traversal-list {
-  list-style: none;
-  margin: 0;
-  padding: 0;
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-  counter-reset: none;
-}
-.traversal-step {
-  display: flex;
-  gap: 10px;
-  align-items: flex-start;
-  padding: 7px 9px;
-  border-radius: 8px;
-  border: 1px solid transparent;
-  opacity: 0.45;
-  transition: opacity 200ms ease, border-color 200ms ease, background 200ms ease;
-}
-.traversal-step.is-traversed { opacity: 1; border-color: var(--graph-visited); }
-.traversal-step.is-active {
-  opacity: 1;
-  border-color: var(--graph-frontier);
-  background: rgba(221, 107, 32, 0.09);
-}
-/* 재생 전에는 전부 또렷하게 보여 준다. */
-.graph-split:not(:has(svg.shows-state)) .traversal-step { opacity: 1; }
-
-.traversal-mark {
-  flex: 0 0 auto;
-  font-size: 14px;
-  line-height: 1.5;
-  font-variant-numeric: tabular-nums;
-}
-.traversal-body { min-width: 0; }
-.traversal-hop {
-  margin: 0;
-  font-size: 13px;
-  font-weight: 600;
-  overflow-wrap: anywhere;
-}
-.traversal-rel {
-  margin: 2px 0 0;
-  font-size: 11.5px;
-  opacity: 0.7;
-  overflow-wrap: anywhere;
-}
-
-@media (prefers-color-scheme: dark) {
-  .traversal-step.is-traversed { border-color: var(--graph-visited); }
-  .traversal-step.is-active {
-    border-color: var(--graph-frontier);
-    background: var(--graph-frontier-soft);
-  }
-}
-
-/* 원형 노드 그래프 ---------------------------------------------------------
-   노드는 원, 원 안에는 방문 순서, 이름은 원 아래. 간선은 화살표와 ①② 번호. */
-.graph-node-circle {
-  fill: #ffffff;
-  stroke: var(--graph-node-line);
-  stroke-width: 2.5;
-  transition: fill 200ms ease, stroke 200ms ease;
-}
-.graph-node[data-kind="context"] .graph-node-circle { stroke: var(--graph-role-context); }
-.graph-node[data-kind="course"]  .graph-node-circle { stroke: var(--graph-role-course); }
-.graph-node[data-kind="rule"]    .graph-node-circle { stroke: var(--graph-role-rule); }
-.graph-node[data-kind="evidence"].graph-node-circle,
-.graph-node[data-kind="evidence"] .graph-node-circle { stroke: var(--graph-role-evidence); }
-
-.graph-node-order {
-  font-size: 17px;
-  font-weight: 700;
-  fill: #1d2b33;
-  font-variant-numeric: tabular-nums;
-  pointer-events: none;
-}
-.graph-node-name {
-  font-size: 13px;
-  font-weight: 600;
-  fill: currentColor;
-  pointer-events: none;
-}
-.graph-node-type {
-  font-size: 10.5px;
-  fill: currentColor;
-  opacity: 0.55;
-  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-  pointer-events: none;
-}
-.graph-edge-label-bg { fill: #ffffff; stroke: none; }
-
-@media (prefers-color-scheme: dark) {
-  .graph-node-circle { fill: #1b242a; stroke: var(--graph-node-line); }
-  .graph-node-order { fill: #e6eef2; }
-  .graph-edge-label-bg { fill: #131b1f; }
-}
-
-/* 재생 중 방문 표시 */
-.graph-canvas svg.shows-state .graph-node.is-visited .graph-node-circle {
-  stroke: var(--graph-visited);
-  stroke-width: 3.5;
-  fill: var(--graph-visited-fill);
-}
-.graph-canvas svg.shows-state .graph-edge-group { opacity: 0.22; }
-.graph-canvas svg.shows-state .graph-edge-group.is-traversed { opacity: 1; }
-.graph-canvas svg.shows-state .graph-edge-group.is-traversed .graph-edge { stroke: var(--graph-visited); }
-.graph-canvas svg.shows-state .graph-edge-group.is-active .graph-edge {
-  stroke: var(--graph-frontier);
-  stroke-width: 3.4;
-}
-@media (prefers-color-scheme: dark) {
-  .graph-canvas svg.shows-state .graph-node.is-visited .graph-node-circle {
-    fill: var(--graph-visited-fill); stroke: var(--graph-visited);
-  }
-  .graph-canvas svg.shows-state .graph-edge-group.is-traversed .graph-edge { stroke: var(--graph-visited); }
-  .graph-canvas svg.shows-state .graph-edge-group.is-active .graph-edge { stroke: var(--graph-frontier); }
-}
-
-/* 탐색이 끊긴 지점 --------------------------------------------------------- */
-.projection-note.is-failed { color: var(--graph-dead); font-weight: 600; }
-
-/* 처리 중 화면의 단계 표시. 지금 몇 번째 단계이고 그 단계가 그림에 무엇을 더했는지
-   한 줄로 적는다. 그림이 바뀌지 않는 단계에서는 바뀌지 않는 이유가 여기 적힌다. */
-.narrowing-stage {
-  flex-basis: 100%;
-  margin-top: 4px;
-  font-size: 0.82rem;
-  line-height: 1.5;
-  color: var(--muted);
-  font-variant-numeric: tabular-nums;
-}
-.narrowing-stage.is-failed { color: var(--graph-dead); font-weight: 600; }
-.graph-node.is-dead-end .graph-node-circle {
-  stroke: var(--graph-dead);
-  stroke-width: 3;
-  stroke-dasharray: 5 4;
-}
-.graph-node-fail {
-  font-size: 20px;
-  font-weight: 700;
-  fill: var(--graph-dead);
-  pointer-events: none;
-}
-@media (prefers-color-scheme: dark) {
-  .projection-note.is-failed { color: var(--graph-dead); }
-  .graph-node.is-dead-end .graph-node-circle { stroke: var(--graph-dead); }
-  .graph-node-fail { fill: var(--graph-dead); }
-}
-
-/* 노드 안에 이름, 간선에 순서 ---------------------------------------------- */
-.graph-node-box {
-  fill: #ffffff;
-  stroke: var(--graph-node-line);
-  stroke-width: 2;
-  transition: fill 200ms ease, stroke 200ms ease;
-}
-.graph-node[data-kind="context"]  .graph-node-box { stroke: var(--graph-role-context); }
-.graph-node[data-kind="course"]   .graph-node-box { stroke: var(--graph-role-course); }
-.graph-node[data-kind="rule"]     .graph-node-box { stroke: var(--graph-role-rule); }
-.graph-node[data-kind="evidence"] .graph-node-box { stroke: var(--graph-role-evidence); }
-.graph-node .graph-node-name { font-size: 13px; font-weight: 600; fill: #16242b; }
-
-.graph-edge-badge { fill: #ffffff; stroke: var(--graph-node-line); stroke-width: 2; }
-.graph-edge-badge-text {
-  font-size: 12px; font-weight: 700; fill: #16242b;
-  font-variant-numeric: tabular-nums; pointer-events: none;
-}
-
-@media (prefers-color-scheme: dark) {
-  .graph-node-box { fill: #1b242a; stroke: var(--graph-node-line); }
-  .graph-node .graph-node-name { fill: #e6eef2; }
-  .graph-edge-badge { fill: #131b1f; stroke: var(--graph-node-line); }
-  .graph-edge-badge-text { fill: #e6eef2; }
-}
-
-.graph-canvas svg.shows-state .graph-node.is-visited .graph-node-box {
-  stroke: var(--graph-visited); stroke-width: 3; fill: var(--graph-visited-fill);
-}
-.graph-canvas svg.shows-state .graph-edge-group.is-active .graph-edge-badge {
-  stroke: var(--graph-frontier); stroke-width: 2.6;
-}
-@media (prefers-color-scheme: dark) {
-  .graph-canvas svg.shows-state .graph-node.is-visited .graph-node-box {
-    fill: var(--graph-visited-fill); stroke: var(--graph-visited);
-  }
-  .graph-canvas svg.shows-state .graph-edge-group.is-active .graph-edge-badge {
-    stroke: var(--graph-frontier);
-  }
-}
-.graph-node.is-dead-end .graph-node-box {
-  stroke: var(--graph-dead); stroke-width: 3; stroke-dasharray: 5 4;
-}
-
-/* 노드 안 카테고리(온톨로지 라벨의 한국어 이름) */
-.graph-node-category {
-  font-size: 10.5px;
-  font-weight: 600;
-  letter-spacing: 0.03em;
-  fill: #64748b;
-  pointer-events: none;
-}
-.graph-node[data-kind="context"]  .graph-node-category { fill: var(--graph-role-context); }
-.graph-node[data-kind="course"]   .graph-node-category { fill: var(--graph-role-course); }
-.graph-node[data-kind="rule"]     .graph-node-category { fill: var(--graph-role-rule); }
-.graph-node[data-kind="evidence"] .graph-node-category { fill: var(--graph-role-evidence); }
-@media (prefers-color-scheme: dark) {
-  .graph-node-category { fill: var(--graph-node-line); }
-  .graph-node[data-kind="context"]  .graph-node-category { fill: var(--graph-role-context); }
-  .graph-node[data-kind="course"]   .graph-node-category { fill: var(--graph-role-course); }
-  .graph-node[data-kind="rule"]     .graph-node-category { fill: var(--graph-role-rule); }
-  .graph-node[data-kind="evidence"] .graph-node-category { fill: var(--graph-visited); }
-}
-
-/* 후보 스키마: 실제 사용 여부 구분 */
-.schema-badge.is-unused { opacity: 0.45; border-style: dashed; }
-.schema-badge.is-used { font-weight: 600; }
-
-/* 방문 순서 목록: 원본 노드 이름 + 카테고리 */
-.traversal-hop { display: flex; flex-direction: column; gap: 3px; }
-.traversal-node { display: block; }
-.traversal-cat {
-  display: block;
-  font-size: 10.5px;
-  font-style: normal;
-  font-weight: 500;
-  opacity: 0.65;
-}
-.traversal-arrow { font-size: 12px; opacity: 0.6; }
-
-/* 간선의 실측치 (rows / dbHits) */
-.graph-edge-measure {
-  font-size: 10.5px; fill: #64748b; font-variant-numeric: tabular-nums;
-  pointer-events: none;
-}
-@media (prefers-color-scheme: dark) { .graph-edge-measure { fill: var(--graph-node-line); } }
-
-/* 결과 화면 탐색 패널 접기 */
-.exploration-fold > summary {
-  cursor: pointer; font-weight: 600; font-size: 0.95rem;
-  padding: 4px 0; list-style: revert;
-}
-.exploration-fold > summary:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
-.exploration-fold[open] > summary { margin-bottom: 12px; }
-
-/* 단계별 육하원칙 요약 */
-.stage-5w1h {
-  margin: 0 0 12px;
-  padding: 10px 12px;
-  border-left: 3px solid var(--accent);
-  background: var(--accent-soft);
-  border-radius: 0 8px 8px 0;
-}
-.stage-5w1h h5 {
-  margin: 0 0 6px; font-size: 0.8rem; font-weight: 700;
-  letter-spacing: 0.02em; color: var(--accent);
-}
-.stage-5w1h .stage-facts dt { font-weight: 600; }
-
-/* ── 탐색 상태 표시 ──────────────────────────────────────────────────────────
-   진행 중(is-simulating)과 완료(is-complete) 모두 shows-state 를 함께 갖는다.
-   종전에는 상태 규칙이 전부 .is-simulating 하위였고 재생이 끝나며 그 클래스를
-   제거해, 완료 후 경로·순서·흐림이 통째로 사라졌다(2026-08-29 담당자 지적).
-
-   ── 이하 원래 주석 ── ───────────────────────────────────────────────────────────
-   같은 층이 한 번에 켜지고, 막 도달한 층만 파동으로 강조된다. */
-.graph-canvas svg.shows-state [data-depth] {
-  opacity: 0.18;
-  transition: opacity 320ms cubic-bezier(.2,.7,.3,1);
-}
-.graph-canvas svg.shows-state [data-depth].is-visited { opacity: 1; }
-
-.graph-canvas svg.shows-state .graph-node.is-frontier .graph-node-box {
-  stroke: var(--graph-frontier);
-  stroke-width: 3.4;
-  filter: drop-shadow(0 0 7px rgba(221, 107, 32, 0.55));
-}
-.graph-canvas svg.shows-state .graph-edge-group.is-frontier .graph-edge {
-  stroke: var(--graph-frontier);
-  stroke-width: 3.4;
-}
-.graph-canvas svg.shows-state .graph-edge-group.is-frontier .graph-edge-badge {
-  stroke: var(--graph-frontier); stroke-width: 2.6;
-}
-
-/* ── 그래프 시각 정리 ─────────────────────────────────────────────────────── */
-.graph-node-box {
-  filter: drop-shadow(0 1px 2px rgba(16, 24, 40, 0.10));
-}
-.graph-node:hover .graph-node-box,
-.graph-node:focus-visible .graph-node-box {
-  stroke-width: 3;
-  filter: drop-shadow(0 2px 8px rgba(16, 24, 40, 0.18));
-}
-.graph-node { cursor: pointer; }
-.graph-edge {
-  stroke-linecap: round;
-  opacity: 0.8;
-}
-.graph-edge-label { font-weight: 600; }
-.graph-viewport {
-  background:
-    radial-gradient(circle at 1px 1px, rgba(127,127,127,0.16) 1px, transparent 0)
-    0 0 / 22px 22px,
-    var(--panel);
-}
-@media (prefers-color-scheme: dark) {
-  .graph-node-box { filter: drop-shadow(0 1px 3px rgba(0,0,0,0.5)); }
-  .graph-canvas svg.shows-state .graph-node.is-frontier .graph-node-box {
-    stroke: var(--graph-frontier); filter: drop-shadow(0 0 9px color-mix(in srgb, var(--graph-frontier) 50%, transparent));
-  }
-  .graph-canvas svg.shows-state .graph-edge-group.is-frontier .graph-edge { stroke: var(--graph-frontier); }
-  .graph-canvas svg.shows-state .graph-edge-group.is-frontier .graph-edge-badge { stroke: var(--graph-frontier); }
-}
-
-/* 승인 전 자리표시 — 지금 무슨 일이 진행 중인지 보이게 한다 */
-.graph-skeleton {
-  display: flex; flex-direction: column; align-items: center; gap: 14px;
-  padding: 26px 16px;
-  border: 1px dashed var(--line); border-radius: 10px; background: var(--panel-2);
-}
-.graph-skeleton-node {
-  width: min(230px, 70%); height: 42px; border-radius: 21px;
-  background: linear-gradient(90deg,
-    rgba(127,127,127,0.10) 25%, rgba(127,127,127,0.20) 37%, rgba(127,127,127,0.10) 63%);
-  background-size: 400% 100%;
-  animation: graph-skeleton-pulse 1.4s ease-in-out infinite;
-}
-.graph-skeleton-node:nth-child(2) { width: min(190px, 60%); }
-.graph-skeleton-node:nth-child(3) { width: min(150px, 48%); }
-@keyframes graph-skeleton-pulse {
-  0% { background-position: 100% 50%; }
-  100% { background-position: 0 50%; }
-}
-@media (prefers-reduced-motion: reduce) {
-  .graph-skeleton-node { animation: none; }
-}
-
-/* ── 잘림 근본 차단 ─────────────────────────────────────────────────────────
-   그리드 자식은 기본 min-width:auto 라 내용이 길면 칸을 밀어내 컨테이너를 넘긴다.
-   가로로 넘치면 페이지 전체가 옆으로 밀려 왼쪽이 잘린다. */
-.graph-split { min-width: 0; max-width: 100%; }
-.graph-split > * { min-width: 0; max-width: 100%; }
-.exploration, .exploration-panel, .graph-panel { min-width: 0; max-width: 100%; overflow: hidden; }
-.operator-detail {
-  display: block; margin-top: 4px; font-size: 10.5px; line-height: 1.5;
-  opacity: 0.75; overflow-wrap: anywhere; word-break: break-word;
-}
-.graph-controls { flex-wrap: wrap; }
-
-/* ── 노드가 하나씩 나타나는 재생 ─────────────────────────────────────────────
-   엔진이 그 관계를 확장하기 전에는 노드도 간선도 화면에 없다. Expand 가 돌면
-   그때 나타난다. 실제로 그 시점에 도달하기 때문이다. */
-.graph-canvas svg.shows-state [data-reached-by],
-.graph-canvas svg.shows-state [data-relationship] {
-  opacity: 0;
-  transition: opacity 260ms ease, transform 260ms cubic-bezier(.2,.8,.3,1);
-}
-/* CSS transform 은 SVG transform **속성을 덮어쓴다.** <g transform="translate(x y)">
-   에 CSS transform 을 주면 그 노드가 좌표를 잃고 원점으로 튄다(2026-08-29 실측:
-   미방문 노드가 루트 위에 겹쳐 그려졌다). 그래서 그룹이 아니라 안쪽 상자에만
-   준다. 위치는 속성이, 크기 변화는 CSS 가 담당한다. */
-.graph-canvas svg.shows-state .graph-node .graph-node-box {
-  transform-box: fill-box;
-  transform-origin: center;
-}
-.graph-canvas svg.shows-state .graph-node[data-reached-by]:not(.is-visited) .graph-node-box {
-  transform: scale(0.9);
-}
-.graph-canvas svg.shows-state [data-reached-by].is-visited,
-.graph-canvas svg.shows-state [data-relationship].is-traversed {
-  opacity: 1;
-}
-/* 지금 타고 있는 간선: 색이 바뀌고 선이 그려지듯 흐른다 */
-.graph-canvas svg.shows-state .graph-edge-group.is-frontier .graph-edge {
-  stroke: var(--graph-frontier);
-  stroke-width: 3.6;
-  stroke-dasharray: 9 7;
-  animation: graph-edge-flow 700ms linear infinite;
-}
-@keyframes graph-edge-flow { to { stroke-dashoffset: -32; } }
-.graph-canvas svg.shows-state .graph-node.is-frontier .graph-node-box {
-  stroke: var(--graph-frontier); stroke-width: 3.4;
-  filter: drop-shadow(0 0 9px color-mix(in srgb, var(--graph-frontier) 55%, transparent));
-}
-@media (prefers-color-scheme: dark) {
-  .graph-canvas svg.shows-state .graph-edge-group.is-frontier .graph-edge { stroke: var(--graph-frontier); }
-  .graph-canvas svg.shows-state .graph-node.is-frontier .graph-node-box {
-    stroke: var(--graph-frontier); filter: drop-shadow(0 0 10px color-mix(in srgb, var(--graph-frontier) 50%, transparent));
-  }
-}
-@media (prefers-reduced-motion: reduce) {
-  .graph-canvas svg.shows-state [data-reached-by],
-  .graph-canvas svg.shows-state [data-relationship] { transition: none; }
-  .graph-canvas svg.shows-state .graph-edge-group.is-frontier .graph-edge { animation: none; }
-}
-
-/* operator 판독 목록 */
-.operator-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 6px; }
-.operator-step {
-  padding: 6px 9px; border-radius: 8px; border: 1px solid transparent;
-  opacity: 0.42; transition: opacity 200ms ease, border-color 200ms ease, background 200ms ease;
-}
-.operator-step.is-done { opacity: 1; border-color: var(--graph-visited)33; }
-.operator-step.is-current {
-  opacity: 1; border-color: var(--graph-frontier); background: rgba(221,107,32,0.10);
-}
-.operator-name { margin: 0; font-size: 12.5px; font-weight: 600; }
-.operator-meta { margin: 1px 0 0; font-size: 11px; opacity: 0.7; font-variant-numeric: tabular-nums; }
-@media (prefers-color-scheme: dark) {
-  .operator-step.is-done { border-color: var(--graph-visited)44; }
-  .operator-step.is-current { border-color: var(--graph-frontier); background: rgba(246,173,85,0.12); }
-}
-
-
-/* ── 노드 역할 위계 (B-1) ────────────────────────────────────────────────────
-   색만으로 구분하지 않는다. 크기·테두리 굵기·모서리 형태를 함께 쓴다. */
-.graph-node[data-role="root"] .graph-node-box {
-  stroke-width: 3.4;
-  filter: drop-shadow(0 2px 6px rgba(16, 24, 40, 0.16));
-}
-.graph-node[data-role="root"] .graph-node-name { font-size: 14px; }
-.graph-node[data-role="step"] .graph-node-box { stroke-width: 2; }
-/* 근거 노드는 점선 테두리로 형태를 달리한다. */
-.graph-node[data-role="evidence"] .graph-node-box {
-  stroke-width: 2.2;
-  stroke-dasharray: 6 4;
-}
-
-/* ── 간선: 배지는 상시, 이름은 hover (A-5 / B-3) ─────────────────────────── */
-.graph-edge-hover { opacity: 0; transition: opacity 140ms ease; pointer-events: none; }
-.graph-edge-group:hover .graph-edge-hover,
-.graph-edge-group:focus-within .graph-edge-hover { opacity: 1; }
-.graph-arrow { fill: var(--muted); }
-.graph-edge-group:hover .graph-edge { stroke-width: 3; }
-
-/* 노드에 올리면 연결된 간선만 진해진다 (B-5) */
-.graph-canvas svg.has-focus .graph-edge-group.is-unrelated { opacity: 0.15; }
-.graph-canvas svg.has-focus .graph-edge-group.is-related .graph-edge { stroke-width: 3.4; }
-
-/* ── 범례 (B-2) ─────────────────────────────────────────────────────────── */
-.graph-legend-bar {
-  list-style: none; margin: 0 0 10px; padding: 0;
-  display: flex; flex-wrap: wrap; gap: 6px 16px;
-  font-size: 12px; color: var(--muted);
-}
-.graph-legend-bar li { display: inline-flex; align-items: center; gap: 6px; }
-.legend-mark { width: 16px; height: 14px; border-radius: 7px; border: 2px solid var(--muted); }
-.graph-legend-bar li[data-key="visited"] .legend-mark { border-color: var(--graph-visited); background: var(--graph-visited-fill); }
-.graph-legend-bar li[data-key="frontier"] .legend-mark { border-color: var(--graph-frontier); border-style: dashed; }
-.graph-legend-bar li[data-key="pending"] .legend-mark { opacity: 0.35; }
-.graph-legend-bar li[data-key="root"] .legend-mark { border-width: 3px; width: 20px; }
-.graph-legend-bar li[data-key="evidence"] .legend-mark { border-style: dashed; border-color: var(--graph-role-evidence); }
-
-/* 오른쪽 목록에서 클릭으로 지목된 항목 (B-5 / B-6) */
-.operator-step.is-picked, .traversal-step.is-picked {
-  outline: 2px solid var(--accent); outline-offset: 1px;
-}
-
-@media (prefers-color-scheme: dark) {
-  .graph-node[data-role="root"] .graph-node-box { filter: drop-shadow(0 2px 7px rgba(0,0,0,0.55)); }
-  .graph-legend-bar li[data-key="visited"] .legend-mark { border-color: var(--graph-visited); background: var(--graph-visited-fill); }
-  .graph-legend-bar li[data-key="frontier"] .legend-mark { border-color: var(--graph-frontier); }
-  .graph-legend-bar li[data-key="evidence"] .legend-mark { border-color: var(--graph-visited); }
-}
-
-/* prefers-reduced-motion: 애니메이션 없이 최종 상태를 즉시. 배지는 유지한다. */
-@media (prefers-reduced-motion: reduce) {
-  .graph-canvas svg.shows-state [data-reached-by],
-  .graph-canvas svg.shows-state [data-relationship],
-  .graph-edge-hover { transition: none; }
-  .graph-canvas svg.shows-state .graph-edge-group.is-frontier .graph-edge { animation: none; }
-}
-
-/* 단계 이동 컨트롤 */
-.graph-step { min-width: 34px; font-variant-numeric: tabular-nums; }
-.graph-step[disabled] { opacity: 0.4; cursor: default; }
-.graph-step-readout {
-  font-size: 0.82rem; color: var(--muted);
-  font-variant-numeric: tabular-nums; min-width: 52px; text-align: center;
-}
-.graph-simulate { margin-left: auto; }
-.operator-step { cursor: pointer; }
-.operator-step:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
-
-/* 완료 상태에서도 지나간 경로가 남는다. 현재 단계 강조만 뺀다. */
-.graph-canvas svg.is-complete .graph-edge-group.is-frontier .graph-edge {
-  animation: none;
-  stroke-dasharray: none;
-}
-
-/* 재생 안내와 단계 캡션 — 실측값과 재생 속도를 화면에서 구분한다 */
-.replay-note {
-  margin: 6px 0 0; font-size: 0.78rem; color: var(--muted);
-  font-variant-numeric: tabular-nums;
-}
-.step-caption {
-  margin: 6px 0 0; padding: 7px 10px;
-  font-size: 0.82rem; line-height: 1.5;
-  color: var(--text); background: var(--panel-2);
-  border-left: 3px solid var(--graph-frontier); border-radius: 0 8px 8px 0;
-}
-
-/* 추적 기록 도구 */
-.trace-tools {
-  display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px;
-  margin: 0 0 12px;
-}
-.trace-mask {
-  display: inline-flex; align-items: center; gap: 6px;
-  font-size: 0.82rem; color: var(--muted); cursor: pointer;
-}
-.trace-copy-state { font-size: 0.8rem; color: var(--ok); }
-.stage-error {
-  margin: 0 0 10px; padding: 8px 10px;
-  border-left: 3px solid var(--danger); border-radius: 0 8px 8px 0;
-  background: color-mix(in srgb, var(--danger) 8%, transparent);
-}
-.stage-error-code {
-  margin: 0; font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-  font-size: 12px; font-weight: 600; color: var(--danger);
-}
-.stage-error-desc { margin: 3px 0 0; font-size: 13px; }
-.discard-badge {
-  margin: 0 0 8px; padding: 5px 9px; display: inline-block;
-  font-size: 12px; font-weight: 600;
-  color: var(--danger); border: 1px dashed var(--danger); border-radius: 6px;
-}
-.stage-empty { margin: 8px 0 0; font-size: 12.5px; color: var(--muted); line-height: 1.55; }

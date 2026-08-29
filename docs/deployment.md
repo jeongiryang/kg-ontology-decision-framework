@@ -70,7 +70,7 @@ CHATBOT_HOST=127.0.0.1
 CHATBOT_PORT=8501
 ```
 
-`KG_CHAT_SHOW_QUERY_DETAILS=true`는 교수 시연에서 선택 스키마, EXPLAIN 승인 canonical Cypher와 정적 provenance 그래프를 보여 주기 위한 선택값입니다. 검증 전·실패한 Cypher, prompt, 모델 원문, 자격증명과 로컬 경로는 이 모드에서도 표시하지 않습니다.
+`KG_CHAT_SHOW_QUERY_DETAILS=full`은 교수 시연에서 선택 스키마, EXPLAIN 승인 canonical Cypher와 실제 승인 traversal 그래프를 보여 주기 위한 선택값입니다. 공개 인터넷 시연의 기본 예시는 상세 질의값을 숨기는 `summary`입니다. 검증 전·실패한 Cypher, prompt, 모델 원문, 자격증명과 로컬 경로는 `full`에서도 표시하지 않습니다.
 
 다음 로컬 서비스 상태를 확인합니다.
 
@@ -139,7 +139,7 @@ ngrok이 화면에 보여 주는 현재 HTTPS 주소를 시연 대상에게만 �
 2. 무료 plan 안내 화면이 표시되면 내용을 확인하고 `Visit Site`로 이동합니다.
 3. 질문을 전송하고 실제 SSE 처리 타임라인이 누적되는지 확인합니다.
 4. clarification이 필요하면 서버가 제공한 선택지를 선택해 재질의합니다.
-5. 상세 모드에서 선택 스키마, 승인 Cypher와 정적 조회 그래프를 확인합니다.
+5. `full` 상세 모드에서 선택 스키마, 승인 Cypher와 실제 traversal 그래프를 확인합니다.
 6. Citation 원문과 발췌·원본·인쇄 페이지를 확인합니다.
 7. PDF가 탑재됐다면 Citation의 원문 보기와 실제 텍스트 강조를 확인합니다.
 
@@ -183,11 +183,10 @@ attach한 세션에서 현재 로그를 확인한 뒤 `Ctrl+B`, `D`로 다시 �
 - 시연이 끝나면 `kg-tunnel` 세션을 즉시 종료합니다.
 ### 외부 시연에서 추적 공개 수준 낮추기
 
-`KG_CHAT_SHOW_QUERY_DETAILS`는 `full`(기본) / `summary` / `off` 세 값을 받습니다. 기본값
-`full`은 9단계 전 항목과 승인 Cypher 원문, 버려진 재시도 이력까지 보여 줍니다. 승인 Cypher는
-공개 온톨로지에서 생성된 것이라 비밀이 아니지만, 외부 시연에서 질의 원문을 노출하고 싶지
-않으면 `summary`로 낮춥니다. `summary`는 단계·소요시간·행 수·한국어 설명만 남기고 Cypher
-원문과 질의 파라미터, 계획, 질문 원문 파생 값을 가립니다. 추적 패널 자체를 내리려면 `off`를
+`KG_CHAT_SHOW_QUERY_DETAILS`는 `full` / `summary` / `off` 세 값을 받으며 기본은 `off`입니다.
+`full`은 실제 단계 요약과 EXPLAIN 승인 Cypher, 실제 승인 traversal을 보여 줍니다. 실패·폐기한
+후보는 어느 수준에서도 공개하지 않습니다. `summary`는 단계·소요시간·행 수만 남기고 Cypher,
+파라미터, 계획, 스키마 이름과 graph payload를 가립니다. 추적 패널 자체를 내리려면 `off`를
 씁니다. 기존 `true`/`false` 값도 각각 `full`/`off`로 읽으므로 하위 호환됩니다.
 
 ```bash

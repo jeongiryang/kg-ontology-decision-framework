@@ -3,51 +3,36 @@
 "use strict";
 
 const $ = (id) => document.getElementById(id);
-const SCREEN_ORDER = ["ask", "progress", "answer"];
 const el = {
   status: $("status"),
-  stages: document.querySelectorAll(".stages li"),
-  screens: {
-    ask: $("screen-ask"),
-    progress: $("screen-progress"),
-    answer: $("screen-answer"),
-  },
+  conversationToggle: $("conversation-toggle"),
+  conversationPanel: $("conversation-panel"),
+  conversationNew: $("conversation-new"),
+  conversationClear: $("conversation-clear"),
+  conversationList: $("conversation-list"),
+  conversationTranscript: $("conversation-transcript"),
+  jumpLatest: $("jump-latest"),
   form: $("ask-form"),
   question: $("question"),
   submit: $("submit"),
+  composerStatus: $("composer-status"),
   examples: $("examples"),
   askNotice: $("ask-notice"),
-  spinner: $("spinner"),
-  progressTitle: $("progress-title"),
-  progressNow: $("progress-now"),
-  progressError: $("progress-error"),
-  progressBack: $("progress-back"),
-  elapsed: $("elapsed"),
-  asked: $("asked"),
-  progressSteps: $("progress-steps"),
-  progressExploration: $("progress-exploration"),
-  answerQuestion: $("answer-question"),
-  answerBadge: $("answer-badge"),
-  answerTitle: $("answer-title"),
-  clarification: $("clarification"),
-  choices: $("choices"),
-  choiceList: $("choice-list"),
-  trail: $("answer-trail"),
-  scopeNotice: $("scope-notice"),
-  debugMeta: $("debug-meta"),
-  timelineSection: $("timeline-section"),
-  answerProgressSteps: $("answer-progress-steps"),
-  traceExpandAll: $("trace-expand-all"),
-  traceCopyText: $("trace-copy-text"),
-  traceCopyJson: $("trace-copy-json"),
-  traceMaskPersonal: $("trace-mask-personal"),
-  traceCopyState: $("trace-copy-state"),
-  answerExploration: $("answer-exploration"),
-  evidenceSection: $("evidence-section"),
-  evidenceSummary: $("evidence-summary"),
-  evidencePages: $("evidence-pages"),
-  pdfNotice: $("pdf-notice"),
-  answerAgain: $("answer-again"),
+  profileForm: $("profile-form"),
+  profileAdmissionYear: $("profile-admission-year"),
+  profileDepartment: $("profile-department"),
+  profileGrade: $("profile-grade"),
+  profileAdmissionType: $("profile-admission-type"),
+  profileMajorType: $("profile-major-type"),
+  profileCreditTotal: $("profile-credit-total"),
+  profileCreditGeneral: $("profile-credit-general"),
+  profileCreditMajor: $("profile-credit-major"),
+  profileCreditFree: $("profile-credit-free"),
+  profileCareerGoal: $("profile-career-goal"),
+  profileCourseSummary: $("profile-course-summary"),
+  profileCourseList: $("profile-course-list"),
+  profileReset: $("profile-reset"),
+  profileNotice: $("profile-notice"),
   pdfModal: $("pdf-modal"),
   pdfModalTitle: $("pdf-modal-title"),
   pdfModalMeta: $("pdf-modal-meta"),
@@ -65,7 +50,6 @@ const el = {
 let pdfAvailable = false;
 let inFlight = false;
 let activeController = null;
-let elapsedTimer = null;
 let clientTimeoutMs = 180000;
 let pdfPageCount = 0;
 let modalState = null;
@@ -73,14 +57,17 @@ let modalZoom = 1;
 let queryDetailsEnabled = false;
 let timelineEvents = [];
 let inspectionUpdates = new Map();
-// 추적 화면과 내보내기에 쓰는 이번 요청의 질문 원문.
-let lastQuestion = "";
-// 결과 화면 탐색 패널의 펼침 상태. 사용자가 펼쳐 두면 재렌더에도 유지한다.
-let explorationExpanded = false;
-let expandedStages = new Set();
 let graphScales = new Map();
 let lastResult = null;
 let clarificationPresentation = null;
+let latestOutcome = null;
+let latestConversationUpdate = null;
+let agentTraceEvents = [];
+let currentConversationId = null;
+let activeTurnId = null;
+let activeAssistantMessageId = null;
+let liveAssistantNode = null;
+let shouldFollowLatest = true;
 const graphResizeObserver = typeof window.ResizeObserver === "function"
   ? new window.ResizeObserver((entries) => {
       entries.forEach((entry) => {
@@ -100,21 +87,624 @@ const span = (className, text) => {
   return node;
 };
 
+const CONVERSATION_DB = "evidence-chat-conversations";
+const CONVERSATION_DB_VERSION = 2;
+const CONVERSATION_STORE = "conversations";
+const MESSAGE_STORE = "messages";
+const CURRENT_CONVERSATION_KEY = "evidence-chat-current-conversation-v1";
+const RESPONSE_STATUS_LABELS = {
+  ANSWERED: "근거 확인 답변",
+  NEEDS_USER_INFO: "사용자 정보 필요",
+  INSUFFICIENT_EVIDENCE: "근거 부족",
+  OUT_OF_SCOPE: "지원 범위 밖",
+  ADVISORY: "조건부 안내",
+};
+
+function opaqueId(prefix) {
+  const value = typeof crypto.randomUUID === "function"
+    ? crypto.randomUUID()
+    : `${Date.now()}-${Math.random().toString(16).slice(2)}`;
+  return `${prefix}:${value}`;
+}
+
+function openConversationDb() {
+  return new Promise((resolve, reject) => {
+    const request = indexedDB.open(CONVERSATION_DB, CONVERSATION_DB_VERSION);
+    request.onupgradeneeded = () => {
+      const db = request.result;
+      if (!db.objectStoreNames.contains(CONVERSATION_STORE)) {
+        db.createObjectStore(CONVERSATION_STORE, { keyPath: "conversation_id" });
+      }
+      if (!db.objectStoreNames.contains(MESSAGE_STORE)) {
+        const store = db.createObjectStore(MESSAGE_STORE, { keyPath: "message_id" });
+        store.createIndex("conversation_id", "conversation_id", { unique: false });
+      }
+    };
+    request.onsuccess = () => resolve(request.result);
+    request.onerror = () => reject(new Error("대화 저장소를 열 수 없습니다."));
+  });
+}
+
+async function dbRequest(storeName, mode, operation) {
+  const db = await openConversationDb();
+  return new Promise((resolve, reject) => {
+    const transaction = db.transaction(storeName, mode);
+    const request = operation(transaction.objectStore(storeName));
+    request.onsuccess = () => resolve(request.result);
+    request.onerror = () => reject(new Error("대화 저장 작업을 완료하지 못했습니다."));
+    transaction.oncomplete = () => db.close();
+    transaction.onerror = () => reject(new Error("대화 저장 작업을 완료하지 못했습니다."));
+  });
+}
+
+async function listConversations() {
+  const rows = await dbRequest(CONVERSATION_STORE, "readonly", (store) => store.getAll());
+  return Array.isArray(rows)
+    ? rows
+      .filter((item) => item && [1, 2].includes(item.version) &&
+        typeof item.conversation_id === "string")
+      .sort((left, right) => String(right.updated_at).localeCompare(String(left.updated_at)))
+    : [];
+}
+
+async function loadConversationMessages(conversationId) {
+  const rows = await dbRequest(MESSAGE_STORE, "readonly", (store) =>
+    store.index("conversation_id").getAll(conversationId)
+  );
+  return Array.isArray(rows)
+    ? rows
+      .filter((item) => item && [1, 2].includes(item.version) &&
+        ["user", "assistant"].includes(item.role) && typeof item.content === "string")
+      .sort((left, right) => String(left.created_at).localeCompare(String(right.created_at)))
+    : [];
+}
+
+async function saveConversation(conversation) {
+  await dbRequest(CONVERSATION_STORE, "readwrite", (store) => store.put(conversation));
+}
+
+async function saveConversationMessage(message) {
+  await dbRequest(MESSAGE_STORE, "readwrite", (store) => store.put(message));
+}
+
+async function createConversation() {
+  const now = new Date().toISOString();
+  const conversation = {
+    version: CONVERSATION_DB_VERSION,
+    conversation_id: opaqueId("conversation"),
+    title: "새 채팅",
+    created_at: now,
+    updated_at: now,
+    summary: "",
+    current_topic: null,
+    recent_course_codes: [],
+    recent_evidence_ids: [],
+    pending_clarification: null,
+  };
+  await saveConversation(conversation);
+  currentConversationId = conversation.conversation_id;
+  clearClarify();
+  try { localStorage.setItem(CURRENT_CONVERSATION_KEY, currentConversationId); } catch (_) { /* no-op */ }
+  await renderConversationUi();
+  return conversation;
+}
+
+async function ensureConversation() {
+  if (!currentConversationId) {
+    try { currentConversationId = localStorage.getItem(CURRENT_CONVERSATION_KEY); } catch (_) { /* no-op */ }
+  }
+  if (currentConversationId) {
+    const found = await dbRequest(CONVERSATION_STORE, "readonly", (store) => store.get(currentConversationId));
+    if (found && [1, 2].includes(found.version)) return found;
+  }
+  return createConversation();
+}
+
+async function renderConversationUi() {
+  const conversations = await listConversations().catch(() => []);
+  el.conversationList.replaceChildren();
+  conversations.forEach((conversation) => {
+    const item = document.createElement("li");
+    const select = document.createElement("button");
+    select.type = "button";
+    select.className = "conversation-select";
+    select.textContent = conversation.title || "새 채팅";
+    select.disabled = inFlight;
+    select.setAttribute("aria-current", String(conversation.conversation_id === currentConversationId));
+    select.addEventListener("click", async () => {
+      await saveCurrentScrollPosition();
+      currentConversationId = conversation.conversation_id;
+      clearClarify();
+      try { localStorage.setItem(CURRENT_CONVERSATION_KEY, currentConversationId); } catch (_) { /* no-op */ }
+      await renderConversationUi();
+      el.conversationPanel.hidden = true;
+      el.conversationToggle.setAttribute("aria-expanded", "false");
+      el.question.focus();
+    });
+    const remove = document.createElement("button");
+    remove.type = "button";
+    remove.className = "conversation-delete";
+    remove.textContent = "삭제";
+    remove.disabled = inFlight;
+    remove.setAttribute("aria-label", `${conversation.title || "채팅"} 삭제`);
+    remove.addEventListener("click", async () => {
+      if (!window.confirm(`‘${conversation.title || "채팅"}’을 삭제할까요?`)) return;
+      await deleteConversation(conversation.conversation_id);
+      if (currentConversationId === conversation.conversation_id) currentConversationId = null;
+      await ensureConversation();
+    });
+    item.append(select, remove);
+    el.conversationList.append(item);
+  });
+  const active = currentConversationId
+    ? await loadConversationMessages(currentConversationId).catch(() => [])
+    : [];
+  el.conversationTranscript.replaceChildren();
+  active.forEach((message) => {
+    el.conversationTranscript.append(renderConversationMessage(message));
+  });
+  if (!active.length) {
+    const empty = document.createElement("p");
+    empty.className = "conversation-empty";
+    empty.textContent = "질문을 보내면 같은 채팅방에서 답변과 근거가 차례로 쌓입니다.";
+    el.conversationTranscript.append(empty);
+  }
+  const selected = conversations.find((item) => item.conversation_id === currentConversationId);
+  requestAnimationFrame(() => {
+    el.conversationTranscript.scrollTop = Number(selected && selected.scroll_top) ||
+      el.conversationTranscript.scrollHeight;
+    updateJumpLatest();
+  });
+}
+
+function renderConversationMessage(message) {
+  const block = document.createElement("article");
+  block.className = `conversation-message is-${message.role}`;
+  block.dataset.turnId = message.turn_id || "";
+  const role = document.createElement("strong");
+  role.className = "message-role";
+  role.textContent = message.role === "user" ? "나" : "학사 챗봇";
+  const content = document.createElement("p");
+  content.className = "message-content";
+  content.textContent = message.content;
+  block.append(role, content);
+  if (message.role === "assistant") renderAssistantDetails(block, message);
+  return block;
+}
+
+function renderAssistantDetails(block, message) {
+  const snapshot = message.presentation_snapshot;
+  if (!snapshot || snapshot.version !== 1) {
+    if (message.error) addRetryButton(block, message.source_question || "");
+    return;
+  }
+  const result = snapshot.result;
+  const response = result && result.response;
+  const presentation = result && result.presentation;
+  const retryable = Boolean(message.error || (response && response.status === "SAFE_FAILURE"));
+  if (message.response_status) {
+    const badge = document.createElement("span");
+    badge.className = "badge turn-status";
+    badge.dataset.state = message.response_status;
+    badge.textContent = RESPONSE_STATUS_LABELS[message.response_status] || message.response_status;
+    block.insertBefore(badge, block.querySelector(".message-content"));
+  }
+  if (response && response.clarification) {
+    const clarification = document.createElement("p");
+    clarification.className = "message-clarification";
+    clarification.textContent = response.clarification;
+    block.append(clarification);
+  }
+  renderTurnChoices(block, message.source_question || "", response, snapshot.clarification);
+
+  const tools = document.createElement("div");
+  tools.className = "message-tools";
+  if (presentation && Array.isArray(presentation.evidence_pages) && presentation.evidence_pages.length) {
+    const evidenceCount = presentation.evidence_pages.reduce(
+      (total, page) => total + (Array.isArray(page.evidence) ? page.evidence.length : 0), 0
+    );
+    tools.append(turnDisclosure(`근거 ${evidenceCount}개`, (body) =>
+      renderEvidenceInto(body, presentation)));
+  }
+  if (Array.isArray(snapshot.timeline_events) && snapshot.timeline_events.length) {
+    tools.append(turnDisclosure("처리 과정", (body) =>
+      renderTimelineInto(body, snapshot.timeline_events, snapshot.inspection_updates || [])));
+  }
+  if (queryDetailsEnabled && Array.isArray(snapshot.inspection_updates) && snapshot.inspection_updates.length) {
+    const state = explorationState(snapshot.inspection_updates);
+    if (state.claims && state.claims.traversal_graph) {
+      tools.append(turnDisclosure("그래프 탐색", (body) =>
+        renderTurnGraph(body, state)));
+    }
+    if (state.explain && typeof state.explain.approved_cypher === "string") {
+      tools.append(turnDisclosure("Cypher 보기", (body) =>
+        renderCypherTab(body, state.explain)));
+    }
+  }
+  if (Array.isArray(snapshot.agent_trace) && snapshot.agent_trace.length) {
+    tools.append(turnDisclosure("Agent 도구 기록", (body) =>
+      renderAgentTrace(body, snapshot.agent_trace)));
+  }
+  if (tools.childElementCount) block.append(tools);
+  if (retryable) addRetryButton(block, message.source_question || "");
+}
+
+function turnDisclosure(label, renderBody) {
+  const details = document.createElement("details");
+  details.className = "turn-disclosure";
+  const summary = document.createElement("summary");
+  summary.textContent = label;
+  const body = document.createElement("div");
+  body.className = "turn-disclosure-body";
+  details.addEventListener("toggle", () => {
+    if (details.open && !body.dataset.rendered) {
+      renderBody(body);
+      body.dataset.rendered = "true";
+    }
+  });
+  details.append(summary, body);
+  return details;
+}
+
+function renderAgentTrace(container, events) {
+  const list = document.createElement("ol");
+  list.className = "agent-trace-list";
+  events.forEach((event) => {
+    const item = document.createElement("li");
+    const label = event && typeof event.detail === "string" ? event.detail : "도구 실행";
+    item.textContent = label;
+    list.append(item);
+  });
+  container.append(list);
+}
+
+function addRetryButton(block, question) {
+  if (!question) return;
+  const retry = document.createElement("button");
+  retry.type = "button";
+  retry.className = "ghost compact retry-turn";
+  retry.textContent = "이 질문 다시 시도";
+  retry.addEventListener("click", () => {
+    if (inFlight) return;
+    clearClarify();
+    clarify = emptyClarify(question);
+    saveClarify(clarify);
+    ask(question);
+  });
+  block.append(retry);
+}
+
+async function saveCurrentScrollPosition() {
+  if (!currentConversationId) return;
+  const conversation = await dbRequest(
+    CONVERSATION_STORE, "readonly", (store) => store.get(currentConversationId)
+  ).catch(() => null);
+  if (!conversation) return;
+  conversation.version = CONVERSATION_DB_VERSION;
+  conversation.scroll_top = el.conversationTranscript.scrollTop;
+  await saveConversation(conversation).catch(() => {});
+}
+
+async function deleteConversation(conversationId) {
+  const messages = await loadConversationMessages(conversationId).catch(() => []);
+  const db = await openConversationDb();
+  await new Promise((resolve, reject) => {
+    const transaction = db.transaction([CONVERSATION_STORE, MESSAGE_STORE], "readwrite");
+    transaction.objectStore(CONVERSATION_STORE).delete(conversationId);
+    const store = transaction.objectStore(MESSAGE_STORE);
+    messages.forEach((message) => store.delete(message.message_id));
+    transaction.oncomplete = resolve;
+    transaction.onerror = () => reject(new Error("채팅을 삭제하지 못했습니다."));
+  });
+  db.close();
+}
+
+async function clearConversations() {
+  if (!window.confirm("이 브라우저에 저장된 모든 채팅을 삭제할까요?")) return;
+  const db = await openConversationDb();
+  await new Promise((resolve, reject) => {
+    const transaction = db.transaction([CONVERSATION_STORE, MESSAGE_STORE], "readwrite");
+    transaction.objectStore(CONVERSATION_STORE).clear();
+    transaction.objectStore(MESSAGE_STORE).clear();
+    transaction.oncomplete = resolve;
+    transaction.onerror = () => reject(new Error("채팅을 초기화하지 못했습니다."));
+  });
+  db.close();
+  currentConversationId = null;
+  try { localStorage.removeItem(CURRENT_CONVERSATION_KEY); } catch (_) { /* no-op */ }
+  await createConversation();
+}
+
+async function beginConversationTurn(question) {
+  const conversation = await ensureConversation();
+  const messages = await loadConversationMessages(conversation.conversation_id);
+  activeTurnId = opaqueId("turn");
+  const now = new Date().toISOString();
+  if (conversation.title === "새 채팅" && meaningfulConversationTitle(question)) {
+    conversation.title = question.replace(/\s+/g, " ").slice(0, 36);
+  }
+  conversation.version = CONVERSATION_DB_VERSION;
+  conversation.updated_at = now;
+  await saveConversation(conversation);
+  const recent = messages.slice(-8).map((message) => ({
+    turn_id: message.turn_id,
+    role: message.role,
+    content: message.content,
+    created_at: message.created_at,
+    response_status: message.response_status || null,
+    citation_ids: message.citation_ids || [],
+    evidence_ids: message.evidence_ids || [],
+  }));
+  await saveConversationMessage({
+    version: CONVERSATION_DB_VERSION,
+    message_id: opaqueId("message"),
+    conversation_id: conversation.conversation_id,
+    turn_id: activeTurnId,
+    role: "user",
+    content: question,
+    created_at: now,
+    response_status: null,
+    citation_ids: [],
+    evidence_ids: [],
+  });
+  await renderConversationUi();
+  scrollConversationToLatest(true);
+  return {
+    version: 1,
+    conversation_id: conversation.conversation_id,
+    turn_id: activeTurnId,
+    recent_messages: recent,
+    summary: conversation.summary || "",
+    current_topic: conversation.current_topic || null,
+    recent_course_codes: conversation.recent_course_codes || [],
+    recent_evidence_ids: conversation.recent_evidence_ids || [],
+    pending_clarification: conversation.pending_clarification || null,
+  };
+}
+
+function meaningfulConversationTitle(question) {
+  const normalized = question.replace(/[\s!?.,~]+/g, "");
+  return normalized.length >= 4 && !/^(안녕|하이|반가워|테스트)$/.test(normalized);
+}
+
+function currentTurnSnapshot(result = lastResult, error = null) {
+  return {
+    version: 1,
+    result,
+    outcome: latestOutcome,
+    clarification: clarificationPresentation,
+    timeline_events: timelineEvents,
+    inspection_updates: [...inspectionUpdates.values()],
+    agent_trace: agentTraceEvents,
+    error,
+  };
+}
+
+async function finishConversationTurn(update, snapshot = currentTurnSnapshot()) {
+  if (!update || update.version !== 1 || update.conversation_id !== currentConversationId) return;
+  const conversation = await ensureConversation();
+  conversation.updated_at = update.created_at;
+  conversation.summary = update.summary || "";
+  conversation.current_topic = update.current_topic || null;
+  conversation.recent_course_codes = Array.isArray(update.recent_course_codes)
+    ? update.recent_course_codes : [];
+  conversation.recent_evidence_ids = Array.isArray(update.evidence_ids)
+    ? update.evidence_ids : [];
+  conversation.pending_clarification = update.pending_clarification || null;
+  conversation.version = CONVERSATION_DB_VERSION;
+  await saveConversation(conversation);
+  await saveConversationMessage({
+    version: CONVERSATION_DB_VERSION,
+    message_id: activeAssistantMessageId || opaqueId("message"),
+    conversation_id: update.conversation_id,
+    turn_id: update.turn_id,
+    role: "assistant",
+    content: update.display_answer,
+    created_at: update.created_at,
+    response_status: update.response_status,
+    citation_ids: update.citation_ids || [],
+    evidence_ids: update.evidence_ids || [],
+    source_question: clarify.question || "",
+    presentation_snapshot: snapshot,
+  });
+  await renderConversationUi();
+}
+
+async function saveFailedConversationTurn(question, message) {
+  if (!currentConversationId || !activeTurnId) return;
+  const now = new Date().toISOString();
+  await saveConversationMessage({
+    version: CONVERSATION_DB_VERSION,
+    message_id: activeAssistantMessageId || opaqueId("message"),
+    conversation_id: currentConversationId,
+    turn_id: activeTurnId,
+    role: "assistant",
+    content: message,
+    source_question: question,
+    created_at: now,
+    response_status: "SAFE_FAILURE",
+    citation_ids: [],
+    evidence_ids: [],
+    error: true,
+    presentation_snapshot: currentTurnSnapshot(null, "SAFE_FAILURE"),
+  });
+  await renderConversationUi();
+}
+
+el.conversationToggle.addEventListener("click", () => {
+  const opened = el.conversationPanel.hidden;
+  el.conversationPanel.hidden = !opened;
+  el.conversationToggle.setAttribute("aria-expanded", String(opened));
+});
+el.conversationNew.addEventListener("click", async () => {
+  if (inFlight) return;
+  await saveCurrentScrollPosition();
+  await createConversation();
+  el.conversationPanel.hidden = true;
+  el.conversationToggle.setAttribute("aria-expanded", "false");
+  el.question.focus();
+});
+el.conversationClear.addEventListener("click", async () => {
+  if (!inFlight) await clearConversations();
+});
+
 // 되묻기로 확정된 값. 서버는 대화 상태를 들지 않으므로 브라우저가 들고 매 요청에
 // 함께 보낸다. 값이 실제로 제시된 선택지였는지는 서버가 다시 만들어 대조한다.
 //
 // `trail` 은 화면에만 쓰는 기록이다. 서버로 보내지 않으며 조회에도 관여하지 않는다.
 // 무엇을 물었고 무엇을 골라 여기까지 왔는지 사용자가 되짚을 수 있게 하는 용도다.
 const CLARIFY_KEY = "evidence-chat-clarify";
+const PROFILE_KEY = "evidence-chat-profile-v1";
+const PROFILE_VERSION = 1;
+
+function emptyProfile() {
+  return {
+    version: PROFILE_VERSION,
+    admission_year: null,
+    curriculum_year: null,
+    department_id: null,
+    current_grade_year: null,
+    current_semester: null,
+    admission_type: null,
+    major_type: null,
+    completed_courses: [],
+    credits: {},
+    english_credentials: [],
+    career_goal: null,
+    note: null,
+  };
+}
+
+function validProfileShape(value) {
+  return value && value.version === PROFILE_VERSION &&
+    Array.isArray(value.completed_courses) &&
+    Array.isArray(value.english_credentials) &&
+    value.credits && typeof value.credits === "object" && !Array.isArray(value.credits);
+}
+
+function loadProfile() {
+  try {
+    const value = JSON.parse(localStorage.getItem(PROFILE_KEY) || "null");
+    return validProfileShape(value) ? value : emptyProfile();
+  } catch (_) {
+    return emptyProfile();
+  }
+}
+
+function saveProfile(value) {
+  profile = validProfileShape(value) ? value : emptyProfile();
+  try {
+    localStorage.setItem(PROFILE_KEY, JSON.stringify(profile));
+  } catch (_) {
+    showNotice(el.profileNotice, "브라우저 저장소에 사용자 정보를 저장하지 못했습니다.", true);
+  }
+  renderProfileForm();
+}
+
+function numericOrNull(node, minimum, maximum) {
+  const raw = node.value.trim();
+  if (!raw) return null;
+  const value = Number(raw);
+  if (!Number.isFinite(value) || value < minimum || value > maximum) {
+    throw new Error(`${node.closest("label").firstChild.textContent.trim()} 값을 확인해 주세요.`);
+  }
+  return value;
+}
+
+function renderProfileForm() {
+  if (!el.profileForm) return;
+  el.profileAdmissionYear.value = profile.admission_year || "";
+  el.profileDepartment.value = profile.department_id || "";
+  el.profileGrade.value = profile.current_grade_year || "";
+  el.profileAdmissionType.value = profile.admission_type || "";
+  el.profileMajorType.value = profile.major_type || "";
+  el.profileCreditTotal.value = profile.credits.total ?? "";
+  el.profileCreditGeneral.value = profile.credits.general ?? "";
+  el.profileCreditMajor.value = profile.credits.major ?? "";
+  el.profileCreditFree.value = profile.credits.free_elective ?? "";
+  el.profileCareerGoal.value = profile.career_goal || "";
+  const names = profile.completed_courses.map((item) => item.name_ko).filter(Boolean);
+  el.profileCourseSummary.textContent = names.length
+    ? `저장된 이수 과목 ${names.length}개`
+    : "채팅에서 알려 준 이수 과목이 여기에 반영됩니다.";
+  el.profileCourseList.replaceChildren();
+  profile.completed_courses.forEach((course) => {
+    const item = document.createElement("span");
+    item.className = "profile-course-item";
+    item.append(span("", course.name_ko || course.course_code || "이름 없는 과목"));
+    const remove = document.createElement("button");
+    remove.type = "button";
+    remove.className = "profile-course-remove";
+    remove.textContent = "삭제";
+    remove.setAttribute("aria-label", `${course.name_ko || course.course_code || "과목"} 삭제`);
+    remove.addEventListener("click", () => {
+      saveProfile({
+        ...profile,
+        completed_courses: profile.completed_courses.filter(
+          (candidate) => candidate.course_code !== course.course_code,
+        ),
+      });
+      showNotice(el.profileNotice, "이수 과목을 브라우저 프로필에서 삭제했습니다.", false);
+    });
+    item.append(remove);
+    el.profileCourseList.append(item);
+  });
+}
+
+let profile = loadProfile();
+
+if (el.profileForm) {
+  el.profileForm.addEventListener("submit", (event) => {
+    event.preventDefault();
+    try {
+      const admissionYear = numericOrNull(el.profileAdmissionYear, 1900, 9999);
+      const credits = {};
+      const creditInputs = {
+        total: el.profileCreditTotal,
+        general: el.profileCreditGeneral,
+        major: el.profileCreditMajor,
+        free_elective: el.profileCreditFree,
+      };
+      Object.entries(creditInputs).forEach(([name, node]) => {
+        const value = numericOrNull(node, 0, 300);
+        if (value !== null) credits[name] = value;
+      });
+      saveProfile({
+        ...profile,
+        admission_year: admissionYear,
+        curriculum_year: admissionYear,
+        department_id: el.profileDepartment.value || null,
+        current_grade_year: numericOrNull(el.profileGrade, 1, 6),
+        admission_type: el.profileAdmissionType.value || null,
+        major_type: el.profileMajorType.value || null,
+        credits,
+        career_goal: el.profileCareerGoal.value.trim() || null,
+      });
+      showNotice(el.profileNotice, "이 브라우저에 사용자 정보를 저장했습니다.", false);
+    } catch (error) {
+      showNotice(el.profileNotice, error.message || "입력값을 확인해 주세요.", true);
+    }
+  });
+  el.profileReset.addEventListener("click", () => {
+    try { localStorage.removeItem(PROFILE_KEY); } catch (_) { /* no-op */ }
+    profile = emptyProfile();
+    renderProfileForm();
+    showNotice(el.profileNotice, "저장된 사용자 정보를 초기화했습니다.", false);
+  });
+  renderProfileForm();
+}
 
 function emptyClarify(question = "") {
-  return { question, resolved: {}, trail: [] };
+  return { question, resolved: {}, trail: [], conversation_id: currentConversationId };
 }
 
 function loadClarify() {
   try {
     const saved = JSON.parse(sessionStorage.getItem(CLARIFY_KEY) || "null");
-    if (saved && typeof saved.question === "string" && saved.resolved) {
+    if (
+      saved && typeof saved.question === "string" && saved.resolved &&
+      (!saved.conversation_id || saved.conversation_id === currentConversationId)
+    ) {
       return { ...saved, trail: Array.isArray(saved.trail) ? saved.trail : [] };
     }
   } catch (error) {
@@ -142,18 +732,29 @@ function clearClarify() {
 
 let clarify = loadClarify();
 
-function showScreen(name) {
-  Object.entries(el.screens).forEach(([key, node]) =>
-    node.classList.toggle("is-active", key === name)
-  );
-  const current = SCREEN_ORDER.indexOf(name);
-  el.stages.forEach((item) => {
-    const index = SCREEN_ORDER.indexOf(item.dataset.stage);
-    item.classList.toggle("is-current", index === current);
-    item.classList.toggle("is-done", index < current);
-  });
-  window.scrollTo({ top: 0, behavior: "smooth" });
+function isNearConversationBottom() {
+  const remaining = el.conversationTranscript.scrollHeight -
+    el.conversationTranscript.scrollTop - el.conversationTranscript.clientHeight;
+  return remaining < 96;
 }
+
+function scrollConversationToLatest(force = false) {
+  if (force || shouldFollowLatest || isNearConversationBottom()) {
+    el.conversationTranscript.scrollTop = el.conversationTranscript.scrollHeight;
+    shouldFollowLatest = true;
+    el.jumpLatest.hidden = true;
+  } else {
+    el.jumpLatest.hidden = false;
+  }
+}
+
+function updateJumpLatest() {
+  shouldFollowLatest = isNearConversationBottom();
+  el.jumpLatest.hidden = shouldFollowLatest;
+}
+
+el.conversationTranscript.addEventListener("scroll", updateJumpLatest, { passive: true });
+el.jumpLatest.addEventListener("click", () => scrollConversationToLatest(true));
 
 function showNotice(node, message, isError) {
   node.textContent = message;
@@ -186,6 +787,7 @@ async function loadHealth() {
       text.textContent = "질의 서비스 준비됨 · PDF 탑재됨";
     }
     renderExamples(data.examples || []);
+    await renderConversationUi();
   } catch (_) {
     el.status.querySelector(".dot").dataset.state = "error";
     el.status.querySelector(".status-text").textContent = "서버 상태 확인 실패";
@@ -239,101 +841,77 @@ el.form.addEventListener("submit", (event) => {
     ask(question);
   }
 });
-el.progressBack.addEventListener("click", () => {
-  if (activeController) {
-    activeController.abort("user_cancelled");
-  } else {
-    showScreen("ask");
-  }
-});
-// 전체 보기: 모든 단계를 한 번에 펼쳐 위에서 아래로 읽는다.
-if (el.traceExpandAll) {
-  el.traceExpandAll.addEventListener("click", () => {
-    const cards = [...el.answerProgressSteps.querySelectorAll("button.step-toggle")];
-    const anyClosed = cards.some((b) => b.getAttribute("aria-expanded") !== "true");
-    cards.forEach((b) => {
-      if (b.getAttribute("aria-expanded") !== String(anyClosed)) b.click();
-    });
-    el.traceExpandAll.textContent = anyClosed ? "전체 접기" : "전체 보기";
-  });
-}
-const wireCopy = (button, kind) => {
-  if (!button) return;
-  button.addEventListener("click", async () => {
-    const masked = !el.traceMaskPersonal || el.traceMaskPersonal.checked;
-    const ok = await copyTrace(kind, masked);
-    if (el.traceCopyState) {
-      el.traceCopyState.textContent = ok
-        ? `복사했습니다${masked ? " · 개인 데이터 가림" : ""}`
-        : "복사하지 못했습니다";
-      window.setTimeout(() => {
-        el.traceCopyState.textContent = "";
-      }, 4000);
-    }
-  });
-};
-wireCopy(el.traceCopyText, "text");
-wireCopy(el.traceCopyJson, "json");
 
-el.answerAgain.addEventListener("click", () => {
-  el.question.value = "";
-  autoGrow();
-  showScreen("ask");
-  el.question.focus();
-});
-
-function startElapsed() {
-  const started = performance.now();
-  el.elapsed.textContent = "0초";
-  elapsedTimer = window.setInterval(() => {
-    el.elapsed.textContent = `${Math.floor((performance.now() - started) / 1000)}초`;
-  }, 250);
+function mountLiveAssistant() {
+  const empty = el.conversationTranscript.querySelector(".conversation-empty");
+  if (empty) empty.remove();
+  const block = document.createElement("article");
+  block.className = "conversation-message is-assistant is-pending";
+  block.dataset.turnId = activeTurnId || "";
+  const role = document.createElement("strong");
+  role.className = "message-role";
+  role.textContent = "학사 챗봇";
+  const content = document.createElement("p");
+  content.className = "message-content live-answer";
+  content.textContent = "질문을 분석하고 있습니다…";
+  const timeline = document.createElement("ol");
+  timeline.className = "steps live-turn-timeline";
+  timeline.setAttribute("aria-label", "현재 응답 처리 단계");
+  block.append(role, content, timeline);
+  el.conversationTranscript.append(block);
+  liveAssistantNode = block;
+  scrollConversationToLatest(true);
 }
 
-function stopElapsed() {
-  if (elapsedTimer !== null) window.clearInterval(elapsedTimer);
-  elapsedTimer = null;
+function updateLiveAssistant(message = null) {
+  if (!liveAssistantNode || !liveAssistantNode.isConnected) return;
+  const content = liveAssistantNode.querySelector(".live-answer");
+  if (content && message) content.textContent = message;
+  const timeline = liveAssistantNode.querySelector(".live-turn-timeline");
+  if (timeline) renderTimelineInto(timeline, timelineEvents, [...inspectionUpdates.values()]);
+  scrollConversationToLatest(false);
 }
 
-async function ask(question) {
+async function ask(question, displayQuestion = question) {
   inFlight = true;
   el.submit.disabled = true;
-  el.asked.textContent = question;
-  lastQuestion = question;
-  el.answerQuestion.textContent = question;
-  el.progressError.hidden = true;
-  el.spinner.classList.remove("is-done");
-  el.progressTitle.textContent = "답변을 확인하고 있습니다";
-  el.progressNow.textContent = "질문 전송됨";
+  el.form.setAttribute("aria-busy", "true");
+  el.composerStatus.textContent = "답변을 확인하고 있습니다.";
+  el.question.value = "";
+  autoGrow();
   timelineEvents = [];
   inspectionUpdates = new Map();
-  expandedStages = new Set();
   graphScales = new Map();
-  // 새 질문은 처음부터 다시 재생한다.
-  autoplayedGraphs.clear();
-  explorationExpanded = false;
   lastResult = null;
   clarificationPresentation = null;
-  renderTimelines();
-  el.timelineSection.hidden = true;
-  el.progressBack.textContent = "요청 취소";
-  showScreen("progress");
-  startElapsed();
+  latestOutcome = null;
+  latestConversationUpdate = null;
+  agentTraceEvents = [];
+  liveAssistantNode = null;
 
   activeController = new AbortController();
   const timeout = window.setTimeout(() => activeController.abort("timeout"), clientTimeoutMs);
   let result = null;
   let failed = false;
+  let conversationContext = null;
 
   try {
+    conversationContext = await beginConversationTurn(displayQuestion);
+    activeAssistantMessageId = opaqueId("message");
+    mountLiveAssistant();
+    if (clarify.conversation_id !== conversationContext.conversation_id) {
+      clearClarify();
+      clarify = emptyClarify(question);
+    }
     const response = await fetch("/api/ask", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(
-        Object.keys(clarify.resolved).length
-          ? { question, resolved: clarify.resolved }
-          : { question }
-      ),
+      body: JSON.stringify({
+        question,
+        profile,
+        conversation: conversationContext,
+        ...(Object.keys(clarify.resolved).length ? { resolved: clarify.resolved } : {}),
+      }),
       signal: activeController.signal,
     });
     if (!response.ok || !response.body) {
@@ -355,66 +933,81 @@ async function ask(question) {
         if (!line) continue;
         const payload = JSON.parse(line.slice(6));
         if (payload.type === "progress") {
-          el.progressNow.textContent = payload.message;
           renderProgress(payload);
+          updateLiveAssistant(payload.message);
         } else if (payload.type === "clarification_options") {
           clarificationPresentation = payload;
+        } else if (payload.type === "profile_update" && payload.version === 1) {
+          saveProfile(payload.profile);
+        } else if (payload.type === "outcome" && payload.version === 1) {
+          latestOutcome = payload;
+        } else if (payload.type === "conversation_update" && payload.version === 1) {
+          latestConversationUpdate = payload;
+        } else if (payload.type === "agent_trace" && payload.version === 1) {
+          agentTraceEvents.push(payload);
         } else if (payload.type === "inspection_update") {
           renderInspectionUpdate(payload);
+          updateLiveAssistant();
         } else if (payload.type === "result") {
           result = payload;
           lastResult = payload;
         } else if (payload.type === "error") {
           failed = true;
           markTimelineFailed(payload.message, payload.error_code || "CHAT_REQUEST_FAILED");
-          showNotice(el.progressError, payload.message, true);
+          updateLiveAssistant(payload.message);
         }
       }
     }
     if (!result && !failed) throw new Error("응답 결과가 없습니다.");
   } catch (error) {
     failed = true;
-    // 스트림 처리 중 예외를 삼키면 "연결이 종료됐다"로만 보여 원인을 찾을 수 없다.
-    console.error("[ask] 스트림 처리 실패", error);
     const timedOut = activeController && activeController.signal.reason === "timeout";
     markTimelineCancelled(
       timedOut ? "응답 대기 시간이 초과되었습니다." : "요청이 취소되었습니다."
     );
-    showNotice(
-      el.progressError,
-      timedOut
-        ? "응답 대기 시간이 초과되었습니다. 서버의 모델 요청은 잠시 더 실행될 수 있습니다."
-        : "요청이 취소되었거나 연결이 종료되었습니다.",
-      true
-    );
+    updateLiveAssistant(timedOut
+      ? "응답 대기 시간이 초과되었습니다. 다시 시도해 주세요."
+      : "요청이 취소되었거나 연결이 종료되었습니다.");
   } finally {
     window.clearTimeout(timeout);
-    stopElapsed();
     activeController = null;
     inFlight = false;
     el.submit.disabled = false;
-    el.spinner.classList.add("is-done");
-    el.progressTitle.textContent = failed ? "처리를 마치지 못했습니다" : "답변 완료";
-    el.progressBack.textContent = "질문 다시 입력";
+    el.form.removeAttribute("aria-busy");
+    el.composerStatus.textContent = failed ? "응답을 완료하지 못했습니다." : "답변이 완료되었습니다.";
   }
 
   if (result) {
-    // 렌더링에서 예외가 나도 화면은 넘어가야 한다. 종전에는 여기서 던지면
-    // 사용자가 '답변 완료' 상태의 진행 화면에 갇혔고, 무엇이 잘못됐는지도
-    // 알 수 없었다.
     try {
-      renderAnswer(result);
-      renderTimelines();
-      renderExplorationPanels();
+      if (latestConversationUpdate) {
+        await finishConversationTurn(latestConversationUpdate, currentTurnSnapshot(result));
+      } else {
+        const response = result.response || {};
+        await finishConversationTurn({
+          version: 1,
+          conversation_id: currentConversationId,
+          turn_id: activeTurnId,
+          created_at: new Date().toISOString(),
+          summary: "",
+          current_topic: null,
+          recent_course_codes: [],
+          evidence_ids: response.used_evidence_ids || [],
+          pending_clarification: null,
+          display_answer: response.answer_text || "답변을 확인하지 못했습니다.",
+          response_status: response.status || "SAFE_FAILURE",
+          citation_ids: [],
+        }, currentTurnSnapshot(result));
+      }
     } catch (error) {
-      showNotice(
-        el.progressError,
-        "답변을 화면에 그리지 못했습니다. 새로고침 후 다시 시도해 주세요.",
-        true
-      );
+      await saveFailedConversationTurn(question, "답변을 화면에 저장하지 못했습니다. 다시 시도해 주세요.");
     }
-    showScreen("answer");
+  } else if (failed) {
+    await saveFailedConversationTurn(question, "요청을 완료하지 못했습니다. 이 질문을 다시 시도할 수 있습니다.");
   }
+  liveAssistantNode = null;
+  activeAssistantMessageId = null;
+  scrollConversationToLatest(true);
+  el.question.focus();
 }
 
 function renderProgress(payload) {
@@ -461,20 +1054,28 @@ function renderProgress(payload) {
     entry.error_code = payload.error_code || null;
   }
   renderTimelines();
-  // 단계 이벤트 자체가 그래프를 자라게 하는 신호다. inspection_update 가 따로
-  // 오지 않는 단계(실패·재시도 포함)에서도 그림이 그 자리에서 멈추도록 함께 갱신한다.
-  renderExplorationPanels();
 }
 
 function renderTimelines() {
-  renderTimelineInto(el.progressSteps);
-  renderTimelineInto(el.answerProgressSteps);
-  el.timelineSection.hidden = timelineEvents.length === 0;
+  updateLiveAssistant();
 }
 
-function renderTimelineInto(container) {
+function asInspectionMap(updates = inspectionUpdates) {
+  if (updates instanceof Map) return updates;
+  const mapped = new Map();
+  (Array.isArray(updates) ? updates : []).forEach((item) => {
+    if (item && typeof item.stage === "string") {
+      mapped.set(inspectionKey(item.stage, item.attempt), item);
+    }
+  });
+  return mapped;
+}
+
+function renderTimelineInto(container, events = timelineEvents, updates = inspectionUpdates) {
+  if (!container.id) container.id = opaqueId("timeline").replace(/:/g, "-");
+  const updateMap = asInspectionMap(updates);
   container.replaceChildren();
-  timelineEvents.forEach((event) => {
+  events.forEach((event, eventIndex) => {
     const item = document.createElement("li");
     item.className = "step";
     item.dataset.phase = event.phase;
@@ -490,10 +1091,9 @@ function renderTimelineInto(container) {
     const labelText = event.error_code
       ? `${event.message} — ${event.error_code}`
       : event.message;
-    const key = `${event.phase}:${event.attempt}`;
-    const disclosureId = `${container.id}-${event.phase.toLowerCase()}-${event.attempt}`;
-    const hasDetails = stageHasDetails(event);
-    const expanded = hasDetails && expandedStages.has(key);
+    const disclosureId = `${container.id || "turn"}-${event.phase.toLowerCase()}-${event.attempt}-${eventIndex}`;
+    const hasDetails = stageHasDetails(event, updateMap);
+    const expanded = false;
     const row = document.createElement(hasDetails ? "button" : "div");
     if (hasDetails) row.type = "button";
     row.className = `step-toggle${hasDetails ? "" : " is-static"}`;
@@ -520,12 +1120,12 @@ function renderTimelineInto(container) {
       renderStageDetail(
         disclosure,
         event,
-        container === el.answerProgressSteps
+        false,
+        updateMap
       );
       row.addEventListener("click", () => {
-        if (expandedStages.has(key)) expandedStages.delete(key);
-        else expandedStages.add(key);
-        renderTimelines();
+        disclosure.hidden = !disclosure.hidden;
+        row.setAttribute("aria-expanded", String(!disclosure.hidden));
       });
       item.append(disclosure);
     }
@@ -537,22 +1137,22 @@ function inspectionKey(stage, attempt = 0) {
   return `${stage}:${Number.isInteger(attempt) ? attempt : 0}`;
 }
 
-function latestInspection(stage) {
-  return [...inspectionUpdates.values()].reverse().find((item) => item.stage === stage) || null;
+function latestInspection(stage, updates = inspectionUpdates) {
+  const updateMap = asInspectionMap(updates);
+  return [...updateMap.values()].reverse().find((item) => item.stage === stage) || null;
 }
 
-function stageInspection(event) {
+function stageInspection(event, updates = inspectionUpdates) {
+  const updateMap = asInspectionMap(updates);
   if (event.attempt > 0) {
-    return inspectionUpdates.get(inspectionKey(event.phase, event.attempt)) || null;
+    return updateMap.get(inspectionKey(event.phase, event.attempt)) || null;
   }
-  return inspectionUpdates.get(inspectionKey(event.phase, 0)) || null;
+  return updateMap.get(inspectionKey(event.phase, 0)) || null;
 }
 
-function stageHasDetails(event) {
-  const inspection = stageInspection(event);
-  if (!inspection || !inspection.summary) return false;
-  // 실패한 단계야말로 왜 실패했는지 보여야 한다. 종전에는 상세를 아예 닫았다.
-  if (inspection.status === "FAILED") return true;
+function stageHasDetails(event, updates = inspectionUpdates) {
+  const inspection = stageInspection(event, updates);
+  if (!inspection || !inspection.summary || inspection.status === "FAILED") return false;
   const summary = inspection.summary;
   const allowed = {
     QUESTION_ANALYSIS: Boolean(summary.status || summary.query_plan),
@@ -583,195 +1183,97 @@ function addDetailFacts(container, values) {
   if (list.childElementCount) container.append(list);
 }
 
-// 각 단계를 육하원칙으로 요약한다. 값은 모두 그 단계가 실제로 보고한 것에서만 온다.
-// 보고되지 않은 항목은 만들지 않고 빈 칸으로 둔다.
-const STAGE_5W1H = {
-  QUESTION_ANALYSIS: (s) => ({
-    누가: "로컬 계획 모델",
-    무엇을: "질문에서 조회 계획을 세움",
-    어떻게: s.query_plan && s.query_plan.selection_mode
-      ? `선택 모드 ${s.query_plan.selection_mode}`
-      : "선택 모드 미확정",
-    왜: s.status === "READY" ? "조회에 필요한 범위가 모두 정해짐" : "범위가 덜 정해져 되물음",
-    어디서: "적재된 사실 색인",
-  }),
-  SCHEMA_SELECTION: (s) => ({
-    누가: "스키마 선택기",
-    무엇을: `후보 라벨 ${s.node_label_count ?? 0}개 · 관계 ${s.relationship_count ?? 0}개를 추림`,
-    어떻게: "계획의 필드와 Evidence 경로에 닿는 구조만 남김",
-    왜: "모델이 온톨로지 밖 라벨을 쓰지 못하게 하기 위해",
-    어디서: "ontology_spec.json",
-  }),
-  CYPHER_GENERATION: (s) => ({
-    누가: "로컬 생성 모델",
-    무엇을: "후보 Cypher 작성",
-    어떻게: s.retry ? `재시도 ${s.candidate_attempt}회차` : "첫 시도",
-    왜: "계획을 그래프 질의로 옮기기 위해",
-    어디서: "후보 스키마 안에서만",
-  }),
-  STATIC_VALIDATION: (s) => ({
-    누가: "Cypher 검증기",
-    무엇을: "읽기 전용·온톨로지·파라미터 바인딩 검사",
-    어떻게: `LIMIT ${s.limit ?? "-"} 확인, 주석 제거 정규화`,
-    왜: "쓰기·미선언 라벨·값 삽입을 원천 차단",
-    어디서: "DB 접속 이전 정적 단계",
-  }),
-  NEO4J_EXPLAIN: (s) => ({
-    누가: "Neo4j 실행계획기",
-    무엇을: "실행 없이 계획만 확인",
-    어떻게: `연산자 ${(s.operators || []).join(", ") || "-"}`,
-    왜: "전체 스캔·카테시안곱 같은 위험한 계획을 미리 거름",
-    어디서: "읽기 전용 계정",
-  }),
-  GRAPH_EXECUTION: (s) => ({
-    누가: "읽기 전용 실행기",
-    무엇을: `${s.row_count ?? 0}행 조회`,
-    어떻게: (s.traversal_steps || []).length
-      ? `${s.traversal_steps.length}단계 탐색 · ${s.traversal_steps.reduce((a, t) => a + (t.db_hits || 0), 0)}회 DB 접근`
-      : "PROFILE 미보고",
-    왜: "승인된 경로로만 사실을 가져오기 위해",
-    언제: s.query_elapsed_ms != null ? `${s.query_elapsed_ms}ms 소요` : "",
-  }),
-  RESULT_VALIDATION: (s) => ({
-    누가: "결과 검증기",
-    무엇을: `검증된 사실 ${s.fact_count ?? 0}건 · 근거 ${s.verified_evidence_count ?? 0}건 확인`,
-    어떻게: "행마다 VERIFIED 상태와 직접 provenance 재검사",
-    왜: "검증되지 않은 값이 답에 들어가지 못하게",
-    어디서: "조회된 행 위에서",
-  }),
-  CLAIM_BUILDING: (s) => ({
-    누가: "주장 검증기",
-    무엇을: `주장 ${s.claim_count ?? 0}건 구성`,
-    어떻게: `유형 ${(s.claim_types || []).join(", ") || "-"}`,
-    왜: "문장으로 옮기기 전에 근거와 값을 묶어 두기 위해",
-    어디서: "승인된 행에서만",
-  }),
-  ANSWER_RENDERING: (s) => ({
-    누가: "결정론적 한국어 렌더러",
-    무엇을: `인용 ${s.citation_count ?? 0}건과 함께 문장 생성`,
-    어떻게: `최종 답변 LLM 호출 ${s.final_answer_llm_calls ?? 0}회`,
-    왜: "모델이 값을 바꿔 쓰지 못하게 하기 위해",
-    어디서: "검증된 Claim 위에서",
-  }),
-  COMPLETED: (s) => ({
-    무엇을: `최종 상태 ${s.final_status ?? "-"}`,
-    언제: s.total_elapsed_ms != null ? `전체 ${s.total_elapsed_ms}ms` : "",
-    어떻게: `재시도 ${s.retry_count ?? 0}회`,
-    왜: "모든 관문을 통과함",
-  }),
-};
-
 function addFiveWOneH(container, phase, summary) {
-  const build = STAGE_5W1H[phase];
-  if (!build || !summary) return;
-  let facts;
-  try {
-    facts = build(summary);
-  } catch (error) {
-    return;
-  }
+  const facts = {
+    QUESTION_ANALYSIS: {
+      "누가·대상": "현재 사용자 질문",
+      "무엇을": "질의 의도와 필요한 조회 필드를 구조화",
+      "언제": summary.query_plan?.filters?.academic_year
+        ? `${summary.query_plan.filters.academic_year}학년도`
+        : null,
+      "어디에서": summary.query_plan?.filters?.department_id || "지원 교육과정 범위",
+      "왜": "질문에 직접 답하는 검증 가능한 사실을 찾기 위해",
+      "어떻게": "검증된 QueryPlan 계약으로 정제",
+    },
+    SCHEMA_SELECTION: {
+      "누가·대상": `${summary.node_label_count || 0}개 노드 유형과 ${summary.relationship_count || 0}개 관계 유형`,
+      "무엇을": "질문에 필요한 온톨로지 부분만 선택",
+      "어디에서": "공개 온톨로지 명세",
+      "왜": "허용되지 않은 스키마 접근을 막기 위해",
+      "어떻게": "QueryPlan 요청 필드와 Evidence 경로에 맞춰 선택",
+    },
+    CYPHER_GENERATION: {
+      "누가·대상": `질의 후보 ${summary.candidate_attempt || 1}차`,
+      "무엇을": "읽기 전용 Cypher 후보 생성",
+      "왜": "선택한 지식그래프 구조를 조회하기 위해",
+      "어떻게": summary.retry ? "이전 후보를 폐기하고 다시 생성" : "구조화된 계획으로 생성",
+    },
+    STATIC_VALIDATION: {
+      "누가·대상": "현재 Cypher 후보",
+      "무엇을": "읽기 전용·스키마·파라미터·Evidence 경로 검사",
+      "왜": "안전하지 않거나 근거 없는 질의를 실행하지 않기 위해",
+      "어떻게": "comment-free canonical 질의에 정적 검증 적용",
+    },
+    NEO4J_EXPLAIN: {
+      "누가·대상": "정적 검증을 통과한 동일 후보",
+      "무엇을": "Neo4j 실행 계획 승인",
+      "어디에서": "로컬 Neo4j의 EXPLAIN",
+      "왜": "실행 전에 읽기 계획과 사용 스키마를 확인하기 위해",
+      "어떻게": `${Array.isArray(summary.operators) ? summary.operators.length : 0}개 실행 연산자 확인`,
+    },
+    GRAPH_EXECUTION: {
+      "누가·대상": `${summary.row_count || 0}개 반환 행`,
+      "무엇을": "승인된 질의를 읽기 전용으로 실행",
+      "어디에서": "검증된 교육과정 지식그래프",
+      "왜": "질문에 대응하는 Fact와 Evidence를 찾기 위해",
+      "어떻게": `${Array.isArray(summary.traversal_steps) ? summary.traversal_steps.length : 0}개 PROFILE 관찰 단계`,
+    },
+    RESULT_VALIDATION: {
+      "누가·대상": `${summary.fact_count || 0}개 Fact와 ${summary.verified_evidence_count || 0}개 Evidence`,
+      "무엇을": "검증 상태와 직접 provenance 확인",
+      "왜": "근거와 직접 연결된 VERIFIED 사실만 답변에 사용하기 위해",
+      "어떻게": "Fact·Evidence 상태와 직접 연결을 교차 검증",
+    },
+    CLAIM_BUILDING: {
+      "누가·대상": `${summary.claim_count || 0}개 Claim`,
+      "무엇을": "검증된 조회 결과를 구조화된 주장으로 구성",
+      "왜": "각 주장과 Citation을 대응시키기 위해",
+      "어떻게": `${summary.citation_target_count || 0}개 Citation 대상을 연결`,
+    },
+    ANSWER_RENDERING: {
+      "누가·대상": "검증된 Claim",
+      "무엇을": "사용자용 한국어 답변 구성",
+      "왜": "검증된 범위만 자연스럽게 설명하기 위해",
+      "어떻게": `${summary.citation_count || 0}개 Citation을 유지한 renderer 사용`,
+    },
+    COMPLETED: {
+      "누가·대상": "현재 assistant 턴",
+      "무엇을": `${summary.final_status || "처리 완료"} 상태로 완료`,
+      "언제": Number.isFinite(summary.total_elapsed_ms)
+        ? `${summary.total_elapsed_ms}ms 후`
+        : null,
+      "왜": "검증된 결과를 사용자에게 전달하기 위해",
+      "어떻게": `${summary.retry_count || 0}회 재시도, ${summary.citation_count || 0}개 Citation`,
+    },
+  }[phase];
+  if (!facts) return;
   const section = document.createElement("section");
-  section.className = "stage-5w1h";
-  const heading = document.createElement("h5");
-  heading.textContent = "이 단계를 육하원칙으로";
-  section.append(heading);
-  const list = document.createElement("dl");
-  list.className = "stage-facts";
-  Object.entries(facts).forEach(([label, value]) => {
-    if (!value) return;
-    const term = document.createElement("dt");
-    term.textContent = label;
-    const detail = document.createElement("dd");
-    detail.textContent = String(value);
-    list.append(term, detail);
-  });
-  if (list.childElementCount) {
-    section.append(list);
-    container.append(section);
-  }
+  section.className = "stage-fivewoneh";
+  const title = document.createElement("h4");
+  title.textContent = "처리 요약";
+  section.append(title);
+  addDetailFacts(section, facts);
+  container.append(section);
 }
 
-// 검증기가 내는 오류 코드의 한국어 설명. 코드 자체는 영어 원본을 함께 보여 준다.
-// 목록에 없는 코드는 코드만 표시하고 설명을 지어내지 않는다.
-const ERROR_CODE_KO = {
-  CYPHER_RETURN_FIELD_MISMATCH: "RETURN 별칭이 계약과 다릅니다. 요청한 필드·범위 필터·근거 항목이 정확히 일치해야 합니다",
-  CYPHER_FORBIDDEN_KEYWORD: "쓰기나 지원하지 않는 절이 들어 있습니다",
-  CYPHER_UNKNOWN_LABEL: "온톨로지에 선언되지 않은 노드 라벨을 썼습니다",
-  CYPHER_UNKNOWN_RELATIONSHIP: "온톨로지에 선언되지 않은 관계 타입을 썼습니다",
-  CYPHER_UNKNOWN_PROPERTY: "그 라벨에 선언되지 않은 속성을 참조했습니다",
-  CYPHER_LITERAL_VALUE: "VERIFIED 외의 문자열 값을 질의에 직접 넣었습니다",
-  CYPHER_EVIDENCE_PATH_REQUIRED: "사실에서 근거로 가는 직접 경로가 정확히 하나여야 합니다",
-  CYPHER_VERIFIED_FILTER_REQUIRED: "사실과 근거를 모두 VERIFIED 로 걸러야 합니다",
-  CYPHER_FILTER_BINDING: "필터가 선언된 라벨·속성에 묶이지 않았습니다",
-  CYPHER_PARAMETER_USAGE: "계획의 필터를 WHERE 에서 정확히 한 번씩 써야 합니다",
-  CYPHER_LIMIT_REQUIRED: "LIMIT 이 정수 리터럴이어야 합니다",
-  CYPHER_LIMIT_EXCEEDED: "LIMIT 이 허용 범위를 벗어났습니다",
-  CYPHER_CLAUSE_SEQUENCE: "절 순서가 허용된 형태가 아닙니다",
-  CYPHER_MATCH_PATTERN_UNSUPPORTED: "MATCH 는 방향과 타입이 있는 고정 길이 경로만 허용합니다",
-  CYPHER_SCOPE_IDENTITY_INVALID: "scope_identity 가 온톨로지 선언 속성이 아닙니다",
-  NEO4J_EXPLAIN_DANGEROUS_PLAN: "실행 계획에 전체 스캔이나 카테시안곱이 있어 막았습니다",
-  NEO4J_EXPLAIN_NOTIFICATION: "Neo4j 가 위험 신호를 보고했습니다",
-  RESULT_FIELD_NULL: "요청한 필드가 비어 있는 행이 있습니다",
-  RESULT_SCOPE_MISMATCH: "행의 값이 계획의 범위 필터와 다릅니다",
-  RESULT_FACT_NOT_VERIFIED: "VERIFIED 가 아닌 사실이 섞였습니다",
-  RESULT_EVIDENCE_NOT_VERIFIED: "VERIFIED 가 아닌 근거가 섞였습니다",
-  RESULT_COURSE_AMBIGUOUS: "같은 과목명에 학수번호가 여럿이라 하나로 좁히지 못했습니다",
-  LLM_PLAN_CONTRACT_INVALID: "계획 모델이 계약에 맞지 않는 결과를 냈습니다",
-  LLM_UNAVAILABLE: "로컬 모델에 연결하지 못했습니다",
-};
-
-function addErrorCode(container, code) {
-  if (!code) return;
-  const wrap = document.createElement("section");
-  wrap.className = "stage-error";
-  const head = document.createElement("p");
-  head.className = "stage-error-code";
-  head.textContent = code;
-  wrap.append(head);
-  const ko = ERROR_CODE_KO[code];
-  if (ko) {
-    const desc = document.createElement("p");
-    desc.className = "stage-error-desc";
-    desc.textContent = ko;
-    wrap.append(desc);
-  }
-  container.append(wrap);
-}
-
-// 값이 없을 때 빈칸으로 두지 않는다.
-function addNoticeIfEmpty(container, values, message) {
-  const filled = Object.values(values).some(
-    (value) => value !== null && value !== undefined && value !== ""
-  );
-  if (filled) return false;
-  const p = document.createElement("p");
-  p.className = "stage-empty";
-  p.textContent = message;
-  container.append(p);
-  return true;
-}
-
-function renderStageDetail(container, event, allowExplorationLinks) {
-  const inspection = stageInspection(event);
+function renderStageDetail(container, event, allowExplorationLinks, updates = inspectionUpdates) {
+  const inspection = stageInspection(event, updates);
   const summary = inspection ? inspection.summary : null;
   if (!summary) return;
-  if (inspection.status === "FAILED") {
-    addDetailFacts(container, { "결과": "이 단계에서 중단됨" });
-    addErrorCode(container, summary.error_code);
-    if (summary.discarded_cypher) {
-      const badge = document.createElement("p");
-      badge.className = "discard-badge";
-      badge.textContent = `실행되지 않음 · 검증 실패: ${summary.discard_reason || summary.error_code}`;
-      container.append(badge);
-      addInspectionItem(container, "버려진 후보 Cypher", summary.discarded_cypher);
-    }
-    return;
-  }
   addFiveWOneH(container, event.phase, summary);
 
   if (event.phase === "QUESTION_ANALYSIS") {
     addDetailFacts(container, {
-      "입력 원문": lastQuestion || "해당 없음",
       "계획 상태": summary.status,
       "학년도": summary.query_plan && summary.query_plan.filters
         ? summary.query_plan.filters.academic_year
@@ -787,15 +1289,27 @@ function renderStageDetail(container, event, allowExplorationLinks) {
     });
     addInspectionItem(container, "정제된 계획", summary.query_plan);
   } else if (event.phase === "SCHEMA_SELECTION") {
+    const labelNames = summary.label_names_ko || {};
+    const relationshipNames = summary.relationship_names_ko || {};
     addDetailFacts(container, {
       "선택 node label 수": summary.node_label_count,
       "선택 relationship 수": summary.relationship_count,
       "선택 이유": "검증된 QueryPlan의 필드와 Evidence 경로에 필요한 구조입니다.",
     });
-    addInspectionItem(container, "선택 node label", summary.labels || []);
-    addInspectionItem(container, "선택 relationship type", summary.relationships || []);
+    addInspectionItem(
+      container,
+      "선택 노드 유형",
+      (summary.labels || []).map((value) => `${labelNames[value] || value} (${value})`)
+    );
+    addInspectionItem(
+      container,
+      "선택 관계 유형",
+      (summary.relationships || []).map(
+        (value) => `${relationshipNames[value] || value} (${value})`
+      )
+    );
     if (allowExplorationLinks) {
-      addExplorationLink(container, "탐색 그래프 보기", "graph");
+      addExplorationLink(container, "선택 스키마 보기", "schema");
     }
   } else if (event.phase === "CYPHER_GENERATION") {
     addDetailFacts(container, {
@@ -808,9 +1322,9 @@ function renderStageDetail(container, event, allowExplorationLinks) {
       "읽기 전용 문법": summary.read_only_syntax_verified,
       "온톨로지 명세": summary.ontology_schema_verified,
       "파라미터 바인딩": summary.parameter_binding_verified,
-      "근거 직접 경로": summary.direct_evidence_path_verified,
-      "주석 제거 정규화": summary.comment_free_canonical,
-      "결과 개수 제한(LIMIT)": summary.limit,
+      "Evidence 직접 경로": summary.direct_evidence_path_verified,
+      "comment-free canonicalization": summary.comment_free_canonical,
+      "LIMIT": summary.limit,
     });
   } else if (
     event.phase === "NEO4J_EXPLAIN" &&
@@ -818,90 +1332,62 @@ function renderStageDetail(container, event, allowExplorationLinks) {
   ) {
     addDetailFacts(container, {
       "EXPLAIN 연산자": (summary.operators || []).join(", "),
-      "결과 개수 제한(LIMIT)": summary.limit,
+      "LIMIT": summary.limit,
     });
     if (allowExplorationLinks) {
-      addExplorationLink(container, "탐색 그래프 보기", "graph");
+      addExplorationLink(container, "승인 Cypher 보기", "cypher");
     }
   } else if (event.phase === "GRAPH_EXECUTION") {
-    const validation = latestInspection("RESULT_VALIDATION");
+    const validation = latestInspection("RESULT_VALIDATION", updates);
     addDetailFacts(container, {
       "반환 행": summary.row_count,
       "고유 Fact": validation ? validation.summary.fact_count : null,
-      "검증된 근거": validation
+      "VERIFIED Evidence": validation
         ? validation.summary.verified_evidence_count
         : null,
       "조회 시간": summary.query_elapsed_ms != null
         ? `${summary.query_elapsed_ms}ms`
         : null,
     });
+    if (Array.isArray(summary.traversal_steps) && summary.traversal_steps.length) {
+      const list = document.createElement("ol");
+      list.className = "operator-list";
+      summary.traversal_steps.forEach((step) => {
+        const item = document.createElement("li");
+        const title = document.createElement("strong");
+        title.textContent = step.explanation_ko || step.operator || "Neo4j 실행 단계";
+        const metrics = document.createElement("span");
+        const share = Number.isFinite(step.share_ms) ? ` · 배분 ${step.share_ms}ms` : "";
+        metrics.textContent = `행 ${step.rows || 0} · DB 접근 ${step.db_hits || 0}${share}`;
+        item.append(title, metrics);
+        list.append(item);
+      });
+      container.append(list);
+    }
     if (allowExplorationLinks) {
-      addExplorationLink(container, "탐색 그래프 보기", "graph");
+      addExplorationLink(container, "조회 그래프 보기", "graph");
     }
   } else if (event.phase === "RESULT_VALIDATION") {
-    const execution = latestInspection("GRAPH_EXECUTION");
     addDetailFacts(container, {
-      "들어온 행": execution ? execution.summary.row_count : null,
-      "승인된 행": summary.row_count,
-      "검증된 사실": summary.fact_count,
-      "검증된 근거": summary.verified_evidence_count,
-      "사실 상태 검사": summary.fact_status_verified,
-      "근거 상태 검사": summary.evidence_status_verified,
+      "VERIFIED Fact": summary.fact_count,
+      "VERIFIED Evidence": summary.verified_evidence_count,
+      "Fact 상태 검사": summary.fact_status_verified,
+      "Evidence 상태 검사": summary.evidence_status_verified,
       "직접 provenance 검사": summary.direct_provenance_verified,
       "거부된 행": summary.rejected_row_count,
     });
-    // 결과 검증기는 첫 위반에서 즉시 중단한다(fail-fast). 그래서 "사유별 건수" 라는
-    // 값이 애초에 만들어지지 않는다. 없는 값을 0 으로 보여 주면 "검사했는데 하나도
-    // 안 걸렸다" 로 읽히므로 그 사실을 적는다.
-    const note = document.createElement("p");
-    note.className = "stage-empty";
-    note.textContent =
-      "사유별 거부 건수: 해당 없음 — 결과 검증기는 첫 위반에서 즉시 중단하므로 " +
-      "행을 끝까지 세지 않습니다. 위반이 있었다면 이 단계가 실패로 끝납니다.";
-    container.append(note);
   } else if (event.phase === "CLAIM_BUILDING") {
-    const graph = summary.traversal_graph;
-    if (graph) {
-      const nodes = new Map(graph.nodes.map((n) => [n.id, n]));
-      const pairs = graph.edges
-        .filter((e) => e.relationship === "SUPPORTED_BY")
-        .map((e) => `${nodes.get(e.source)?.display_name} ← ${nodes.get(e.target)?.display_name}`);
-      if (pairs.length) addInspectionItem(container, "사실과 근거의 대응", pairs);
-    }
     addDetailFacts(container, {
-      "주장 수": summary.claim_count,
-      "주장 유형": Array.isArray(summary.claim_types) ? summary.claim_types.join(", ") : null,
-      "집계 주장": summary.aggregate,
-      "인용 대상": summary.citation_target_count,
+      "Claim 수": summary.claim_count,
+      "Claim 유형": Array.isArray(summary.claim_types) ? summary.claim_types.join(", ") : null,
+      "집계 Claim": summary.aggregate,
+      "Citation 대상": summary.citation_target_count,
     });
-    // 근거 없는 주장은 여기까지 오지 못한다. ClaimValidator 가 승인하지 않으면
-    // 파이프라인이 SAFE_FAILURE 로 끝난다. 그 사실을 적는다.
-    const grounded = document.createElement("p");
-    grounded.className = "stage-empty";
-    grounded.textContent =
-      "근거 없는 주장: 해당 없음 — 근거가 붙지 않은 주장은 승인되지 않아 " +
-      "이 단계를 통과하지 못합니다. 통과했다면 모든 주장에 근거가 있습니다.";
-    container.append(grounded);
   } else if (event.phase === "ANSWER_RENDERING") {
-    if (lastResult && lastResult.response) {
-      const text = lastResult.response.answer_text || "";
-      if (text) addInspectionItem(container, "최종 문장", text);
-      const cites = (lastResult.response.citations || []).map(
-        (c) => `발췌 PDF ${c.excerpt_page}쪽 · ${(c.source_text || "").slice(0, 60)}`
-      );
-      if (cites.length) addInspectionItem(container, "인용", cites);
-      // 문장 단위 대응은 렌더러가 기록하지 않는다. 없는 것을 그리지 않는다.
-      const note = document.createElement("p");
-      note.className = "stage-empty";
-      note.textContent =
-        "문장별 인용 대응: 해당 없음 — 렌더러가 문장 단위 대응을 기록하지 않습니다. " +
-        "위 인용은 답변 전체가 근거로 삼은 목록입니다.";
-      container.append(note);
-    }
     addDetailFacts(container, {
-      "결정론적 한국어 renderer": summary.deterministic_renderer,
-      "인용 수": summary.citation_count,
-      "최종 답변 LLM 호출": summary.final_answer_llm_calls,
+      "sealed canonical Claim renderer": summary.deterministic_renderer,
+      "Citation 수": summary.citation_count,
+      "sealed canonical 생성 LLM 호출": summary.final_answer_llm_calls,
     });
   } else if (event.phase === "COMPLETED") {
     addDetailFacts(container, {
@@ -910,10 +1396,7 @@ function renderStageDetail(container, event, allowExplorationLinks) {
         ? `${summary.total_elapsed_ms}ms`
         : null,
       "재시도 횟수": summary.retry_count,
-      "인용 수": summary.citation_count,
-      "요청 ID": queryDetailsEnabled && lastResult && lastResult.response
-        ? lastResult.response.request_id
-        : null,
+      "Citation 수": summary.citation_count,
     });
     addInspectionItem(container, "단계별 시간(ms)", summary.stage_timings_ms);
   }
@@ -965,34 +1448,26 @@ function renderInspectionUpdate(update) {
     summary: update.summary || {},
   });
   renderTimelines();
-  // 승인 그래프는 처리가 끝나기 전에 도착한다. 도착하는 즉시 처리 중 화면에
-  // 그려야 "탐색 중"으로 보인다.
-  renderExplorationPanels();
 }
 
-// 탭이 사라졌으므로 이 버튼은 탐색 그래프로 스크롤만 한다.
 function addExplorationLink(container, label, tab) {
-  void tab;
-  if (!el.answerExploration || el.answerExploration.hidden) return;
   const button = document.createElement("button");
   button.type = "button";
   button.className = "stage-jump";
   button.textContent = label;
   button.addEventListener("click", () => {
-    const fold = el.answerExploration.querySelector("details.exploration-fold");
-    if (fold) {
-      fold.open = true;
-      explorationExpanded = true;
-    }
-    el.answerExploration.scrollIntoView({ behavior: "smooth", block: "start" });
+    const target = container.closest(".conversation-message")?.querySelector(".exploration");
+    if (!target) return;
+    target.dataset.activeTab = tab;
+    target.scrollIntoView({ behavior: "smooth", block: "nearest" });
   });
   container.append(button);
 }
 
-function explorationState() {
-  const schema = latestInspection("SCHEMA_SELECTION");
-  const explain = latestInspection("NEO4J_EXPLAIN");
-  const claims = latestInspection("CLAIM_BUILDING");
+function explorationState(updates = inspectionUpdates) {
+  const schema = latestInspection("SCHEMA_SELECTION", updates);
+  const explain = latestInspection("NEO4J_EXPLAIN", updates);
+  const claims = latestInspection("CLAIM_BUILDING", updates);
   return {
     schema: schema && schema.status === "COMPLETED" ? schema.summary : null,
     explain: explain && explain.status === "COMPLETED" ? explain.summary : null,
@@ -1000,272 +1475,16 @@ function explorationState() {
   };
 }
 
-// 처리 중 화면과 결과 화면에 같은 그래프가 떠야 한다. 두 컨테이너를 항상 함께
-// 갱신해, 어느 화면으로 넘어가도 같은 것이 보이게 한다.
-// 조회가 실제로 진행될 요청인지. 계획이 READY 로 끝났거나 이후 단계가 시작됐으면
-// 곧 그래프가 생긴다.
-function queryWillRun() {
-  const analysis = latestInspection("QUESTION_ANALYSIS");
-  if (analysis && analysis.summary && analysis.summary.status &&
-      analysis.summary.status !== "READY") {
-    return false;
-  }
-  return timelineEvents.some((event) =>
-    ["SCHEMA_SELECTION", "CYPHER_GENERATION", "STATIC_VALIDATION", "NEO4J_EXPLAIN",
-     "GRAPH_EXECUTION"].includes(event.phase)
-  );
+function renderTurnGraph(container, state) {
+  const heading = document.createElement("p");
+  heading.className = "projection-note";
+  heading.textContent =
+    "이 답변에서 실제 승인된 Cypher와 검증 결과로 확인한 traversal만 표시합니다.";
+  container.append(heading);
+  renderGraphTab(container, state, true);
 }
 
-// ── 좁혀 가는 과정 그래프 ────────────────────────────────────────────────────
-// 이것은 "질의가 그래프를 밟는 순서"가 아니다. **시스템이 답을 좁혀 가는 과정**이다.
-// 파이프라인 9단계의 SSE 이벤트가 실제로 도착할 때마다, 그 단계가 보고한 값만으로
-// 그래프를 한 겹씩 자라게 한다. hop 단위 실시간 중계는 Neo4j 가 실행 중 진행 상황을
-// 주지 않아 불가능하지만(ADR 0013), 단계 단위 중계는 이벤트가 실재하므로 가능하다.
-//
-// 각 단계에서 그리는 것은 **그 단계가 실제로 보고한 값에서만** 온다. 구조 정보를
-// 새로 주지 않는 단계는 그림을 바꾸지 않고, 바꾸지 않는다는 사실을 문구로 적는다.
-const NARROWING_STAGES = [
-  {
-    key: "QUESTION_ANALYSIS",
-    label: "질문 분석",
-    note: "질문에서 무엇을 찾을지가 정해졌습니다. 찾을 자리만 표시합니다.",
-  },
-  {
-    key: "SCHEMA_SELECTION",
-    label: "스키마 선택",
-    note: "온톨로지에서 고른 후보 노드 종류입니다. 아직 어느 것을 쓸지 정해지지 않았습니다.",
-  },
-  {
-    key: "CYPHER_GENERATION",
-    label: "Cypher 생성",
-    // 이 단계는 후보 생성 사실만 보고한다. 어떤 노드를 쓰는지는 검증 전이라 공개되지
-    // 않는다. 그림을 바꿀 근거가 없으므로 바꾸지 않는다.
-    note: "질의 후보가 만들어졌습니다. 검증 전이라 어느 노드를 쓰는지는 아직 공개되지 않습니다.",
-  },
-  {
-    key: "STATIC_VALIDATION",
-    label: "정적 검증",
-    // 규칙 통과 여부만 보고한다. 경로는 EXPLAIN 까지 통과해야 승인된다.
-    note: "읽기 전용·온톨로지·파라미터 바인딩 검사를 통과했습니다. 경로는 실행계획 승인 뒤 공개됩니다.",
-  },
-  {
-    key: "NEO4J_EXPLAIN",
-    label: "실행계획 승인",
-    note: "질의가 실제로 쓰는 노드만 남았습니다. 선택되지 않은 후보는 사라지고, 간선에 순서가 붙습니다.",
-  },
-  {
-    key: "GRAPH_EXECUTION",
-    label: "그래프 실행",
-    note: "간선마다 실제로 통과한 행 수가 채워졌습니다.",
-  },
-  {
-    key: "RESULT_VALIDATION",
-    label: "결과 검증",
-    note: "승인된 행만 남았습니다.",
-  },
-  {
-    key: "CLAIM_BUILDING",
-    label: "주장 구성",
-    note: "라벨 종류명이 실제 노드 이름으로 바뀌고 근거가 붙었습니다.",
-  },
-  {
-    key: "ANSWER_RENDERING",
-    label: "답변 생성",
-    note: "최종 경로가 확정됐습니다.",
-  },
-];
-
-// 어느 단계까지 실제로 도착했는가. 실패하면 그 자리에서 멈춘다.
-function narrowingProgress() {
-  let index = 0;
-  let failed = null;
-  // **이어진 단계만** 센다. 되묻기처럼 조회가 없는 경로는 1단계 뒤 바로 답변 생성으로
-  // 건너뛰는데, 완료된 단계를 그냥 세면 그림은 자리표시 하나뿐인데 9/9 로 표시돼
-  // 밟지 않은 단계를 밟았다고 말하게 된다(2026-08-29 브라우저 실측).
-  for (let position = 0; position < NARROWING_STAGES.length; position += 1) {
-    const stage = NARROWING_STAGES[position];
-    const event = [...timelineEvents]
-      .reverse()
-      .find((item) => item.phase === stage.key);
-    if (!event) break;
-    if (event.state === "FAILED") {
-      failed = { position: position + 1, stage, event };
-      break;
-    }
-    if (event.state !== "COMPLETED") break;
-    index = position + 1;
-  }
-  // 지금 실행 중인 단계. Cypher 생성은 LLM 때문에 수십 초 걸리는데, 완료된 단계만
-  // 적으면 그 동안 화면이 앞 단계에 머물러 멈춘 것처럼 보인다. STARTED 이벤트는
-  // 실재하므로 그대로 쓴다.
-  let running = null;
-  for (let position = 0; position < NARROWING_STAGES.length; position += 1) {
-    const stage = NARROWING_STAGES[position];
-    const latest = [...timelineEvents]
-      .reverse()
-      .find((item) => item.phase === stage.key);
-    if (latest && latest.state === "STARTED") {
-      running = { position: position + 1, stage };
-      break;
-    }
-  }
-  return { index, failed, running, total: NARROWING_STAGES.length };
-}
-
-function narrowingNode(id, name, type, typeKo, order) {
-  return {
-    id: `ui:narrow:${id}`,
-    display_name: name,
-    node_type: type,
-    node_type_ko: typeKo || type,
-    verification_status: "SCHEMA_APPROVED",
-    visit_order: order,
-  };
-}
-
-// 단계별로 그릴 수 있는 것만 그린다. 아직 모르는 것은 그리지 않는다.
-function narrowingGraph(state, index) {
-  // 8단계부터는 승인된 통합 투영이 도착한다. 실제 노드 이름과 근거가 여기 있다.
-  if (index >= 8 && state.claims && state.claims.traversal_graph) {
-    return { graph: state.claims.traversal_graph, phase: "traversal" };
-  }
-  // 5단계에서 승인된 질의 구조가 공개된다. 좁혀진 경로와 순서가 여기 있다.
-  if (index >= 5 && state.explain && state.explain.query_graph) {
-    return { graph: state.explain.query_graph, phase: "structure" };
-  }
-  // 2~4단계. 후보 노드 종류만 안다. 간선은 아직 모르므로 그리지 않는다.
-  const labels =
-    state.schema && Array.isArray(state.schema.labels) ? state.schema.labels : [];
-  if (index >= 2 && labels.length) {
-    return {
-      graph: {
-        version: 1,
-        kind: "QUERY_STRUCTURE",
-        ordered: false,
-        nodes: labels
-          .slice(0, 40)
-          .map((label, position) =>
-            narrowingNode(
-              `label:${label}`,
-              schemaLabelKo(label),
-              label,
-              schemaLabelKo(label),
-              position + 1
-            )
-          ),
-        edges: [],
-      },
-      phase: "candidates",
-    };
-  }
-  // 1단계. 찾을 자리 하나.
-  if (index >= 1) {
-    return {
-      graph: {
-        version: 1,
-        kind: "QUERY_STRUCTURE",
-        ordered: false,
-        nodes: [narrowingNode("target", "찾을 대상", "Question", "질문", 1)],
-        edges: [],
-      },
-      phase: "target",
-    };
-  }
-  return null;
-}
-
-// 라벨의 한국어 표기는 서버가 보내 준 값에서만 찾는다. 없으면 영문 원형을 쓴다.
-function schemaLabelKo(label) {
-  const schema = latestInspection("SCHEMA_SELECTION");
-  const map = schema && schema.summary ? schema.summary.label_names_ko : null;
-  const value = map && typeof map === "object" ? map[label] : null;
-  return typeof value === "string" && value ? value : label;
-}
-
-// 처리 중 화면. 이벤트가 올 때마다 그래프가 한 겹씩 자란다.
-function renderNarrowingPanel(container, state) {
-  const progress = narrowingProgress();
-  const built = narrowingGraph(state, progress.index);
-  if (!built) {
-    if (queryWillRun()) {
-      renderExplorationWaiting(container);
-      return true;
-    }
-    container.hidden = true;
-    return true;
-  }
-  container.hidden = false;
-  container.replaceChildren();
-
-  const head = document.createElement("div");
-  head.className = "exploration-head";
-  const title = document.createElement("h3");
-  title.textContent = "답을 좁혀 가는 과정";
-  const description = document.createElement("p");
-  // 이 화면이 무엇인지 분명히 한다. 아래 결과 화면의 "지식그래프 탐색"과 다른 것이다.
-  description.textContent =
-    "질의가 그래프를 밟는 순서가 아니라, 시스템이 후보를 좁혀 답에 이르는 과정입니다. " +
-    "각 단계가 실제로 보고한 값만 그립니다.";
-  head.append(title, description);
-
-  const stage = document.createElement("p");
-  stage.className = "narrowing-stage";
-  if (progress.failed) {
-    stage.classList.add("is-failed");
-    const shown = NARROWING_STAGES[progress.failed.position - 1];
-    const code = progress.failed.event.error_code;
-    stage.textContent =
-      `${progress.failed.position}/${progress.total} ${shown.label} — ` +
-      `실패로 여기서 멈췄습니다` + (code ? ` (${code})` : "");
-  } else if (progress.running) {
-    stage.textContent =
-      `${progress.running.position}/${progress.total} ` +
-      `${progress.running.stage.label} 진행 중`;
-  } else {
-    const shown = NARROWING_STAGES[Math.max(0, progress.index - 1)];
-    stage.textContent =
-      `${progress.index}/${progress.total} ${shown.label} — ${shown.note}`;
-  }
-  head.append(stage);
-
-  const panel = document.createElement("div");
-  panel.id = `${container.id}-panel`;
-  panel.className = "exploration-panel";
-  // 처리 중 화면은 재생하지 않는다. 자라는 것 자체가 지금 일어나는 일이다.
-  renderGraphPanel(panel, "좁혀 가는 과정", built.graph, {
-    autoplay: false,
-    outcome: { failed: Boolean(progress.failed), label: "" },
-    live: true,
-  });
-  container.append(head, panel);
-  return true;
-}
-
-// 승인 전 자리표시. 어느 단계까지 왔는지 실제 타임라인에서 읽어 보여 준다.
-function renderExplorationWaiting(container) {
-  container.hidden = false;
-  container.replaceChildren();
-  const head = document.createElement("div");
-  head.className = "exploration-head";
-  const title = document.createElement("h3");
-  title.textContent = "지식그래프 탐색";
-  const description = document.createElement("p");
-  const running = [...timelineEvents].reverse().find((e) => e.state === "STARTED");
-  description.textContent = running
-    ? `${running.message} 승인되면 여기에 탐색 경로가 나타납니다.`
-    : "질의가 승인되면 여기에 탐색 경로가 나타납니다.";
-  head.append(title, description);
-  // 큰 자리표시 상자는 오히려 방해가 됐다. 한 줄 상태만 남긴다.
-  container.append(head);
-}
-
-function renderExplorationPanels() {
-  [el.progressExploration, el.answerExploration].forEach((container) => {
-    if (container) renderExplorationPanel(container);
-  });
-}
-
-function renderExplorationPanel(container) {
+function renderExplorationPanel(container, updates = inspectionUpdates, result = lastResult) {
   if (graphResizeObserver) {
     container.querySelectorAll(".graph-viewport").forEach((viewport) => {
       graphResizeObserver.unobserve(viewport);
@@ -1275,7 +1494,8 @@ function renderExplorationPanel(container) {
   container.hidden = !queryDetailsEnabled;
   if (!queryDetailsEnabled) return;
 
-  const state = explorationState();
+  if (!container.id) container.id = opaqueId("exploration").replace(/:/g, "-");
+  const state = explorationState(updates);
   const availability = {
     schema: Boolean(
       state.schema &&
@@ -1283,31 +1503,19 @@ function renderExplorationPanel(container) {
       state.schema.labels.length
     ),
     cypher: Boolean(state.explain && typeof state.explain.approved_cypher === "string"),
-    // 실제로 그래프를 탐색한 질문에만 연다. 되묻기처럼 조회가 일어나지 않은
-    // 요청에는 보여 줄 탐색이 없다. 조회했는데 결과가 0건인 경우는 탐색을 한
-    // 것이므로 연다(EXPLAIN 승인이 그 증거다).
     graph: Boolean(
-      (state.explain && state.explain.query_graph) ||
-      (state.claims && state.claims.provenance_graph)
+      state.explain &&
+      state.explain.query_graph &&
+      state.claims &&
+      state.claims.provenance_graph
     ),
   };
   const availableTabs = Object.keys(availability).filter((key) => availability[key]);
-  // 처리 중 화면은 **탐색 그래프만** 보여 준다. 후보 스키마 목록은 승인 전이라
-  // 전부 "미사용" 으로 표시돼 오해를 부르고, 지금 보고 싶은 것은 노드 탐색이다.
-  // 스키마·Cypher 탭은 결과 화면에서 확인한다.
-  if (container === el.progressExploration) {
-    // 승인 그래프가 도착할 때까지 기다리지 않는다. 1단계부터 그리기 시작해
-    // 이벤트가 올 때마다 자라게 한다.
-    renderNarrowingPanel(container, state);
-    return;
+  let selectedTab = container.dataset.activeTab || "schema";
+  if (!availability[selectedTab] && availableTabs.length) {
+    selectedTab = availableTabs[0];
+    container.dataset.activeTab = selectedTab;
   }
-  // 결과 화면도 조회 그래프 하나만 보여 준다. 선택 스키마와 승인 Cypher 는 아래
-  // `처리 과정 보기` 의 해당 단계 상세에 그대로 있으므로 탭으로 나눌 이유가 없었다.
-  if (!availability.graph) {
-    container.hidden = true;
-    return;
-  }
-  container.hidden = false;
 
   const head = document.createElement("div");
   head.className = "exploration-head";
@@ -1315,33 +1523,68 @@ function renderExplorationPanel(container) {
   title.textContent = "지식그래프 탐색";
   const description = document.createElement("p");
   description.textContent =
-    "엔진이 실제로 실행한 순서와 단계별 실측 시간 그대로 재생합니다. " +
-    "실제 조회가 수십 ms 안에 끝나므로 재생도 그만큼 짧습니다.";
+    "처리가 끝난 뒤 실제 파이프라인에서 승인된 정적 조회 정보만 표시합니다.";
   head.append(title, description);
+
+  const tabs = document.createElement("div");
+  tabs.className = "exploration-tabs";
+  tabs.setAttribute("role", "tablist");
+  tabs.setAttribute("aria-label", "질의 추적 상세");
+  const labels = {
+    schema: "선택 스키마",
+    cypher: "승인 Cypher",
+    graph: "조회 그래프",
+  };
+  Object.entries(labels).forEach(([key, label]) => {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.id = `${container.id}-tab-${key}`;
+    button.setAttribute("role", "tab");
+    button.setAttribute("aria-selected", String(selectedTab === key));
+    button.setAttribute("aria-controls", `${container.id}-panel`);
+    button.disabled = !availability[key];
+    button.title = availability[key]
+      ? `${label} 보기`
+      : "아직 해당 단계가 완료되지 않았습니다";
+    button.textContent = label;
+    button.addEventListener("click", () => {
+      container.dataset.activeTab = key;
+      renderExplorationPanel(container, updates, result);
+    });
+    tabs.append(button);
+  });
+
+  const pending = document.createElement("p");
+  pending.className = "exploration-pending";
+  pending.setAttribute("role", "status");
+  const waiting = Object.entries(labels)
+    .filter(([key]) => !availability[key])
+    .map(([, label]) => label);
+  pending.textContent = waiting.length
+    ? `${waiting.join(" · ")}: 아직 해당 단계가 완료되지 않았습니다.`
+    : "모든 추적 정보가 실제 승인 단계까지 완료되었습니다.";
 
   const panel = document.createElement("div");
   panel.id = `${container.id}-panel`;
   panel.className = "exploration-panel";
-  renderGraphTab(panel, state, false);
-
-  // 처리 중 화면은 위에서 조기 반환하므로 여기까지 오는 것은 결과 화면뿐이다.
-  // 결과 화면은 기본으로 접어 두고, 펼치면 최종 상태와 재생을 볼 수 있다.
-  {
-    const details = document.createElement("details");
-    details.className = "exploration-fold";
-    details.open = explorationExpanded;
-    const summary = document.createElement("summary");
-    summary.textContent = "탐색 과정 보기";
-    details.addEventListener("toggle", () => {
-      explorationExpanded = details.open;
-    });
-    // summary 를 붙이지 않으면 브라우저가 영어 기본 라벨("Details")을 보여 준다.
-    details.append(summary, head, panel);
-    container.append(details);
+  panel.setAttribute("role", "tabpanel");
+  panel.setAttribute("aria-labelledby", `${container.id}-tab-${selectedTab}`);
+  if (!availableTabs.length) {
+    const empty = document.createElement("p");
+    empty.className = "exploration-empty";
+    empty.textContent = "안전하게 공개할 수 있는 승인 정보가 없습니다.";
+    panel.append(empty);
+  } else if (selectedTab === "schema") {
+    renderSchemaTab(panel, state.schema);
+  } else if (selectedTab === "cypher") {
+    renderCypherTab(panel, state.explain);
+  } else {
+    renderGraphTab(panel, state);
   }
+  container.append(head, tabs, pending, panel);
 }
 
-function addBadges(container, title, values, kind, usedSet) {
+function addBadges(container, title, values, kind) {
   if (!Array.isArray(values) || !values.length) return;
   const group = document.createElement("section");
   group.className = "badge-group";
@@ -1350,12 +1593,8 @@ function addBadges(container, title, values, kind, usedSet) {
   const list = document.createElement("ul");
   values.forEach((value) => {
     const item = document.createElement("li");
-    const used = usedSet ? usedSet.has(value) : true;
-    item.className = `schema-badge is-${kind}${used ? " is-used" : " is-unused"}`;
-    item.textContent = used ? `${value} · 사용됨` : `${value} · 미사용`;
-    item.title = used
-      ? "승인된 질의가 실제로 사용했습니다"
-      : "후보로 제시했지만 최종 질의에는 쓰이지 않았습니다";
+    item.className = `schema-badge is-${kind}`;
+    item.textContent = value;
     list.append(item);
   });
   group.append(heading, list);
@@ -1364,21 +1603,22 @@ function addBadges(container, title, values, kind, usedSet) {
 
 function renderSchemaTab(container, summary) {
   if (!summary) return;
-  // 이 목록은 "쓴 것"이 아니라 "이 안에서만 고르라고 모델에 건넨 후보"다. 종전의
-  // `선택된 node label` 표기는 실제 사용으로 읽혀 오해를 불렀다. 승인된 질의가
-  // 실제로 쓴 것만 따로 표시한다.
-  const explain = latestInspection("NEO4J_EXPLAIN");
-  const used = explain && explain.summary ? explain.summary : {};
-  const usedLabels = new Set(used.labels || []);
-  const usedRels = new Set(used.relationships || []);
-  const note = document.createElement("p");
-  note.className = "projection-note";
-  note.textContent =
-    "질의를 만들 때 모델에게 건넨 후보 목록입니다. 이 안에서만 고를 수 있으며, " +
-    "실제 사용 여부는 각 항목에 표시했습니다.";
-  container.append(note);
-  addBadges(container, "후보 node label", summary.labels, "node", usedLabels);
-  addBadges(container, "후보 relationship type", summary.relationships, "relationship", usedRels);
+  addBadges(
+    container,
+    "선택된 노드 유형",
+    (summary.labels || []).map(
+      (value) => `${summary.label_names_ko?.[value] || value} (${value})`
+    ),
+    "node"
+  );
+  addBadges(
+    container,
+    "선택된 관계 유형",
+    (summary.relationships || []).map(
+      (value) => `${summary.relationship_names_ko?.[value] || value} (${value})`
+    ),
+    "relationship"
+  );
 }
 
 function renderCypherTab(container, summary) {
@@ -1394,70 +1634,34 @@ function renderCypherTab(container, summary) {
   addDetailFacts(container, {
     "사용 label": (summary.labels || []).join(", "),
     "사용 relationship": (summary.relationships || []).join(", "),
-    "결과 개수 제한(LIMIT)": summary.limit,
+    "LIMIT": summary.limit,
   });
 }
 
-// 탐색이 어디까지 갔고 어디서 끊겼는지. 승인된 경로는 있는데 결과가 없거나 단계가
-// 실패한 경우, 경로를 그대로 그리고 끊긴 지점을 ✗ 로 표시한다.
-// 어느 hop 에서 0건이 됐는지는 Neo4j 가 EXPLAIN 으로 알려주지 않으므로 추정하지
-// 않는다. "경로 끝까지 갔지만 일치가 없었다"까지만 말한다.
-function traversalOutcome() {
-  const execution = latestInspection("GRAPH_EXECUTION");
-  const validation = latestInspection("RESULT_VALIDATION");
-  const claims = latestInspection("CLAIM_BUILDING");
-  for (const [stage, item] of [
-    ["그래프 조회", execution],
-    ["결과 검증", validation],
-    ["사실 구성", claims],
-  ]) {
-    if (item && item.status === "FAILED") {
-      return { failed: true, label: `${stage} 단계에서 중단됨` };
-    }
-  }
-  if (
-    execution &&
-    execution.status === "COMPLETED" &&
-    execution.summary &&
-    execution.summary.row_count === 0
-  ) {
-    return {
-      failed: true,
-      label: "경로는 끝까지 승인됐지만 조건에 맞는 사실이 0건입니다",
-    };
-  }
-  return { failed: false, label: "" };
-}
-
-// 엔진 실행 계획(PROFILE 실측). 그래프와 같은 요청에서 온 것만 쓴다.
-function operatorPlan() {
-  const execution = latestInspection("GRAPH_EXECUTION");
-  const steps = execution && execution.summary ? execution.summary.traversal_steps : null;
-  return Array.isArray(steps) ? steps : [];
-}
-
 function renderGraphTab(container, state, autoplay = false) {
-  const outcome = traversalOutcome();
   const note = document.createElement("p");
-  note.className = outcome.failed ? "projection-note is-failed" : "projection-note";
-  note.textContent = outcome.failed
-    ? `실행한 질의가 밟은 경로입니다. ${outcome.label}.`
-    : "실제로 실행한 질의가 그래프를 밟은 경로와, 그 결과의 VERIFIED provenance입니다.";
+  note.className = "projection-note";
+  note.textContent =
+    "현재 질문에 대해 실제 승인된 구조와 VERIFIED provenance만 표시한 projection입니다.";
   container.append(note);
-  // 루트에서 실제 매칭된 노드까지 한 장으로. 통합 그래프를 못 만든 경우에만
-  // 종전처럼 스키마 경로와 provenance 를 따로 그린다.
-  const unified = state.claims ? state.claims.traversal_graph : null;
-  if (unified) {
-    renderGraphPanel(container, "탐색 경로", unified, { autoplay, outcome });
-    return;
-  }
-  if (state.explain && state.explain.query_graph) {
-    renderGraphPanel(container, "1. 질의 구조", state.explain.query_graph, { autoplay, outcome });
-  }
-  if (state.claims && state.claims.provenance_graph) {
+  if (state.claims && state.claims.traversal_graph) {
     renderGraphPanel(
       container,
-      "2. 조회 결과와 VERIFIED Evidence",
+      "실제 질의 traversal과 VERIFIED 근거",
+      state.claims.traversal_graph,
+      { autoplay }
+    );
+  } else if (state.explain && state.explain.query_graph) {
+    renderGraphPanel(container, "승인된 질의 구조", state.explain.query_graph);
+  }
+  if (
+    !state.claims?.traversal_graph &&
+    state.claims &&
+    state.claims.provenance_graph
+  ) {
+    renderGraphPanel(
+      container,
+      "조회 결과와 VERIFIED Evidence",
       state.claims.provenance_graph
     );
   }
@@ -1505,114 +1709,7 @@ function addInspectionItem(container, label, value, options = {}) {
   container.append(item);
 }
 
-// 개인 데이터에서 온 필드. 내보내기에서 기본으로 가린다.
-// PR #32 의 personalized_service.py 가 병합되면 학번·이수 이력이 추적 화면에 실릴 수
-// 있다. 그 필드 이름이 정해지면 여기에 더한다. 지금은 자리만 잡아 둔다.
-const PERSONAL_FIELDS = new Set([
-  "student_id",
-  "completed_courses",
-  "earned_credits",
-  "profile",
-]);
-
-function maskPersonal(value) {
-  if (typeof value !== "string") return value;
-  return value.replace(/\d{6,}/g, "<가림>");
-}
-
-// 추적 기록 한 벌. 이 기록만으로 나중에 재현할 수 있어야 한다.
-function buildTraceRecord({ maskPersonalData = true } = {}) {
-  const stages = timelineEvents
-    .filter((event) => event.state !== "STARTED")
-    .map((event) => {
-      const inspection = stageInspection(event);
-      const summary = inspection ? { ...inspection.summary } : null;
-      if (summary && maskPersonalData) {
-        Object.keys(summary).forEach((key) => {
-          if (PERSONAL_FIELDS.has(key)) summary[key] = "<가림>";
-          else if (typeof summary[key] === "string") summary[key] = maskPersonal(summary[key]);
-        });
-      }
-      return {
-        phase: event.phase,
-        state: event.state,
-        elapsed_ms: event.elapsed_ms,
-        error_code: event.error_code || null,
-        detail: summary,
-      };
-    });
-  return {
-    captured_at: new Date().toISOString(),
-    question: lastQuestion,
-    resolved: clarify ? clarify.resolved : {},
-    final_status: lastResult && lastResult.response ? lastResult.response.status : null,
-    answer_text: lastResult && lastResult.response ? lastResult.response.answer_text : null,
-    citations: lastResult && lastResult.response ? lastResult.response.citations : [],
-    personal_data_masked: maskPersonalData,
-    stages,
-  };
-}
-
-function traceRecordAsText(record) {
-  const lines = [
-    `질문: ${record.question}`,
-    `시각: ${record.captured_at}`,
-    `최종 상태: ${record.final_status ?? "해당 없음"}`,
-    `개인 데이터 마스킹: ${record.personal_data_masked ? "켬" : "끔"}`,
-    "",
-  ];
-  record.stages.forEach((stage) => {
-    lines.push(`[${stage.phase}] ${stage.state} · ${stage.elapsed_ms}ms`);
-    if (stage.error_code) lines.push(`  오류: ${stage.error_code}`);
-    if (stage.detail) {
-      Object.entries(stage.detail).forEach(([key, value]) => {
-        if (value === null || value === undefined || value === "") return;
-        const text = typeof value === "object" ? JSON.stringify(value) : String(value);
-        lines.push(`  ${key}: ${text.slice(0, 400)}`);
-      });
-    }
-    lines.push("");
-  });
-  if (record.answer_text) lines.push(`답변: ${record.answer_text}`);
-  (record.citations || []).forEach((c) => {
-    lines.push(`  인용 · 발췌 PDF ${c.excerpt_page}쪽: ${(c.source_text || "").slice(0, 200)}`);
-  });
-  return lines.join("\n");
-}
-
-async function copyTrace(kind, maskPersonalData) {
-  const record = buildTraceRecord({ maskPersonalData });
-  const text = kind === "json"
-    ? JSON.stringify(record, null, 2)
-    : traceRecordAsText(record);
-  try {
-    await navigator.clipboard.writeText(text);
-    return true;
-  } catch (error) {
-    return false;
-  }
-}
-
 const SVG_NS = "http://www.w3.org/2000/svg";
-
-// 간선 표기: `①근거 연결` 처럼 탐색 순서와 한국어 관계명을 붙인다. 순서는 승인된
-// MATCH 경로가 쓰인 차례이며 Neo4j 내부 실행 순서가 아니다. 한국어 이름이나 순서가
-// 없으면(구 payload) 종전처럼 영어 관계명만 쓴다.
-const ORDER_MARKS = "①②③④⑤⑥⑦⑧⑨⑩⑪⑫⑬⑭⑮";
-
-function orderMark(order) {
-  if (!Number.isInteger(order) || order < 1) return "";
-  return order <= ORDER_MARKS.length ? ORDER_MARKS[order - 1] : `(${order})`;
-}
-
-function edgeRelationshipText(edge) {
-  const name =
-    typeof edge.relationship_ko === "string" && edge.relationship_ko.trim()
-      ? edge.relationship_ko.trim()
-      : edge.relationship;
-  const mark = orderMark(edge.traversal_order);
-  return mark ? `${mark} ${name}` : name;
-}
 
 function svgNode(name, attributes = {}) {
   const node = document.createElementNS(SVG_NS, name);
@@ -1621,8 +1718,6 @@ function svgNode(name, attributes = {}) {
 }
 
 function graphCategory(type) {
-  if (type === "Question") return "context";
-  if (type === "Candidate") return "other";
   if (type === "Evidence") return "evidence";
   if (["Course", "CourseOffering"].includes(type)) return "course";
   if (["Rule", "Requirement", "CreditRequirement"].includes(type)) return "rule";
@@ -1635,6 +1730,13 @@ function graphColumn(node) {
   if (category === "context") return 0;
   if (category === "evidence") return 2;
   return 1;
+}
+
+function graphRelationshipCategory(relationship) {
+  if (relationship === "SUPPORTED_BY" || relationship === "FROM_DOCUMENT") return "evidence";
+  if (["OF_COURSE", "REQUIRES_COURSE", "HAS_OFFERING"].includes(relationship)) return "course";
+  if (["HAS_RULE", "APPLIES_TO", "REQUIRES_CREDITS"].includes(relationship)) return "rule";
+  return "other";
 }
 
 function graphProjectionIsSafe(graph) {
@@ -1689,13 +1791,13 @@ function renderGraphFallback(container, graph) {
     const target = nodes.get(edge.target);
     if (!source || !target) return;
     const item = document.createElement("li");
-    item.textContent = `${source.display_name} ──${edgeRelationshipText(edge)}──> ${target.display_name}`;
+    item.textContent = `${source.display_name} ──${edge.relationship_ko || edge.relationship}──> ${target.display_name}`;
     list.append(item);
   });
   if (!list.childElementCount) {
     (graph.nodes || []).forEach((node) => {
       const item = document.createElement("li");
-      item.textContent = `${node.display_name} (${node.node_type})`;
+      item.textContent = `${node.display_name} (${node.node_type_ko || node.node_type})`;
       list.append(item);
     });
   }
@@ -1703,99 +1805,14 @@ function renderGraphFallback(container, graph) {
   container.append(fallback);
 }
 
-// 글자 수로 폭을 추정하면 한글·영문·숫자가 섞일 때 맞지 않는다. 실제 렌더 폭을
-// canvas 로 잰다. 측정은 결과를 캐시해 노드마다 반복하지 않는다.
-// CSS 가 시작 노드만 14px 로 키우므로(B-1) 측정도 역할별로 나눈다. 13px 로 재고
-// 14px 로 그리면 뿌리 노드 이름이 상자를 넘친다.
-const NODE_FONT_STACK = '"Pretendard", "Apple SD Gothic Neo", "Malgun Gothic", "Noto Sans KR", system-ui, sans-serif';
-const NODE_FONT_PX = { root: 14, step: 13, evidence: 13 };
-const NODE_FONT = `600 ${NODE_FONT_PX.step}px ${NODE_FONT_STACK}`;
-const NODE_MAX_LINE_PX = 190;   // 이 폭을 넘으면 줄을 바꾼다. 잘라내는 기준이 아니다.
-const NODE_MAX_LINES = 3;
-let _measureCtx = null;
-const _measureCache = new Map();
-
-function measureText(text, role = "step") {
-  const px = NODE_FONT_PX[role] || NODE_FONT_PX.step;
-  const key = `${px}\u0000${text}`;
-  if (_measureCache.has(key)) return _measureCache.get(key);
-  if (!_measureCtx) {
-    _measureCtx = document.createElement("canvas").getContext("2d");
-  }
-  let width;
-  if (_measureCtx) {
-    _measureCtx.font = `600 ${px}px ${NODE_FONT_STACK}`;
-    width = _measureCtx.measureText(text).width;
-  } else {
-    // canvas 를 못 쓰는 환경에서는 글자 수 추정으로 물러난다.
-    width = text.length * px;
-  }
-  _measureCache.set(key, width);
-  return width;
-}
-
-// 최대 세 줄까지 자연스럽게 줄을 바꾼다. 말줄임은 세 줄로도 안 될 때만 쓰고,
-// 그때도 전체 이름을 tooltip 에 남긴다.
-function graphLabelLines(value, role = "step") {
+function graphLabelLines(value) {
   const text = String(value || "").replace(/\s+/g, " ").trim();
-  if (!text) return [""];
-  if (measureText(text, role) <= NODE_MAX_LINE_PX) return [text];
-
-  // 공백과 구분자(·, ,) 뒤를 우선 끊는다. 한국어 조사 경계를 억지로 끊지 않는다.
-  const tokens = text.match(/[^\s·,]+[\s·,]*/g) || [text];
-  const lines = [];
-  let current = "";
-  for (const token of tokens) {
-    const candidate = current + token;
-    if (current && measureText(candidate.trim(), role) > NODE_MAX_LINE_PX) {
-      lines.push(current.trim());
-      current = token;
-      if (lines.length === NODE_MAX_LINES) break;
-    } else {
-      current = candidate;
-    }
-  }
-  if (lines.length < NODE_MAX_LINES && current.trim()) lines.push(current.trim());
-
-  // 한 토큰이 한 줄보다 길면 그 토큰만 글자 단위로 쪼갠다.
-  const expanded = [];
-  for (const line of lines) {
-    if (measureText(line, role) <= NODE_MAX_LINE_PX || line.includes(" ")) {
-      expanded.push(line);
-      continue;
-    }
-    let chunk = "";
-    for (const ch of line) {
-      if (measureText(chunk + ch, role) > NODE_MAX_LINE_PX && chunk) {
-        expanded.push(chunk);
-        chunk = ch;
-      } else {
-        chunk += ch;
-      }
-    }
-    if (chunk) expanded.push(chunk);
-  }
-  const out = expanded.slice(0, NODE_MAX_LINES);
-  // 세 줄로도 못 담으면 마지막 줄만 말줄임한다. 전체 이름은 tooltip 에 있다.
-  if (expanded.length > NODE_MAX_LINES && out.length) {
-    const last = out[out.length - 1];
-    let trimmed = last;
-    while (trimmed && measureText(trimmed + "…", role) > NODE_MAX_LINE_PX) {
-      trimmed = trimmed.slice(0, -1);
-    }
-    out[out.length - 1] = `${trimmed}…`;
-  }
-  return out;
-}
-
-// 노드 폭·높이는 실제 렌더 폭과 줄 수에서 나온다.
-function nodeBoxWidth(lines, role = "step") {
-  const longest = lines.reduce((max, line) => Math.max(max, measureText(line, role)), 0);
-  return Math.max(112, Math.ceil(longest) + 34);
-}
-
-function nodeBoxHeight(lines, hasCategory) {
-  return 20 + lines.length * 18 + (hasCategory ? 16 : 0);
+  if (text.length <= 18) return [text];
+  const remainder = text.slice(18);
+  return [
+    text.slice(0, 18),
+    remainder.length > 18 ? `${remainder.slice(0, 17)}…` : remainder,
+  ];
 }
 
 function graphEdgeGeometry(source, target, nodeWidth, nodeHeight, mobile, offset) {
@@ -1823,414 +1840,102 @@ function graphEdgeGeometry(source, target, nodeWidth, nodeHeight, mobile, offset
   };
 }
 
-// 승인된 경로를 한 hop 씩 재생한다. 여기서 재생하는 순서는 **승인된 MATCH 패턴이
-// 쓰인 차례**이며 Neo4j 엔진의 내부 실행 순서가 아니다. 화면 문구도 그렇게 적는다.
-const SIMULATION_STEP_MS = 900;
-const runningSimulations = new Map();
-// 같은 그래프를 두 번 자동재생하지 않는다. 재렌더가 잦아서 없으면 계속 처음부터 돈다.
-const autoplayedGraphs = new Set();
-
-function stopSimulation(svg) {
-  const timer = runningSimulations.get(svg);
-  if (timer) {
-    clearTimeout(timer);
-    runningSimulations.delete(svg);
-  }
-}
-
-// 오른쪽 방문 순서 목록. 그래프에서 번호를 못 읽는 경우에도 순서를 글로 확인할 수
-// 있어야 하고, 재생 중에는 현재 hop 이 여기서도 같이 강조된다.
 function buildTraversalList(graph) {
-  const list = document.createElement("ol");
-  list.className = "traversal-list";
   const nodes = new Map((graph.nodes || []).map((node) => [node.id, node]));
-  const ordered = (graph.edges || [])
+  const edges = (graph.edges || [])
     .filter((edge) => Number.isInteger(edge.traversal_order))
     .sort((left, right) => left.traversal_order - right.traversal_order);
-  ordered.forEach((edge) => {
+  if (!edges.length) return null;
+  const section = document.createElement("section");
+  section.className = "traversal-summary";
+  const heading = document.createElement("h5");
+  heading.textContent = "실제 traversal 순서";
+  const list = document.createElement("ol");
+  list.className = "traversal-list";
+  edges.forEach((edge) => {
     const source = nodes.get(edge.source);
     const target = nodes.get(edge.target);
     if (!source || !target) return;
     const item = document.createElement("li");
-    item.className = "traversal-step";
     item.dataset.order = String(edge.traversal_order);
-    if (edge.relationship) item.dataset.relationship = edge.relationship;
-    const mark = document.createElement("span");
-    mark.className = "traversal-mark";
-    mark.textContent = orderMark(edge.traversal_order) || edge.traversal_order;
-    const body = document.createElement("div");
-    body.className = "traversal-body";
-    const hop = document.createElement("p");
-    hop.className = "traversal-hop";
-    // 라벨 종류가 아니라 거쳐간 노드의 원본 이름을 그대로 적는다.
-    const from = document.createElement("span");
-    from.className = "traversal-node";
-    from.textContent = source.display_name;
-    if (source.node_type_ko) {
-      const c = document.createElement("i");
-      c.className = "traversal-cat";
-      c.textContent = source.node_type_ko;
-      from.append(c);
-    }
-    const arrow = document.createElement("span");
-    arrow.className = "traversal-arrow";
-    arrow.textContent = "→";
-    const to = document.createElement("span");
-    to.className = "traversal-node";
-    to.textContent = target.display_name;
-    if (target.node_type_ko) {
-      const c = document.createElement("i");
-      c.className = "traversal-cat";
-      c.textContent = target.node_type_ko;
-      to.append(c);
-    }
-    hop.append(from, arrow, to);
-    const rel = document.createElement("p");
-    rel.className = "traversal-rel";
-    // 영어 관계 타입은 목록에 찍지 않는다. 읽는 데 방해만 되고 tooltip 으로 충분하다.
-    const parts = [edge.relationship_ko || edge.relationship];
-    if (Number.isInteger(edge.rows)) parts.push(`${edge.rows}행`);
-    if (Number.isInteger(edge.db_hits)) parts.push(`DB ${edge.db_hits}회`);
-    if (Number.isFinite(edge.share_ms)) parts.push(`배분 ${edge.share_ms}ms`);
-    rel.textContent = parts.join(" · ");
-    rel.title = `${edge.relationship} — 시간은 Neo4j 가 단계별로 주지 않아 총 실행시간을 DB 접근 비율로 나눈 배분값입니다`;
-    body.append(hop, rel);
-    item.append(mark, body);
+    const route = document.createElement("strong");
+    route.textContent =
+      `${source.display_name} → ${edge.relationship_ko || edge.relationship} → ${target.display_name}`;
+    const metrics = document.createElement("span");
+    const values = [];
+    if (Number.isInteger(edge.rows)) values.push(`행 ${edge.rows}`);
+    if (Number.isInteger(edge.db_hits)) values.push(`DB 접근 ${edge.db_hits}`);
+    if (Number.isFinite(edge.share_ms)) values.push(`배분 ${edge.share_ms}ms`);
+    metrics.textContent = values.join(" · ");
+    item.append(route, metrics);
     list.append(item);
   });
-  return list.childElementCount ? list : null;
+  section.append(heading, list);
+  return section;
 }
 
-// 엔진이 실제로 실행한 operator 순서 그대로 재생한다. Neo4j 는 BFS 로 돌지 않는다.
-// NodeIndexSeek 로 시작해 Expand 와 Filter 를 번갈아 흘려보내는 파이프라인이며,
-// 행 수가 늘었다 줄어드는 지점이 곧 "어디서 좁혀졌는가" 다. 층 단위 파동은 실제
-// 동작이 아니라서 걷어냈다.
-// 지금 어느 operator 가 도는지 글로 보여 준다. 값은 전부 PROFILE 실측이다.
-const OPERATOR_KO = {
-  NodeIndexSeek: "인덱스로 시작 노드 찾기",
-  NodeUniqueIndexSeek: "고유 인덱스로 시작 노드 찾기",
-  NodeByLabelScan: "라벨로 노드 훑기",
-  "Expand(All)": "관계 타고 확장",
-  Filter: "조건으로 거르기",
-  Limit: "개수 제한",
-  Projection: "필요한 값만 뽑기",
-  ProduceResults: "결과 내보내기",
-  EagerAggregation: "집계",
-};
+function addTraversalControls(controls, svg, graph, options = {}) {
+  const orders = [...new Set(
+    (graph.edges || [])
+      .map((edge) => edge.traversal_order)
+      .filter((value) => Number.isInteger(value))
+  )].sort((left, right) => left - right);
+  if (!orders.length) return;
+  const reduced = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+  const status = span("traversal-status", "");
+  status.setAttribute("role", "status");
+  status.setAttribute("aria-live", "polite");
+  const replay = document.createElement("button");
+  replay.type = "button";
+  replay.className = "inspection-action";
+  replay.textContent = "탐색 순서 재생";
 
-function renderOperatorReadout(container, plan, step) {
-  container.replaceChildren();
-  const list = document.createElement("ol");
-  list.className = "operator-list";
-  plan.forEach((item, index) => {
-    const li = document.createElement("li");
-    li.className = "operator-step";
-    // 노드 클릭 시 이 항목을 찾기 위한 대응 키. 번호가 아니라 관계 이름으로 맞춘다.
-    if (item.relationship_type) li.dataset.relationship = item.relationship_type;
-    if (index < step) li.classList.add("is-done");
-    if (index === step - 1) li.classList.add("is-current");
-    const name = document.createElement("p");
-    name.className = "operator-name";
-    // 서버가 붙인 한국어 설명이 있으면 그것을 쓴다. 무엇을 확인했는지가 드러난다.
-    name.textContent = item.explanation_ko
-      ? `${item.order}. ${item.explanation_ko}`
-      : `${item.order}. ${OPERATOR_KO[item.operator] || item.operator}`;
-    const meta = document.createElement("p");
-    meta.className = "operator-meta";
-    const bits = [OPERATOR_KO[item.operator] || item.operator];
-    if (Number.isInteger(item.rows)) bits.push(`${item.rows}행`);
-    if (Number.isInteger(item.db_hits)) bits.push(`DB ${item.db_hits}회`);
-    meta.textContent = bits.join(" · ");
-    li.append(name, meta);
-    if (item.detail) {
-      const detail = document.createElement("code");
-      detail.className = "operator-detail";
-      detail.textContent = item.detail;
-      li.append(detail);
-    }
-    // 목록 항목을 누르면 그 단계 상태로 이동한다.
-    li.tabIndex = 0;
-    li.setAttribute("role", "button");
-    li.setAttribute("aria-label", `${item.order}단계로 이동`);
-    const jump = () => {
-      const svg = container.closest(".graph-split")?.querySelector(".graph-canvas svg");
-      if (svg && typeof svg._setStep === "function") svg._setStep(item.order);
-    };
-    li.addEventListener("click", jump);
-    li.addEventListener("keydown", (event) => {
-      if (event.key === "Enter" || event.key === " ") {
-        event.preventDefault();
-        jump();
-      }
+  const clearTimers = () => {
+    (svg.traversalTimers || []).forEach((timer) => window.clearTimeout(timer));
+    svg.traversalTimers = [];
+  };
+  const showThrough = (order) => {
+    svg.querySelectorAll(".graph-edge-group[data-order]").forEach((edge) => {
+      const value = Number(edge.dataset.order);
+      edge.classList.toggle("is-traversed", value <= order);
+      edge.classList.toggle("is-active", value === order);
     });
-    list.append(li);
-  });
-  container.append(list);
-}
-
-// 그래프가 뷰포트보다 넓으면 지금 색이 변하는 노드가 화면 밖에 있을 수 있다.
-// 그러면 연출을 만들어도 보이지 않는다. 현재 단계를 따라 뷰포트를 움직인다.
-// 사용자가 직접 스크롤하면 잠시 멈춘다. 따라다니면 성가시다.
-const USER_SCROLL_PAUSE_MS = 4000;
-
-function prefersReducedMotion() {
-  return Boolean(window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches);
-}
-
-function followInViewport(svg, element) {
-  if (!element) return;
-  const viewport = svg.closest(".graph-viewport");
-  if (!viewport) return;
-  if (viewport._userScrollUntil && Date.now() < viewport._userScrollUntil) return;
-  const box = element.getBoundingClientRect();
-  const frame = viewport.getBoundingClientRect();
-  const margin = 40;
-  let dx = 0;
-  let dy = 0;
-  if (box.left < frame.left + margin) dx = box.left - frame.left - margin;
-  else if (box.right > frame.right - margin) dx = box.right - frame.right + margin;
-  if (box.top < frame.top + margin) dy = box.top - frame.top - margin;
-  else if (box.bottom > frame.bottom - margin) dy = box.bottom - frame.bottom + margin;
-  if (!dx && !dy) return;
-  viewport._autoScrolling = true;
-  viewport.scrollBy({
-    left: dx,
-    top: dy,
-    behavior: prefersReducedMotion() ? "auto" : "smooth",
-  });
-  window.setTimeout(() => {
-    viewport._autoScrolling = false;
-  }, 400);
-}
-
-function applySimulationStep(svg, step) {
-  const split = svg.closest(".graph-split");
-  if (split) {
-    split.querySelectorAll(".traversal-step").forEach((item) => {
-      const order = Number(item.dataset.order);
-      item.classList.toggle("is-traversed", order <= step);
-      item.classList.toggle("is-active", order === step);
+    svg.querySelectorAll(".graph-node[data-order]").forEach((node) => {
+      node.classList.toggle("is-traversed", Number(node.dataset.order) <= order + 1);
     });
-  }
-  svg.querySelectorAll("[data-order]").forEach((element) => {
-    const order = Number(element.dataset.order);
-    element.classList.toggle("is-traversed", order <= step);
-    element.classList.toggle("is-active", order === step);
-  });
-  // operator 순서에 대응하는 관계를 켠다. 대응이 없는 operator(Filter/Limit 등)는
-  // 그래프 모양을 바꾸지 않으므로 직전까지의 강조를 유지한다.
-  const plan = svg._operatorPlan || [];
-  const reached = new Set();
-  let current = null;
-  plan.slice(0, step).forEach((item) => {
-    if (item.relationship_type) reached.add(item.relationship_type);
-  });
-  const now = plan[step - 1];
-  if (now && now.relationship_type) current = now.relationship_type;
-  svg.querySelectorAll("[data-relationship]").forEach((element) => {
-    const rel = element.dataset.relationship;
-    element.classList.toggle("is-traversed", reached.has(rel));
-    element.classList.toggle("is-frontier", rel === current);
-  });
-  svg.querySelectorAll("[data-reached-by]").forEach((element) => {
-    const rel = element.dataset.reachedBy;
-    element.classList.toggle("is-visited", rel === "" || reached.has(rel));
-    element.classList.toggle("is-frontier", rel === current);
-  });
-  const readout = svg.closest(".graph-panel")?.querySelector(".operator-readout");
-  if (readout) renderOperatorReadout(readout, plan, step);
-
-  // 그래프 모양을 바꾸지 않는 단계(Filter/Limit/Projection 등)에서는 그 사실을 적는다.
-  // 적지 않으면 ◀▶ 로 옮겨도 화면이 그대로라 고장으로 읽힌다. 문구의 값은 그 단계가
-  // 실제로 보고한 것에서만 온다.
-  // 지금 강조된 것을 따라간다. 간선이 있으면 간선, 없으면 막 도달한 노드.
-  const target =
-    svg.querySelector(".graph-edge-group.is-frontier") ||
-    svg.querySelector(".graph-node.is-frontier");
-  if (target) followInViewport(svg, target);
-
-  const caption = svg.closest(".graph-panel")?.querySelector(".step-caption");
-  if (caption) {
-    const item = plan[step - 1];
-    if (!item) {
-      caption.hidden = true;
-    } else if (item.relationship_type) {
-      caption.hidden = true;
-    } else {
-      caption.hidden = false;
-      caption.textContent =
-        `${item.order}단계 · ${item.explanation_ko || item.operator}` +
-        " — 그래프 구조는 바뀌지 않습니다";
-    }
-  }
-}
-
-// 결과 화면 재생 배율. 진행 중 화면은 1(실측 그대로), 결과 화면은 사람이 볼 수 있게
-// 늘린다. 비율은 유지하고, 늘렸다는 사실과 실측값을 화면에 함께 적는다.
-const REPLAY_MIN_STEP_MS = 400;
-
-function replayFactor(plan, slowed) {
-  if (!slowed) return 1;
-  const positives = plan
-    .map((item) => (Number.isFinite(item.share_ms) ? item.share_ms : 0))
-    .filter((value) => value > 0);
-  if (!positives.length) return 1;
-  return REPLAY_MIN_STEP_MS / Math.min(...positives);
-}
-
-function measuredTotalMs(plan) {
-  return plan.reduce(
-    (sum, item) => sum + (Number.isFinite(item.share_ms) ? item.share_ms : 0),
-    0
-  );
-}
-
-function startSimulation(svg, maxOrder, button) {
-  stopSimulation(svg);
-  svg.classList.add("is-simulating", "shows-state");
-  svg.classList.remove("is-complete");
-  let step = 0;
-  applySimulationStep(svg, step);
-  button.textContent = "■ 정지";
-  // 각 단계를 **그 단계의 실측 시간**만큼만 보여 준다. 늘리거나 줄이지 않는다.
-  // 전체가 수십 ms 라 재생도 그만큼 짧게 끝난다. 실제와 같게 하는 것이 목적이다.
-  const plan = svg._operatorPlan || [];
-  const slowed = Boolean(svg._replaySlowed);
-  const factor = replayFactor(plan, slowed);
-  const total = measuredTotalMs(plan);
-  const note = svg.closest(".graph-panel")?.querySelector(".replay-note");
-  if (note) {
-    // 배율 숫자는 화면에 적지 않는다. 실측값과 배수가 나란히 있으면 숫자 둘이
-    // 경쟁해 어느 쪽이 실제인지 흐려진다. 정직성은 실측값을 함께 보여 주는 것으로
-    // 충분하고, 늘려 재생한다는 사실은 재생 버튼 tooltip 에 적는다.
-    note.textContent = `실측 ${total.toFixed(1)}ms`;
-    // 진행 중 화면은 실측 그대로 재생하므로 안내 문구 자체가 필요 없다.
-    note.hidden = !slowed;
-  }
-  const tick = () => {
-    step += 1;
-    applySimulationStep(svg, step);
-    if (step > maxOrder) {
-      stopSimulation(svg);
-      // 완료 상태로 넘긴다. shows-state 를 유지하므로 경로·순서 번호·흐림이 남는다.
-      svg.classList.remove("is-simulating");
-      svg.classList.add("is-complete", "shows-state");
-      applySimulationStep(svg, (svg._operatorPlan || []).length);
-      svg.querySelectorAll(".is-active").forEach((element) =>
-        element.classList.remove("is-active")
-      );
-      button.textContent = "▶ 순서대로 다시 훑어보기";
-      if (note) {
-        // 재생이 끝나도 실측값은 계속 보이게 둔다.
-        note.textContent = `실측 ${total.toFixed(1)}ms`;
-      }
+    const panel = svg.closest(".graph-panel");
+    panel?.querySelectorAll(".traversal-list li[data-order]").forEach((item) => {
+      const value = Number(item.dataset.order);
+      item.classList.toggle("is-traversed", value <= order);
+      item.classList.toggle("is-active", value === order);
+    });
+  };
+  const play = () => {
+    clearTimers();
+    svg.classList.add("shows-traversal");
+    if (reduced) {
+      showThrough(orders.at(-1));
+      status.textContent = "동작 줄이기 설정에 따라 전체 탐색 순서를 표시했습니다.";
       return;
     }
-    const current = plan[step - 1];
-    const realMs = current && Number.isFinite(current.share_ms) ? current.share_ms : 0;
-    runningSimulations.set(svg, setTimeout(tick, Math.max(0, realMs * factor)));
+    showThrough(0);
+    status.textContent = "승인된 traversal 순서를 재생합니다.";
+    replay.disabled = true;
+    orders.forEach((order, index) => {
+      const timer = window.setTimeout(() => {
+        showThrough(order);
+        status.textContent = `${order}번째 실제 탐색 단계를 표시했습니다.`;
+        if (index === orders.length - 1) replay.disabled = false;
+      }, 420 * (index + 1));
+      svg.traversalTimers.push(timer);
+    });
   };
-  runningSimulations.set(svg, setTimeout(tick, 0));
-}
-
-function addSimulationControl(controls, svg, graph, { autoplay = false } = {}) {
-  const orders = (graph.edges || [])
-    .map((edge) => edge.traversal_order)
-    .filter((value) => Number.isInteger(value));
-  if (!graph.ordered || !orders.length) return;
-  // 재생 단위는 엔진이 실행한 operator 개수다. 지어낸 단위를 쓰지 않는다.
-  const plan = svg._operatorPlan || [];
-  const maxOrder = plan.length || Math.max(...orders);
-  // 재생을 누르지 않아도 완료 상태가 처음부터 보인다. ▶ 는 순서를 다시 훑는 역할이다.
-  svg.classList.add("is-complete", "shows-state");
-  applySimulationStep(svg, maxOrder);
-
-  // ◀ / ▶ 단계 이동. 실행이 순식간에 끝나도 사람이 되짚어 읽을 수 있어야 한다.
-  let cursor = maxOrder;
-  const readout = document.createElement("span");
-  readout.className = "graph-step-readout";
-  const setCursor = (next) => {
-    cursor = Math.max(0, Math.min(maxOrder, next));
-    stopSimulation(svg);
-    svg.classList.remove("is-simulating");
-    svg.classList.add("is-complete", "shows-state");
-    // 이동은 애니메이션 없이 즉시 상태 전환한다.
-    applySimulationStep(svg, cursor);
-    readout.textContent = `${cursor} / ${maxOrder}`;
-    prev.disabled = cursor === 0;
-    next2.disabled = cursor === maxOrder;
-  };
-  const stepButton = (label, title, delta) => {
-    const b = document.createElement("button");
-    b.type = "button";
-    b.className = "ghost compact graph-step";
-    b.textContent = label;
-    b.title = title;
-    b.addEventListener("click", () => setCursor(cursor + delta));
-    return b;
-  };
-  // 결과 화면은 사람이 보라고 다시 그리는 것이므로 늘려 재생한다. 진행 중 화면은
-  // 실측 그대로 둔다. 어느 쪽인지는 autoplay 로 구분된다.
-  svg._replaySlowed = !autoplay;
-
-  const prev = stepButton("◀", "한 단계 뒤로", -1);
-  const next2 = stepButton("▶", "한 단계 앞으로", 1);
-  controls.append(prev, readout, next2);
-  const caption = document.createElement("p");
-  caption.className = "step-caption";
-  caption.hidden = true;
-  (controls.parentElement || controls).append(caption);
-
-  const note = document.createElement("p");
-  note.className = "replay-note";
-  note.hidden = true;
-  const totalMs = measuredTotalMs(svg._operatorPlan || []);
-  note.textContent = `실측 ${totalMs.toFixed(1)}ms`;
-  note.hidden = !svg._replaySlowed;
-  controls.parentElement
-    ? controls.parentElement.append(note)
-    : controls.append(note);
-  setCursor(maxOrder);
-  svg._setStep = setCursor;
-
-  const button = document.createElement("button");
-  button.type = "button";
-  button.className = "ghost compact graph-simulate";
-  button.textContent = "▶ 순서대로 다시 훑어보기";
-  button.title = svg._replaySlowed
-    ? "엔진이 실행한 순서 그대로 다시 보여 줍니다. 실제 조회는 수십 ms 안에 끝나므로 사람이 볼 수 있도록 늘려 재생합니다"
-    : "엔진이 실행한 순서 그대로, 각 단계의 실측 시간만큼 다시 보여 줍니다";
-  button.addEventListener("click", () => {
-    if (runningSimulations.has(svg)) {
-      stopSimulation(svg);
-      svg.classList.remove("is-simulating");
-      // 정지해도 완료 상태로 되돌린다. 아무것도 안 보이는 상태로 두지 않는다.
-      svg.classList.remove("is-simulating");
-      svg.classList.add("is-complete", "shows-state");
-      applySimulationStep(svg, (svg._operatorPlan || []).length);
-      const split = svg.closest(".graph-split");
-      if (split) {
-        split.querySelectorAll(".traversal-step").forEach((item) =>
-          item.classList.remove("is-traversed", "is-active")
-        );
-      }
-      button.textContent = "▶ 탐색 재생";
-      return;
-    }
-    startSimulation(svg, maxOrder, button);
-  });
-  controls.append(button);
-  // 처리 중 화면은 사용자가 누르지 않아도 한 번 재생한다. 그 화면의 목적이
-  // "지금 무엇을 하고 있는지" 보여 주는 것이기 때문이다. 결과 화면은 사용자가
-  // 누를 때만 재생한다.
-  if (autoplay && !autoplayedGraphs.has(svg.dataset.graphKey)) {
-    autoplayedGraphs.add(svg.dataset.graphKey);
-    startSimulation(svg, maxOrder, button);
-  }
+  replay.addEventListener("click", play);
+  controls.append(replay, status);
+  if (options.autoplay) window.requestAnimationFrame(play);
 }
 
 function renderGraphPanel(container, title, graph, options = {}) {
-  const outcome = options.outcome || { failed: false };
   if (!graph) return;
   const panel = document.createElement("section");
   panel.className = "graph-panel";
@@ -2249,10 +1954,6 @@ function renderGraphPanel(container, title, graph, options = {}) {
     const viewport = document.createElement("div");
     viewport.className = "graph-viewport";
     viewport.tabIndex = 0;
-    viewport.addEventListener("scroll", () => {
-      if (viewport._autoScrolling) return;
-      viewport._userScrollUntil = Date.now() + USER_SCROLL_PAUSE_MS;
-    });
     viewport.setAttribute("aria-label", `${title} 이동 영역`);
     const canvas = document.createElement("div");
     canvas.className = "graph-canvas";
@@ -2277,385 +1978,185 @@ function renderGraphPanel(container, title, graph, options = {}) {
     const columnIndex = new Map(
       orderedColumns.map((column, index) => [column, index])
     );
-    // 루트 위, 자식 아래로 내려가는 트리 배치. 승인된 MATCH 패턴은 한 시작 노드에서
-    // 여러 갈래로 뻗는 경우가 있어(예: CurriculumVersion -> Department 와
-    // CurriculumVersion -> CourseOffering) 일렬로 펴면 실제 구조가 사라진다.
-    // 리프를 왼쪽부터 차례로 놓고 부모를 자식들의 가운데에 세우는 방식이다.
-    const R = 27;
-    const xGap = mobile ? 170 : 275;
-    const yGap = mobile ? 132 : 158;
-
-    const children = new Map();
-    const indegree = new Map(graph.nodes.map((n) => [n.id, 0]));
-    graph.edges.forEach((e) => {
-      if (!indegree.has(e.source) || !indegree.has(e.target)) return;
-      if (!children.has(e.source)) children.set(e.source, []);
-      children.get(e.source).push(e.target);
-      indegree.set(e.target, indegree.get(e.target) + 1);
-    });
-    // 루트는 들어오는 간선이 없는 노드. 없으면 방문 순서가 가장 빠른 노드를 쓴다.
-    let roots = graph.nodes.filter((n) => indegree.get(n.id) === 0).map((n) => n.id);
-    if (!roots.length) {
-      const first = [...graph.nodes].sort(
-        (a, b) => (a.visit_order || 99) - (b.visit_order || 99)
-      )[0];
-      roots = first ? [first.id] : [];
-    }
-
-    // 형제가 많으면 한 줄로 늘어놓지 않고 여러 줄로 접는다. 29노드 케이스에서 리프
-    // 18개를 한 줄에 두면 viewBox 폭이 5,000px 을 넘어 스크롤로 감당할 수 없었다.
-    // 이것은 축소가 아니라 배치 변경이므로 "축소하지 마라" 방침과 충돌하지 않는다.
-    //
-    // 슬롯을 되감는 방식은 서로 다른 부모의 자식이 같은 x 를 쓰게 만들어 겹쳤다.
-    // 대신 서브트리가 차지하는 폭을 먼저 재고, 그 폭만큼 자리를 잡아 준다.
-    // 한 줄 개수를 뷰포트 폭에서 재면 안 된다. 결과 화면 패널은 기본 접힘이라
-    // clientWidth 가 0 이고, 펼쳐도 좌우 2단 그리드의 좌측 칸(약 520px)이 잡혀
-    // 진행 중 화면과 결과 화면의 배치가 서로 달라졌다(2026-08-29 실측:
-    // 2155×1282 vs 2101×1067). 측정 시점에 좌우되지 않는 고정 기준을 쓴다.
-    // 한 줄에 4개로 고정한다. 29노드 케이스에서 실측한 결과 4개일 때 가장 좁았다.
-    //   4개 → 2,101px · 6개 → 2,926px (자식이 서브트리를 가지면 줄 폭이 곱으로 는다)
-    // 뷰포트 폭에서 재던 종전 방식은 접힘·그리드 때문에 화면마다 값이 달라졌다.
-    const perRow = 4;
-
-    const depth = new Map();
-    const shift = new Map();   // 같은 깊이 안에서 몇 번째 줄인지(부모에서 물려받는다)
-    const placed = new Set();
-
-    // 서브트리가 쓰는 가로 슬롯 수. 자식을 여러 줄로 접으면 가장 넓은 줄이 폭이 된다.
-    const spanCache = new Map();
-    const measuring = new Set();
-    const spanOf = (id) => {
-      if (spanCache.has(id)) return spanCache.get(id);
-      if (measuring.has(id)) return 1;
-      measuring.add(id);
-      const kids = children.get(id) || [];
-      let span = 1;
-      if (kids.length) {
-        let widest = 0;
-        for (let index = 0; index < kids.length; index += perRow) {
-          const row = kids.slice(index, index + perRow);
-          widest = Math.max(widest, row.reduce((sum, kid) => sum + spanOf(kid), 0));
-        }
-        span = Math.max(1, widest);
-      }
-      measuring.delete(id);
-      spanCache.set(id, span);
-      return span;
-    };
-
-    // 서브트리 높이(줄 수). 자식을 접은 만큼 아래 깊이가 밀린다.
-    const assign = (id, level, left, rowShift) => {
-      if (placed.has(id)) return;
-      placed.add(id);
-      depth.set(id, level);
-      shift.set(id, rowShift);
-      const kids = (children.get(id) || []).filter((kid) => !placed.has(kid));
-      const span = spanOf(id);
-      if (!kids.length) {
-        positions.set(id, { x: left * xGap, y: 0 });
-        return;
-      }
-      let rowShiftForKids = rowShift;
-      for (let index = 0; index < kids.length; index += perRow) {
-        const row = kids.slice(index, index + perRow);
-        let cursor = left;
-        row.forEach((kid) => {
-          assign(kid, level + 1, cursor, rowShiftForKids);
-          cursor += spanOf(kid);
+    const nodeWidth = mobile ? 244 : 218;
+    const nodeHeight = 86;
+    const xGap = mobile ? 0 : 290;
+    const yGap = mobile ? 132 : 118;
+    let maxRows = 1;
+    [...columns.entries()].forEach(([column, nodes]) => {
+      maxRows = Math.max(maxRows, nodes.length);
+      nodes.forEach((node, index) => {
+        positions.set(node.id, {
+          x: 52 + columnIndex.get(column) * xGap,
+          y: 52 + index * yGap,
         });
-        // 다음 줄의 자식은 그만큼 아래로. 그 자식의 서브트리도 함께 내려간다.
-        rowShiftForKids += 1;
-      }
-      positions.set(id, { x: (left + span / 2 - 0.5) * xGap, y: 0 });
-    };
-    roots.forEach((id) => assign(id, 0, 0, 0));
-    graph.nodes.forEach((n) => {
-      if (!placed.has(n.id)) assign(n.id, 0, 0, 0);
+      });
     });
-
-    const maxDepth = Math.max(0, ...[...depth.values()]);
-    // 깊이마다 실제로 쓴 줄 수를 세어 아래 깊이를 그만큼 밀어 준다.
-    const rowsAtDepth = new Map();
-    depth.forEach((level, id) => {
-      rowsAtDepth.set(level, Math.max(rowsAtDepth.get(level) || 1, (shift.get(id) || 0) + 1));
-    });
-    const depthTop = new Map();
-    let cursorY = 58;
-    for (let level = 0; level <= maxDepth; level += 1) {
-      depthTop.set(level, cursorY);
-      cursorY += (rowsAtDepth.get(level) || 1) * yGap;
-    }
-    // 자식이 이미 다 놓인 노드는 리프로 취급돼 left=0 자리에 그대로 놓인다. 그래서
-    // 다른 갈래의 노드와 **같은 자리**에 겹치는 일이 생겼다(2026-08-29 실측:
-    // Department 와 EducationGoal 이 둘 다 (70,216)). 겹치면 그림이 한 노드처럼
-    // 보이고, 그 둘을 잇는 간선은 길이가 0이라 좌표가 NaN 이 돼 콘솔 오류 54건을
-    // 냈다. 같은 줄 안에서 자리를 오른쪽으로 밀어 겹침을 없앤다.
-    const rows = new Map();
-    positions.forEach((point, id) => {
-      const key = `${depth.get(id) || 0}:${shift.get(id) || 0}`;
-      if (!rows.has(key)) rows.set(key, []);
-      rows.get(key).push({ id, point });
-    });
-    rows.forEach((items) => {
-      items.sort((a, b) => a.point.x - b.point.x || a.id.localeCompare(b.id));
-      for (let index = 1; index < items.length; index += 1) {
-        const previous = items[index - 1].point.x;
-        if (items[index].point.x - previous < xGap) {
-          items[index].point.x = previous + xGap;
-        }
-      }
-    });
-
-    const xs = [...positions.values()].map((p) => p.x);
-    const minX = Math.min(...xs, 0);
-    positions.forEach((p, id) => {
-      p.x = p.x - minX + 70;
-      p.y = depthTop.get(depth.get(id) || 0) + (shift.get(id) || 0) * yGap;
-    });
-    const width = Math.max(320, Math.max(...[...positions.values()].map((p) => p.x)) + 160);
-    const height = Math.max(200, cursorY + 118);
+    const width = mobile ? 348 : Math.max(348, orderedColumns.length * xGap + 44);
+    const height = Math.max(210, maxRows * yGap + 56);
     svg.setAttribute("viewBox", `0 0 ${width} ${height}`);
-    svg.setAttribute("preserveAspectRatio", "xMinYMin meet");
+    svg.setAttribute("preserveAspectRatio", "xMidYMin meet");
     svg.style.aspectRatio = `${width} / ${height}`;
-    // 자연 크기를 CSS 에 알려 준다. 뷰포트가 더 좁으면 축소 대신 가로 스크롤이 된다.
-    svg.style.setProperty("--graph-natural-width", `${width}px`);
 
     const definitions = svgNode("defs");
-    const markerId = `arrow-${graphKey.replace(/[^a-zA-Z0-9]/g, "").slice(-20)}`;
     const marker = svgNode("marker", {
-      id: markerId, markerWidth: 10, markerHeight: 10,
-      refX: 9, refY: 3, orient: "auto", markerUnits: "strokeWidth",
+      id: `arrow-${graphKey.replace(/[^a-zA-Z0-9]/g, "").slice(-20)}`,
+      markerWidth: 10,
+      markerHeight: 10,
+      refX: 8,
+      refY: 3,
+      orient: "auto",
+      markerUnits: "strokeWidth",
     });
-    marker.append(svgNode("path", { d: "M0,0 L0,6 L9,3 z", class: "graph-arrow" }));
+    const arrow = svgNode("path", { d: "M0,0 L0,6 L9,3 z", class: "graph-arrow" });
+    marker.append(arrow);
     definitions.append(marker);
     svg.append(definitions);
 
     const edgeLayer = svgNode("g", { class: "graph-edges" });
     const nodeLayer = svgNode("g", { class: "graph-nodes" });
-
-    const boxOf = (node) => {
-      const lines = graphLabelLines(node.display_name);
-      return { w: nodeBoxWidth(lines), h: lines.length > 1 ? 54 : 40 };
-    };
-    const nodeById = new Map(graph.nodes.map((n) => [n.id, n]));
-
-    graph.edges.forEach((edge) => {
-      const a = positions.get(edge.source);
-      const b = positions.get(edge.target);
-      const na = nodeById.get(edge.source);
-      const nb = nodeById.get(edge.target);
-      if (!a || !b || !na || !nb) return;
-      const group = svgNode("g", { class: "graph-edge-group" });
-      if (Number.isInteger(edge.traversal_order)) {
-        group.dataset.order = String(edge.traversal_order);
-      }
-      // 간선은 도착 노드와 같은 층에서 켜진다.
-      group.dataset.relationship = edge.relationship || "";
-      group.dataset.fromId = edge.source;
-      group.dataset.toId = edge.target;
-      const dx = b.x - a.x, dy = b.y - a.y;
-      const len = Math.hypot(dx, dy) || 1;
-      const ux = dx / len, uy = dy / len;
-      const trim = (box) => {
-        const tx = Math.abs(ux) < 1e-6 ? Infinity : box.w / 2 / Math.abs(ux);
-        const ty = Math.abs(uy) < 1e-6 ? Infinity : box.h / 2 / Math.abs(uy);
-        const value = Math.min(tx, ty);
-        // 두 노드가 같은 자리에 있으면 ux·uy 가 모두 0 이라 여기서 Infinity 가 되고,
-        // 0 * Infinity 가 NaN 이 돼 좌표 속성이 통째로 깨진다. 위 배치 보정으로
-        // 겹침 자체를 없앴지만, 남은 경우에도 그림이 깨지지 않게 막아 둔다.
-        return Number.isFinite(value) ? value : 0;
-      };
-      const ta = trim(boxOf(na)), tb = trim(boxOf(nb));
-      const x1 = a.x + ux * ta, y1 = a.y + uy * ta;
-      const x2 = b.x - ux * (tb + 8), y2 = b.y - uy * (tb + 8);
-      group.append(svgNode("path", {
-        class: "graph-edge",
-        d: `M${x1},${y1} L${x2},${y2}`,
-        "marker-end": `url(#${markerId})`,
-      }));
-      // 간선 위에는 원형 순서 배지만 상시로 둔다. 관계 이름과 실측치를 함께 그리면
-      // 상자가 겹쳐 읽기 어려웠다(2026-08-29 담당자 보고). 이름은 hover 로 내린다.
-      const mx = (x1 + x2) / 2, my = (y1 + y2) / 2;
-      if (Number.isInteger(edge.traversal_order)) {
-        group.append(svgNode("circle", { class: "graph-edge-badge", cx: mx, cy: my, r: 12 }));
-        const bt = svgNode("text", {
-          class: "graph-edge-badge-text", x: mx, y: my + 4, "text-anchor": "middle",
-        });
-        bt.textContent = edge.traversal_order;
-        group.append(bt);
-      }
-      const relText = edge.relationship_ko || edge.relationship;
-      const measured = Number.isInteger(edge.db_hits)
-        ? `${Number.isInteger(edge.rows) ? edge.rows + "행 · " : ""}DB ${edge.db_hits}회`
-        : "";
-      // hover 때만 보이는 관계 이름 + 실측치. 겹침을 없애면서 정보는 남긴다.
-      const hoverText = measured ? `${relText} · ${measured}` : relText;
-      const lw = Math.ceil(measureText(hoverText)) + 18;
-      const hover = svgNode("g", { class: "graph-edge-hover" });
-      hover.append(svgNode("rect", {
-        class: "graph-edge-label-bg",
-        x: mx - lw / 2, y: my - 34, width: lw, height: 20, rx: 6,
-      }));
-      const label = svgNode("text", {
-        class: "graph-edge-label", x: mx, y: my - 20, "text-anchor": "middle",
+    graph.edges.forEach((edge, index) => {
+      const source = positions.get(edge.source);
+      const target = positions.get(edge.target);
+      if (!source || !target) return;
+      const geometry = graphEdgeGeometry(
+        source,
+        target,
+        nodeWidth,
+        nodeHeight,
+        mobile,
+        ((index % 3) - 1) * 14
+      );
+      const edgeGroup = svgNode("g", {
+        class: "graph-edge-group",
+        tabindex: Number.isInteger(edge.traversal_order) ? 0 : -1,
+        "data-kind": graphRelationshipCategory(edge.relationship),
       });
-      label.textContent = hoverText;
-      hover.append(label);
-      group.append(hover);
-      const title = svgNode("title");
-      const share = Number.isFinite(edge.share_ms) ? ` · 배분 ${edge.share_ms}ms` : "";
-      title.textContent =
-        `${edge.traversal_order || ""} ${relText} (${edge.relationship})${measured ? " · " + measured : ""}${share}`.trim();
-      group.append(title);
-      group.setAttribute("aria-label", title.textContent);
-      edgeLayer.append(group);
+      if (Number.isInteger(edge.traversal_order)) {
+        edgeGroup.dataset.order = String(edge.traversal_order);
+        edgeGroup.setAttribute(
+          "aria-label",
+          `${edge.traversal_order}번째, ${edge.relationship_ko || edge.relationship}`
+        );
+      }
+      const path = svgNode("path", {
+        d: geometry.path,
+        class: "graph-edge",
+        "marker-end": `url(#${marker.id})`,
+      });
+      const relationshipText = edge.relationship_ko || edge.relationship;
+      const relationshipLabel = relationshipText.length > 22
+        ? `${relationshipText.slice(0, 21)}…`
+        : relationshipText;
+      const labelWidth = Math.min(
+        178,
+        Math.max(70, relationshipLabel.length * 7 + 18)
+      );
+      const labelX = Math.min(
+        width - labelWidth / 2 - 8,
+        Math.max(labelWidth / 2 + 8, geometry.labelX)
+      );
+      const labelGroup = svgNode("g", { class: "graph-edge-label-group" });
+      const labelTitle = svgNode("title");
+      labelTitle.textContent = `${relationshipText} (${edge.relationship})`;
+      const labelBox = svgNode("rect", {
+        x: labelX - labelWidth / 2,
+        y: geometry.labelY - 13,
+        width: labelWidth,
+        height: 22,
+        rx: 6,
+        ry: 6,
+      });
+      const label = svgNode("text", {
+        x: labelX,
+        y: geometry.labelY + 2,
+        class: "graph-edge-label",
+        "text-anchor": "middle",
+      });
+      label.textContent = relationshipLabel;
+      labelGroup.append(labelTitle, labelBox, label);
+      edgeGroup.append(path, labelGroup);
+      if (Number.isInteger(edge.traversal_order)) {
+        const badge = svgNode("circle", {
+          cx: labelX - labelWidth / 2 - 11,
+          cy: geometry.labelY - 2,
+          r: 9,
+          class: "graph-order-badge",
+        });
+        const badgeText = svgNode("text", {
+          x: labelX - labelWidth / 2 - 11,
+          y: geometry.labelY + 2,
+          class: "graph-order-text",
+          "text-anchor": "middle",
+        });
+        badgeText.textContent = String(edge.traversal_order);
+        edgeGroup.append(badge, badgeText);
+      }
+      edgeLayer.append(edgeGroup);
     });
 
     const selected = document.createElement("p");
     selected.className = "graph-selected";
     selected.textContent = "노드를 선택하면 공개 가능한 상세가 표시됩니다.";
-
-    const drawOrder = [...graph.nodes].sort(
-      (a, b) => (depth.get(a.id) || 0) - (depth.get(b.id) || 0)
-    );
-    drawOrder.forEach((node) => {
-      const pos = positions.get(node.id);
-      // 역할을 먼저 정한다. CSS 가 시작 노드만 큰 글자를 쓰므로 측정도 그 폰트로
-      // 해야 상자가 넘치지 않는다.
-      const inboundEdge = graph.edges.find((e) => e.target === node.id);
-      const role = !inboundEdge
-        ? "root"
-        : node.node_type === "Evidence"
-        ? "evidence"
-        : "step";
-      const lines = graphLabelLines(node.display_name, role);
-      // 카테고리 = 이 노드가 속한 온톨로지 라벨의 한국어 이름. 색만으로는 어느
-      // 종류인지 알 수 없어 글로도 적는다.
-      const category = node.node_type_ko || "";
-      const w = Math.max(
-        nodeBoxWidth(lines, role),
-        Math.ceil(measureText(category, role)) + 34
-      );
-      const h = nodeBoxHeight(lines, Boolean(category));
+    graph.nodes.forEach((node) => {
+      const position = positions.get(node.id);
+      const nodeTypeKo = node.node_type_ko || node.node_type;
       const group = svgNode("g", {
-        class: "graph-node", tabindex: 0, role: "button",
-        "aria-label": `${node.display_name}, ${node.node_type}, ${node.verification_status}`,
+        class: "graph-node",
+        tabindex: 0,
+        role: "button",
+        "aria-label": `${node.display_name}, ${nodeTypeKo}, ${node.verification_status}`,
         "data-kind": graphCategory(node.node_type),
-        transform: `translate(${pos.x} ${pos.y})`,
+        transform: `translate(${position.x} ${position.y})`,
       });
       if (Number.isInteger(node.visit_order)) {
-        group.dataset.visit = String(node.visit_order);
+        group.dataset.order = String(node.visit_order);
       }
-      // 이 노드에 어느 관계를 타고 도달했는지. 루트는 빈 문자열이라 처음부터 켜진다.
-      group.dataset.reachedBy = inboundEdge ? inboundEdge.relationship || "" : "";
-      // 역할에 따라 크기·테두리·형태를 달리한다. 색만으로 구분하지 않는다.
-      group.dataset.role = role;
-      group.dataset.nodeId = node.id;
-      const tip = svgNode("title");
-      // 영어 라벨은 화면에 찍지 않고 tooltip 으로만 남긴다. 노드 아래에 같이 그리면
-      // 간선 라벨과 겹쳐 오히려 읽기 어려웠다.
-      tip.textContent = `${node.display_name} · ${node.node_type} · ${node.verification_status}`;
-      group.append(tip);
-      group.append(svgNode("rect", {
-        class: "graph-node-box",
-        x: -w / 2, y: -h / 2, width: w, height: h, rx: 14, ry: 14,
-      }));
-      if (category) {
-        const cat = svgNode("text", {
-          class: "graph-node-category", x: 0, y: -h / 2 + 16, "text-anchor": "middle",
-        });
-        cat.textContent = category;
-        group.append(cat);
-      }
-      // 카테고리 아래에서 시작해 줄 수만큼 아래로 흐른다. 상자 높이가 줄 수를
-      // 따라가므로 세 줄이어도 넘치지 않는다.
-      const textTop = -h / 2 + (category ? 30 : 14) + 12;
-      const name = svgNode("text", {
-        class: "graph-node-name", x: 0, y: textTop, "text-anchor": "middle",
+      const visual = svgNode("g", { class: "graph-node-visual" });
+      const tooltip = svgNode("title");
+      tooltip.textContent = `${node.display_name} · ${nodeTypeKo} (${node.node_type})`;
+      const box = svgNode("rect", {
+        width: nodeWidth,
+        height: nodeHeight,
+        rx: 11,
+        ry: 11,
       });
-      lines.forEach((line, i) => {
-        const ts = svgNode("tspan", { x: 0, dy: i === 0 ? 0 : 18 });
-        ts.textContent = line;
-        name.append(ts);
-      });
-      group.append(name);
-      const focusRelated = (on) => {
-        svg.classList.toggle("has-focus", on);
-        svg.querySelectorAll("[data-relationship]").forEach((edgeEl) => {
-          const related =
-            edgeEl.dataset.fromId === node.id || edgeEl.dataset.toId === node.id;
-          edgeEl.classList.toggle("is-related", on && related);
-          edgeEl.classList.toggle("is-unrelated", on && !related);
+      const name = svgNode("text", { x: 12, y: 25, class: "graph-node-name" });
+      graphLabelLines(node.display_name).forEach((line, lineIndex) => {
+        const textLine = svgNode("tspan", {
+          x: 12,
+          dy: lineIndex === 0 ? 0 : 18,
         });
+        textLine.textContent = line;
+        name.append(textLine);
+      });
+      const type = svgNode("text", { x: 12, y: 69, class: "graph-node-type" });
+      type.textContent = nodeTypeKo;
+      const verified = svgNode("text", {
+        x: nodeWidth - 14,
+        y: 20,
+        class: "graph-node-check",
+        "text-anchor": "end",
+      });
+      verified.textContent = node.citation_used ? "✓ 근거" : "✓";
+      const selectNode = () => {
+        const page = Number.isInteger(node.excerpt_page)
+          ? ` · 발췌 PDF ${node.excerpt_page}쪽`
+          : "";
+        selected.textContent = `${node.display_name} · ${nodeTypeKo} (${node.node_type}) · ${node.verification_status}${page}`;
       };
-      group.addEventListener("mouseenter", () => focusRelated(true));
-      group.addEventListener("mouseleave", () => focusRelated(false));
-      group.addEventListener("focus", () => focusRelated(true));
-      group.addEventListener("blur", () => focusRelated(false));
-      const select = () => {
-        selected.textContent =
-          `${node.display_name} · ${node.node_type} · ${node.verification_status}`;
-        // B-5: 오른쪽 목록의 대응 항목을 강조하고 스크롤한다.
-        // 인덱스로 맞추면 안 된다. `엔진이 실행한 순서`(operator 단계)와 노드의
-        // visit_order 는 서로 다른 수열이라 번호가 겹치지 않는다. 노드에 도달한
-        // 관계 이름으로 대응시킨다.
-        const side = svg.closest(".graph-split")?.querySelector(".traversal-side");
-        if (side) {
-          const reached = group.dataset.reachedBy || "";
-          side.querySelectorAll("[data-relationship]").forEach((item) => {
-            const hit = Boolean(reached) && item.dataset.relationship === reached;
-            item.classList.toggle("is-picked", hit);
-            if (hit) item.scrollIntoView({ block: "nearest", behavior: "smooth" });
-          });
-        }
-      };
-      group.addEventListener("click", select);
+      group.addEventListener("click", selectNode);
       group.addEventListener("keydown", (event) => {
         if (event.key === "Enter" || event.key === " ") {
           event.preventDefault();
-          select();
+          selectNode();
         }
       });
+      visual.append(box, name, type, verified);
+      group.append(tooltip, visual);
       nodeLayer.append(group);
     });
     svg.append(edgeLayer, nodeLayer);
-
-    // 계산한 width/height 는 노드 중심 기준이라 절반 폭과 간선 배지가 경계를
-    // 넘어간다. 다 그린 뒤 실제 경계를 재서 사방에 여백을 두고 다시 잡는다.
-    // 축소하지 않는다. 넘치면 가로 스크롤로 본다.
-    // 접힌 <details> 안에서는 getBBox 가 0 을 주거나 던진다. 그러면 자연 폭이 낡은
-    // 값으로 남아 펼쳤을 때 잘린다. 펼침·크기 변화에서 다시 잰다.
-    const refitViewBox = () => {
-      try {
-        const box = svg.getBBox();
-        if (!box || !Number.isFinite(box.width) || box.width <= 0) return;
-        const pad = 28;
-        const vw = Math.ceil(box.width + pad * 2);
-        const vh = Math.ceil(box.height + pad * 2);
-        svg.setAttribute(
-          "viewBox",
-          `${Math.floor(box.x - pad)} ${Math.floor(box.y - pad)} ${vw} ${vh}`
-        );
-        svg.style.aspectRatio = `${vw} / ${vh}`;
-        svg.style.setProperty("--graph-natural-width", `${vw}px`);
-      } catch (error) {
-        // 화면에 붙기 전에는 던질 수 있다. 그때는 계산값을 그대로 쓰고 다음 기회에 다시 잰다.
-      }
-    };
-    svg._refitViewBox = refitViewBox;
-    requestAnimationFrame(refitViewBox);
-    const fold = viewport.closest("details.exploration-fold");
-    if (fold && !fold._refitBound) {
-      fold._refitBound = true;
-      fold.addEventListener("toggle", () => {
-        if (!fold.open) return;
-        fold.querySelectorAll(".graph-canvas svg").forEach((node) => {
-          if (typeof node._refitViewBox === "function") {
-            requestAnimationFrame(node._refitViewBox);
-          }
-        });
-      });
-    }
     canvas.append(svg);
     viewport.append(canvas);
 
@@ -2689,145 +2190,42 @@ function renderGraphPanel(container, title, graph, options = {}) {
         selected.textContent = "노드를 선택하면 공개 가능한 상세가 표시됩니다.";
       })
     );
-    svg.dataset.graphKey = `${container.id || "panel"}:${graphKey}`;
-    // 재생 단위가 operator 개수이므로 컨트롤을 만들기 전에 계획을 실어야 한다.
-    svg._operatorPlan = operatorPlan();
-    if (!options.live) {
-      addSimulationControl(controls, svg, graph, options);
-    } else {
-      // 진행 중 화면은 알려진 데까지를 완료 상태로 보여 준다. 재생 버튼·배속·
-      // 안내 문구를 두지 않는다.
-      svg.classList.add("is-complete", "shows-state");
-      applySimulationStep(svg, (svg._operatorPlan || []).length);
-    }
+    addTraversalControls(controls, svg, graph, options);
     setScale(graphScales.get(graphKey) || 1);
     viewport.fitGraph = () => {
       if ((graphScales.get(graphKey) || 1) === 1) setScale(1);
-      // 폭이 바뀌면 경계도 바뀐다. 접혀 있다가 펼쳐진 경우도 여기로 온다.
-      if (typeof svg._refitViewBox === "function") {
-        requestAnimationFrame(svg._refitViewBox);
-      }
     };
     if (graphResizeObserver) graphResizeObserver.observe(viewport);
 
     const legend = document.createElement("ul");
     legend.className = "graph-legend";
     [
-      // 화면에는 한국어만 둔다. 영어 원본 라벨은 tooltip 으로 남긴다.
-      ["context", "교육과정·학과", "Curriculum · Department"],
-      ["course", "교과목·편성", "Course · CourseOffering"],
-      ["rule", "학사규칙·요건", "Rule · Requirement"],
-      ["evidence", "원문 근거", "Evidence"],
-    ].forEach(([kind, label, original]) => {
+      ["context", "교육과정·학과"],
+      ["course", "과목·과목 개설 정보"],
+      ["rule", "규칙·이수요건"],
+      ["evidence", "문서 근거"],
+    ].forEach(([kind, label]) => {
       const item = document.createElement("li");
-      item.title = original;
       item.append(span(`legend-dot is-${kind}`, ""), span("", label));
       legend.append(item);
     });
-    // B-2 범례. 색만으로 구분하지 않도록 각 항목에 형태 표식을 함께 둔다.
-    const legendBar = document.createElement("ul");
-    legendBar.className = "graph-legend-bar";
-    [
-      ["state", "visited", "방문함"],
-      ["state", "frontier", "지금 타는 중"],
-      ["state", "pending", "미방문"],
-      ["role", "root", "시작 노드"],
-      ["role", "step", "경유 노드"],
-      ["role", "evidence", "근거(Evidence)"],
-    ].forEach(([kind, key, text]) => {
-      const item = document.createElement("li");
-      item.dataset.kind = kind;
-      item.dataset.key = key;
-      const mark = document.createElement("span");
-      mark.className = "legend-mark";
-      mark.setAttribute("aria-hidden", "true");
-      const label = document.createElement("span");
-      label.textContent = text;
-      item.append(mark, label);
-      legendBar.append(item);
-    });
-
-    const split = document.createElement("div");
-    split.className = "graph-split";
-    split.append(viewport);
-    const plan = svg._operatorPlan || [];
-    const side = document.createElement("aside");
-    side.className = "traversal-side";
-    const sideHead = document.createElement("h5");
-    sideHead.textContent = plan.length ? "엔진이 실행한 순서" : "방문 순서";
-    side.append(sideHead);
-    if (plan.length) {
-      const readout = document.createElement("div");
-      readout.className = "operator-readout";
-      renderOperatorReadout(readout, plan, plan.length);
-      side.append(readout);
-    } else {
-      const traversal = buildTraversalList(graph);
-      if (traversal) side.append(traversal);
-    }
-    split.append(side);
-    panel.append(controls, legendBar, split, selected, legend);
+    panel.append(controls, viewport, selected, legend);
+    const traversalList = buildTraversalList(graph);
+    if (traversalList) panel.append(traversalList);
   } catch (_) {
     renderGraphFallback(panel, graph);
   }
   container.append(panel);
 }
 
-function renderAnswer(result) {
-  const response = result.response;
-  const presentation = result.presentation;
-  el.answerBadge.textContent = presentation.status_label;
-  el.answerBadge.dataset.state = response.status;
-  el.answerTitle.textContent = response.answer_text;
-
-  el.clarification.hidden = !response.clarification;
-  el.clarification.textContent = response.clarification || "";
-  renderTrail();
-  renderChoices(response, clarificationPresentation);
-  el.scopeNotice.hidden = !presentation.scope_notice;
-  el.scopeNotice.textContent = presentation.scope_notice || "";
-  el.debugMeta.hidden = !presentation.debug;
-  el.debugMeta.textContent = presentation.debug
-    ? `request_id=${presentation.debug.request_id} · error_code=${presentation.debug.error_code || "없음"}`
-    : "";
-  renderEvidence(presentation);
-}
-
-// 어떤 질문에서 무엇을 골라 이 답에 닿았는지 그대로 남긴다. 선택지를 여러 번 타고
-// 들어가면 처음 물은 것이 무엇이었는지 잊게 되고, 그러면 답이 맞는지도 판단할 수 없다.
-// 화면 표시일 뿐이며 조회 조건은 `clarify.resolved` 가 그대로 들고 있다.
-function renderTrail() {
-  if (!el.trail) return;
-  const steps = clarify.trail || [];
-  el.trail.textContent = "";
-  el.trail.hidden = steps.length === 0;
-  if (!steps.length) return;
-  for (const step of steps) {
-    const item = document.createElement("li");
-    item.className = "trail-step";
-    const asked = document.createElement("span");
-    asked.className = "trail-asked";
-    asked.textContent = step.prompt || "되물음";
-    const picked = document.createElement("span");
-    picked.className = "trail-picked";
-    picked.textContent = step.label;
-    item.append(asked, picked);
-    el.trail.append(item);
-  }
-}
-
-function renderChoices(response, envelope) {
-  // 화면 문서가 오래됐을 수 있다. 요소가 없으면 선택지만 못 보여 줄 뿐,
-  // 답변과 근거는 그대로 나와야 한다.
-  if (!el.choices || !el.choiceList) return;
+function renderTurnChoices(container, sourceQuestion, response, envelope) {
   const options = envelope && envelope.version === 1 && Array.isArray(envelope.options)
     ? envelope.options
     : [];
-  el.choiceList.textContent = "";
-  el.choices.hidden = options.length === 0;
   if (!options.length) return;
-  // 지금 화면에 떠 있는 되묻기 문구. 고른 뒤에는 사라지므로 여기서 기록해 둔다.
-  const prompt = response.clarification || "";
+  const choices = document.createElement("div");
+  choices.className = "choices turn-choices";
+  const prompt = response && response.clarification ? response.clarification : "추가 조건을 선택해 주세요.";
   for (const option of options) {
     const button = document.createElement("button");
     button.type = "button";
@@ -2837,37 +2235,40 @@ function renderChoices(response, envelope) {
     if (option.detail && option.detail !== option.label) button.title = option.detail;
     button.addEventListener("click", () => {
       if (inFlight) return;
-      // 값은 서버가 준 것을 그대로 되돌려 보낸다. 화면이 값을 만들지 않는다.
       clarify = {
-        question: clarify.question,
+        question: sourceQuestion,
         resolved: { ...clarify.resolved, [option.filter]: option.value },
         trail: [...(clarify.trail || []), { prompt, label: option.label }],
+        conversation_id: currentConversationId,
       };
       saveClarify(clarify);
-      ask(clarify.question);
+      ask(sourceQuestion, option.label);
     });
-    el.choiceList.append(button);
+    choices.append(button);
   }
+  container.append(choices);
 }
 
-function renderEvidence(presentation) {
+function renderEvidenceInto(container, presentation) {
   const pages = presentation.evidence_pages || [];
   pdfPageCount = Number(presentation.pdf && presentation.pdf.page_count) || 0;
   const total = pages.reduce((sum, page) => sum + page.evidence.length, 0);
-  el.evidenceSection.hidden = total === 0;
-  el.evidenceSummary.textContent = pages.length
+  if (!total) return;
+  const section = document.createElement("section");
+  section.className = "evidence turn-evidence";
+  const heading = document.createElement("h4");
+  heading.textContent = pages.length
     ? `발췌 PDF ${pages.length}개 페이지 · 근거 ${total}건`
     : "표시할 VERIFIED 근거가 없습니다.";
-  el.pdfNotice.hidden = true;
+  section.append(heading);
   if (pages.length && presentation.pdf && !presentation.pdf.available) {
-    showNotice(
-      el.pdfNotice,
-      `${presentation.pdf.reason} 페이지 번호와 Evidence 원문은 계속 표시합니다.`,
-      false
-    );
+    const notice = document.createElement("p");
+    notice.className = "notice";
+    notice.textContent = `${presentation.pdf.reason} 페이지 번호와 Evidence 원문은 계속 표시합니다.`;
+    section.append(notice);
   }
-  el.evidencePages.replaceChildren();
-  pages.forEach((page) => el.evidencePages.append(pageCard(page, presentation.pdf, total)));
+  pages.forEach((page) => section.append(pageCard(page, presentation.pdf, total)));
+  container.append(section);
 }
 
 function pageLabel(value, fallback = "미표기") {
@@ -2976,7 +2377,12 @@ function pageCard(page, pdf, totalEvidence) {
 
 function openPdfModal(page, evidence) {
   if (!pdfAvailable) return;
-  modalState = { originPage: page, evidence, page: page.excerpt_page };
+  modalState = {
+    originPage: page,
+    evidence,
+    page: page.excerpt_page,
+    returnFocus: document.activeElement,
+  };
   modalZoom = 1;
   renderPdfModal();
   el.pdfModal.showModal();
@@ -3025,6 +2431,28 @@ function renderPdfModal() {
 }
 
 el.pdfModalClose.addEventListener("click", () => el.pdfModal.close());
+el.pdfModal.addEventListener("keydown", (event) => {
+  if (event.key !== "Tab") return;
+  const focusable = [...el.pdfModal.querySelectorAll(
+    'button:not(:disabled), [href], input:not(:disabled), [tabindex]:not([tabindex="-1"])'
+  )].filter((node) => !node.hidden);
+  if (!focusable.length) return;
+  const first = focusable[0];
+  const last = focusable[focusable.length - 1];
+  if (event.shiftKey && document.activeElement === first) {
+    event.preventDefault();
+    last.focus();
+  } else if (!event.shiftKey && document.activeElement === last) {
+    event.preventDefault();
+    first.focus();
+  }
+});
+el.pdfModal.addEventListener("close", () => {
+  const returnFocus = modalState && modalState.returnFocus;
+  if (returnFocus && typeof returnFocus.focus === "function" && returnFocus.isConnected) {
+    returnFocus.focus();
+  }
+});
 el.pdfPrev.addEventListener("click", () => {
   if (modalState && modalState.page > 1) {
     modalState.page -= 1;
@@ -3047,5 +2475,8 @@ el.pdfZoomOut.addEventListener("click", () => {
 });
 
 loadHealth();
+ensureConversation().catch(() => {
+  showNotice(el.askNotice, "브라우저 채팅 저장소를 사용할 수 없어 이번 화면에서만 질문할 수 있습니다.", false);
+});
 autoGrow();
 el.question.focus();

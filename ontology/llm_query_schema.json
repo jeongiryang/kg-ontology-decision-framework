@@ -2057,6 +2057,11 @@
         "operator": "EQUALS",
         "property": "course_code"
       },
+      "course_codes": {
+        "label": "Course",
+        "operator": "PROPERTY_IN_PARAMETER",
+        "property": "course_code"
+      },
       "credit_category": {
         "label": "CreditAllocation",
         "operator": "EQUALS",

@@ -721,7 +721,7 @@ class CypherValidator:
             "evidence_verification_status",
         }
         if plan.selection_mode is SelectionMode.SINGLE_COURSE:
-            required.add("course_identity")
+            required.update({"course_identity", "name_ko"})
         # 탐색 화면이 뿌리 노드를 실제 이름으로 부르려면 그 이름을 돌려받아야 한다.
         # 계약을 넓히지 않기 위해 **이 별칭 하나만** 선택적으로 허용하고, 값이
         # 온톨로지가 선언한 속성인지까지 아래에서 다시 확인한다.
@@ -779,13 +779,14 @@ class CypherValidator:
                     "SINGLE_COURSE must return one explicitly labeled Course identity",
                 )
             expected["course_identity"] = (course_variables[0], "course_id")
+            expected["name_ko"] = (course_variables[0], "name_ko")
         if "scope_identity" in sources:
             variable, prop = sources["scope_identity"]
             labels = variable_labels.get(variable, set())
-            if not labels or prop not in self.catalog.properties_for_labels(labels):
+            if "CurriculumVersion" not in labels or prop != "version_name":
                 self._fail(
                     "CYPHER_SCOPE_IDENTITY_INVALID",
-                    "scope_identity must return a declared property of a path node",
+                    "scope_identity must return CurriculumVersion.version_name",
                 )
         for alias, source in expected.items():
             if sources[alias] != source:

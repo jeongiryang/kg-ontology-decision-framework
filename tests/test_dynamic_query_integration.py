@@ -55,7 +55,7 @@ class DynamicQueryIntegrationTests(unittest.TestCase):
         return row["nodes"], row["relationships"], evidence
 
     def test_explain_execute_validate_and_database_is_unchanged(self) -> None:
-        self.assertEqual(self.before, (1518, 3260, 511))
+        self.assertEqual(self.before, (1536, 3287, 520))
         with tempfile.TemporaryDirectory() as directory:
             pipeline = SafetyPipeline(
                 QueryExplainer(self.driver, self.settings.database),
