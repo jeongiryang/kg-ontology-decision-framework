@@ -185,3 +185,69 @@ git ls-files CLAUDE.md        → 추적되지 않음
 
 - PR #34가 `ProgressPhase` 9단계 구조를 바꾸는지에 대한 답을 받으면 병합 순서를 확정한다.
 - ADR 0013 10절의 검증 경계 논의는 팀 결정 안건으로 남아 있다.
+
+## 11. 통합 완료 후 갱신 (2026-08-29)
+
+이 절은 위의 PR #33 병합 전 기록을 보존하면서, PR #32~#35 통합 뒤의 실제 최종 상태를
+기록한다. 위 4.3절의 `1,518 / 3,260 / 511`과 단일 질문 화면 검증은 당시 기준의 역사적
+측정값이며 최종 기준값이 아니다.
+
+### 11.1 병합 순서와 충돌 해결
+
+1. PR #32가 merge commit `86259331a0ff97a53309c06d307ef9fe06c73779`로 병합됐다.
+2. PR #34가 merge commit `cb6fc297d463690e402c061489e7b20703e9b064`로 병합됐다.
+3. PR #33 브랜치에 최신 `main`을 일반 merge 방식으로 반영하고, 연속 채팅을 기준으로
+   충돌 파일 10개를 통합했다.
+4. PR #33은 통합 commit `4eca08f5b5de2f249db9625cd5a4da28ac59794c`를 거쳐 merge
+   commit `46fb8e45dedff5c4c02c223fb5d2767f22e0965c`로 병합됐다.
+
+PR #34의 상시 입력창, conversation/turn 저장, assistant turn별
+`presentation_snapshot`을 유지했다. PR #33의 한국어 schema display mapping,
+approved canonical Cypher의 PROFILE 관찰값, 실제 반환 record와 VERIFIED provenance에서
+만든 traversal, 색상·순서 재생, 처리 과정 상세와 Cypher 표시는 각 assistant turn 아래로
+포팅했다. 이전 단일 질문 wizard와 `새 질문하기` 전환은 복원하지 않았다.
+
+### 11.2 최종 표시·보안 계약
+
+- 각 assistant turn은 `근거 N개`, `처리 과정`, `그래프 탐색`, `Cypher 보기`를 독립적으로
+  보존한다. 후속 질문이 이전 turn의 Citation·진행 단계·graph·Cypher를 덮어쓰지 않는다.
+- 내부 Label·Relationship·속성 식별자는 영어로 유지하고 한국어 이름은 presentation에서만
+  사용한다. 실제 Cypher 원문은 승인된 영어 스키마를 그대로 표시한다.
+- traversal은 동일 후보의 comment-free canonicalization, 정적 검증과 EXPLAIN을 통과한
+  읽기 질의의 PROFILE operator와 실제 승인 결과에서만 만든다. 승인 path가 없는 집계
+  질의에 ontology endpoint를 조합한 가짜 간선을 만들지 않는다.
+- 실패·폐기·재시도 이전 Cypher와 질문 원문 trace, prompt, 모델 원문, 자격증명, URI,
+  로컬 경로, traceback은 presentation에 포함하지 않는다.
+- 애니메이션은 승인된 `traversal_order`의 사후 재생이다. Neo4j가 실행 중 hop 이벤트를
+  보낸다고 표현하지 않으며, reduced-motion에서는 이동 효과 없이 최종 상태를 즉시 표시한다.
+- 처리 과정의 육하원칙은 실제 stage payload의 allowlist 값과 고정된 안전 설명으로
+  구성하고 hidden chain-of-thought를 노출하지 않는다.
+
+### 11.3 최종 검증 결과
+
+| 검증 | 최종 결과 |
+|---|---|
+| 의존성 | `uv sync --locked`, `uv lock --check` 통과 |
+| 전체 unittest | 386건 통과, 외부 서비스 선택 테스트 6건 skip |
+| 전체 pytest | 380건 통과, 399 subtests 통과, 외부 서비스 선택 테스트 6건 skip |
+| 스키마·마이그레이션·bundle | schema exporter, personalization migration check, Verified bundle validate 통과 |
+| Neo4j | connection/verify와 opt-in 통합 통과, `1,536 / 3,287 / 520` 유지 |
+| 실제 6문항 | Ollama·Neo4j·Starlette SSE 통과, 전공필수 9과목·21학점과 Citation 9건 확인 |
+| 데스크톱 Chromium | 10단계·10 disclosure·10개 육하원칙, traversal 29 node/28 edge, PROFILE operator 13개, 콘솔 오류 0건 |
+| 390px reduced-motion | traversal 5 node/4 edge, 한국어 표시, 가로 overflow·콘솔 오류 0건 |
+| 연속 4턴 | 대명사 연결, 대체 근거 부족, 최소 사용자 정보 요청, turn별 snapshot과 reload 복원 확인 |
+| 입력·PDF | Shift+Enter, IME Enter 보호, 채팅 생성·전환·삭제, PDF modal·zoom·이전·다음·닫기 통과 |
+
+4턴 검증에서 `고급자료구조로 대신하면 인정돼?`가 무관한 졸업학점 규칙으로 복구되는
+문제를 발견했다. 질문별 예외 대신 중앙 과목 조사 정규화, 대체 인정 의미 보존, 결합 뒤
+원질문 Evidence 경계 재검증을 추가했다. 최종 결과는 확인된 과목 identity와 직접 대체
+근거 부재를 분리한 `INSUFFICIENT_EVIDENCE`이며, 점수나 대체 규정을 추측하지 않는다.
+
+### 11.4 최종 제한사항
+
+- PROFILE operator는 승인된 질의의 실행계획 관찰값이지 Neo4j 내부 hop 실시간 스트림이
+  아니다.
+- 집계 질의가 path를 반환하지 않으면 그래프 영역은 빈 경로 상태를 표시한다.
+- 로컬 PoC의 LLM·Neo4j·PDF와 브라우저 저장소에 의존하며 인증·서버 영구 채팅 저장은
+  제공하지 않는다.
+- 외부 서비스 opt-in 테스트는 해당 로컬 서비스가 준비된 환경에서만 재현할 수 있다.
