@@ -34,7 +34,8 @@ DEFAULT_BUNDLE = Path("data/verified/2026/2026_curriculum_kg_data.json")
 # supply an academic answer value, Fact ID, Evidence ID, or Cypher.
 _ACADEMIC_DOMAIN = re.compile(
     r"(?:학사|교육과정|교양|전공|졸업|학점|과목|수강|이수|학년|학기|학번|학과|"
-    r"면제|영어|TOEIC|토익|TOEFL|토플|TEPS|텝스|OPIc|오픽|진로|공부)",
+    r"학수번호|과목[ \t]*코드|성적표|개설|면제|영어|TOEIC|토익|TOEFL|토플|"
+    r"TEPS|텝스|OPIc|오픽|진로|공부)",
     re.IGNORECASE,
 )
 _LIVE_REGISTRATION = re.compile(
@@ -768,6 +769,32 @@ class PersonalizedCurriculumChatService:
             str(self.nodes.get(fact_id, {}).get("properties", {}).get("description_ko", ""))
             for fact_id in response.used_fact_ids
         )
+        if (
+            re.search(
+                r"(?:TOEIC|토익|TOEFL|토플|TEPS|텝스|OPIc|오픽|G-?TELP|FLEX)",
+                question,
+                re.IGNORECASE,
+            )
+            and re.search(r"(?:기준|점수|최소)", question)
+            and self._credential_test_for_rule(descriptions) is not None
+        ):
+            # A credential threshold question is answered by the VERIFIED
+            # minimum-score Rule itself.  The word "대체" here describes the
+            # English-exemption program, not an unsupported pairwise course
+            # replacement.
+            return None
+        if (
+            _COURSE_SUBSTITUTION_JUDGMENT.search(question)
+            and "필수로 이수" in descriptions
+        ):
+            # A VERIFIED rule that names the requested course as mandatory is
+            # sufficient to explain that unrelated credits do not establish the
+            # named-course requirement.  The presentation deliberately says only
+            # that substitution is *not confirmed*; it does not invent a separate
+            # prohibition.  Pairwise course-substitution questions still require
+            # direct replacement evidence because offering metadata alone cannot
+            # establish equivalence.
+            return None
         checks = (
             (
                 r"(?:대신\s*(?:채워|채울|들|하|해|했|할)|"

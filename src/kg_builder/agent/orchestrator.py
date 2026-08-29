@@ -77,7 +77,8 @@ _REQUIREMENT_TOPIC = re.compile(
 _AUDIENCE_TOPIC = re.compile(r"(?:편입생|신입생|재학생|복수전공생|부전공생)")
 _GENERIC_REQUIREMENT_FOLLOWUP = re.compile(
     r"(?:총학점|같은[ \t]*영역|한[ \t]*영역|그[ \t]*기준|그[ \t]*요건|"
-    r"면제|충족|넘으면|되는[ \t]*거)"
+    r"면제|충족|넘으면|되는[ \t]*거|"
+    r"(?:성적표|개인[ \t]*(?:정보|이력))[ \t]*없이.{0,24}(?:일반|공통)[ \t]*(?:기준|요건|규정))"
 )
 _COURSE_ASPECT = re.compile(
     r"(?:학수번호|과목[ \t]*코드|학점|이수구분|학년|학기|언제|개설|과목[ \t]*정보)"
@@ -779,18 +780,26 @@ class AgenticCurriculumChatService:
             limitation = grounding_limitation(question, personalized.response)
             if limitation is not None:
                 grounded_message = getattr(self.service, "_grounded_message", None)
-                message = (
-                    grounded_message(
+                preserve_advisory = (
+                    personalized.outcome.status is OutcomeStatus.ADVISORY
+                )
+                message = personalized.outcome.message
+                if not preserve_advisory and callable(grounded_message):
+                    message = grounded_message(
                         question, personalized.profile, personalized.response
                     )
-                    if callable(grounded_message)
-                    else personalized.outcome.message
+                display_message = (
+                    message
+                    if limitation in message
+                    else "\n\n".join((message, limitation))
                 )
                 personalized = PersonalizedChatResult(
                     response=personalized.response,
                     outcome=DecisionOutcome(
-                        OutcomeStatus.INSUFFICIENT_EVIDENCE,
-                        "\n\n".join(dict.fromkeys((message, limitation))),
+                        OutcomeStatus.ADVISORY
+                        if preserve_advisory
+                        else OutcomeStatus.INSUFFICIENT_EVIDENCE,
+                        display_message,
                         required_user_fields=(
                             personalized.outcome.required_user_fields
                         ),
@@ -822,17 +831,25 @@ class AgenticCurriculumChatService:
                     and "사용자 진술" in message
                     and "학점이 남습니다" in message
                 )
+                calculation_resolves_outcome = bool(
+                    calculation_complete
+                    and not personalized.outcome.limitations
+                    and personalized.outcome.status
+                    is not OutcomeStatus.INSUFFICIENT_EVIDENCE
+                )
                 personalized = PersonalizedChatResult(
                     response=personalized.response,
                     outcome=DecisionOutcome(
                         OutcomeStatus.ANSWERED
-                        if calculation_complete
+                        if calculation_resolves_outcome
                         else personalized.outcome.status,
-                        message,
+                        message
+                        if calculation_resolves_outcome
+                        else personalized.outcome.message,
                         required_user_fields=personalized.outcome.required_user_fields,
                         used_profile_fields=personalized.outcome.used_profile_fields,
                         limitations=()
-                        if calculation_complete
+                        if calculation_resolves_outcome
                         else personalized.outcome.limitations,
                     ),
                     profile=personalized.profile,
@@ -1538,6 +1555,25 @@ class AgenticCurriculumChatService:
                 self._append_codes(question, tuple(codes)),
                 tuple(codes),
                 plan.tools,
+                plan.topic,
+                plan.followup_question,
+                plan.subquestions,
+            )
+        if (
+            not explicit_courses
+            and context.recent_course_codes
+            and _ACADEMIC_LIVE_CONTRAST.search(question)
+        ):
+            codes = plan.course_codes or context.recent_course_codes
+            tools = tuple(
+                dict.fromkeys(
+                    (*plan.tools, ToolName.RESOLVE_COURSE, ToolName.QUERY_CURRICULUM)
+                )
+            )
+            return _Plan(
+                self._append_codes(question, tuple(codes)),
+                tuple(codes),
+                tools,
                 plan.topic,
                 plan.followup_question,
                 plan.subquestions,

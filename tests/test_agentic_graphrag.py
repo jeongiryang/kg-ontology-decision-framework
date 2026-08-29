@@ -387,6 +387,74 @@ class AgentOrchestratorTests(unittest.TestCase):
         )
         self.assertEqual(combined.response.status, ChatStatus.ANSWERABLE)
 
+    def test_credit_calculation_cannot_erase_area_evidence_gap(self):
+        """A numeric remainder does not answer which curriculum area supplies it."""
+
+        from tests.test_evidence_chat import _answerable_response
+
+        limitation = "어느 교양 영역인지 확정할 직접 근거가 없습니다."
+
+        class PartialCalculationService(FakePersonalizedService):
+            def ask(
+                self,
+                question,
+                *,
+                profile=None,
+                resolved=None,
+                progress_callback=None,
+            ):
+                del question, resolved, progress_callback
+                current = profile or UserProfile(credits=(("general", 31.0),))
+                response = _answerable_response(count=1)
+                return PersonalizedChatResult(
+                    response,
+                    DecisionOutcome(
+                        OutcomeStatus.INSUFFICIENT_EVIDENCE,
+                        f"3학점이 남지만 {limitation}",
+                        used_profile_fields=("credits",),
+                        limitations=(limitation,),
+                    ),
+                    current,
+                )
+
+            @staticmethod
+            def _grounding_limitation(question, response):
+                del response
+                return limitation if "어느" in question else None
+
+            @staticmethod
+            def _grounded_message(question, profile, response):
+                del question, profile, response
+                return "사용자 진술 31학점에서 3학점이 남습니다."
+
+        llm = FakeLLM(
+            [
+                {
+                    "resolved_question": "남은 학점을 어느 교양 영역에서 들어야 해?",
+                    "referenced_course_codes": [],
+                    "tools": [
+                        "query_curriculum",
+                        "calculate_remaining_credits",
+                    ],
+                    "topic": "교양 영역별 잔여학점",
+                    "subquestions": [],
+                }
+            ]
+        )
+        result = AgenticCurriculumChatService(
+            PartialCalculationService(), llm
+        ).ask(
+            "남은 학점을 어느 교양 영역에서 들어야 해?",
+            profile=UserProfile(credits=(("general", 31.0),)),
+            conversation=context(codes=()),
+        )
+
+        self.assertEqual(
+            result.personalized.outcome.status,
+            OutcomeStatus.INSUFFICIENT_EVIDENCE,
+        )
+        self.assertIn(limitation, result.display_answer)
+
     def test_registered_fact_families_are_split_without_question_fixture_lookup(self):
         queries = AgenticCurriculumChatService._fact_family_subquestions(
             "학과 인재상뿐 아니라 졸업 후 진출 분야도 함께 확인하고 싶어."
@@ -566,6 +634,66 @@ class AgentOrchestratorTests(unittest.TestCase):
         self.assertIn("먼저 고려", result.display_answer)
         self.assertEqual(result.personalized.outcome.status, OutcomeStatus.ADVISORY)
 
+    def test_grounding_recheck_keeps_conditional_advisory_status(self):
+        from tests.test_evidence_chat import _answerable_response
+
+        limitation = "학년 표기가 수강 제한인지 확정할 직접 근거는 없습니다."
+
+        class AdvisoryLimitedService(FakePersonalizedService):
+            def ask(
+                self,
+                question,
+                *,
+                profile=None,
+                resolved=None,
+                progress_callback=None,
+            ):
+                del question, resolved, progress_callback
+                response = _answerable_response(count=1)
+                return PersonalizedChatResult(
+                    response,
+                    DecisionOutcome(
+                        OutcomeStatus.ADVISORY,
+                        "확인된 편성 학년을 바탕으로 조건부로 판단해야 합니다.",
+                        limitations=(limitation,),
+                    ),
+                    profile or UserProfile(),
+                )
+
+            @staticmethod
+            def _grounding_limitation(question, response):
+                del question, response
+                return limitation
+
+            @staticmethod
+            def _grounded_message(question, profile, response):
+                del question, profile, response
+                return "검증된 개설 정보입니다."
+
+        llm = FakeLLM(
+            [
+                {
+                    "resolved_question": "편성 학년과 수강 제한을 구분해 줘.",
+                    "referenced_course_codes": [],
+                    "tools": ["query_curriculum"],
+                    "topic": "편성 학년 조건부 안내",
+                    "subquestions": [],
+                },
+                {"intro": "", "closing": ""},
+            ]
+        )
+        result = AgenticCurriculumChatService(
+            AdvisoryLimitedService(), llm
+        ).ask(
+            "편성 학년과 수강 제한을 구분해 줘.",
+            conversation=context(codes=()),
+        )
+
+        self.assertEqual(result.personalized.outcome.status, OutcomeStatus.ADVISORY)
+        self.assertIn("조건부", result.display_answer)
+        self.assertIn(limitation, result.personalized.outcome.limitations)
+        self.assertEqual(result.display_answer.count(limitation), 1)
+
     def test_academic_and_live_information_contrast_keeps_grounding_limitation(self):
         from tests.test_evidence_chat import _answerable_response
 
@@ -652,6 +780,60 @@ class AgentOrchestratorTests(unittest.TestCase):
         )
         self.assertIn("CDA0008", base.questions[0])
         self.assertIn("학수번호", base.questions[0])
+
+    def test_live_information_contrast_inherits_only_verified_recent_course(self):
+        plan = _Plan(
+            "교육과정 정보와 실시간 정보만 구분해 줘.",
+            (),
+            (ToolName.QUERY_CURRICULUM,),
+            "교육과정과 실시간 정보",
+        )
+        service = AgenticCurriculumChatService(
+            FakePersonalizedService(), FakeLLM([])
+        )
+
+        inherited = service._inherit_dialogue_scope(
+            "교육과정 정보와 실시간 정보만 구분해 줘.",
+            context(codes=("CDA0008",)),
+            plan,
+        )
+
+        self.assertEqual(inherited.course_codes, ("CDA0008",))
+        self.assertIn("CDA0008", inherited.question)
+        self.assertIn(ToolName.RESOLVE_COURSE, inherited.tools)
+
+    def test_general_rule_without_transcript_inherits_requirement_family(self):
+        plan = _Plan(
+            "성적표 없이 가능한 일반 기준만 알려 줘.",
+            (),
+            (ToolName.QUERY_CURRICULUM,),
+            "일반 기준",
+        )
+        conversation = ConversationContext.from_payload(
+            {
+                "version": 1,
+                "conversation_id": "conversation:test-1234",
+                "turn_id": "turn:test-5678",
+                "recent_messages": [
+                    {
+                        "turn_id": "turn:previous-1",
+                        "role": "user",
+                        "content": "내 성적표로 졸업 가능 여부를 판정해 줘.",
+                        "created_at": "2026-08-29T00:00:00Z",
+                    }
+                ],
+                "recent_course_codes": [],
+            }
+        )
+        service = AgenticCurriculumChatService(
+            FakePersonalizedService(), FakeLLM([])
+        )
+
+        inherited = service._inherit_dialogue_scope(
+            "성적표 없이 가능한 일반 기준만 알려 줘.", conversation, plan
+        )
+
+        self.assertIn("대화에서 생략된 적용 범위: 졸업", inherited.question)
 
     def test_subquestions_are_bounded_deduplicated_and_topic_constrained(self):
         prior = ConversationContext.from_payload(
