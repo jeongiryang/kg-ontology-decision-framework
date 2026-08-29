@@ -181,7 +181,7 @@ class _ApprovedCompositePayload:
                 ),
             )
         )
-        if len(citations) > 20:
+        if len(citations) > 250:
             raise GroundingError("ANSWER_TOO_MANY_CITATIONS", "composite citation limit exceeded")
         answer_text = "\n\n".join(
             dict.fromkeys(response.answer_text for response in responses)
@@ -203,7 +203,7 @@ class _ApprovedCompositePayload:
 
 
 class CitationRenderer:
-    def __init__(self, *, max_citations: int = 20, max_source_chars: int = 4_000):
+    def __init__(self, *, max_citations: int = 250, max_source_chars: int = 4_000):
         self.max_citations = max_citations
         self.max_source_chars = max_source_chars
 

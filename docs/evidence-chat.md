@@ -112,9 +112,11 @@ sealed 응답과 별도로 `profile_update version=1`과 `outcome version=1` SSE
 
 다중 턴에서는 브라우저가 `ConversationContext version=1`을 함께 보내고 서버가
 `agent_trace version=1`, `conversation_update version=1`을 별도 envelope로 반환한다.
-프로필은 기존 `localStorage`, 채팅방과 메시지는 schema version 2 `IndexedDB`에만
+프로필은 기존 `localStorage`, 채팅방과 메시지는 schema version 3 `IndexedDB`에만
 저장된다. 각 assistant message의 presentation snapshot이 그 turn의 Citation, progress,
-inspection과 Agent trace를 함께 보존하므로 다음 답변이 이전 근거를 덮어쓰지 않는다.
+inspection, Agent trace와 요청 충족도를 함께 보존하므로 다음 답변이 이전 근거를
+덮어쓰지 않는다. 미완료 목록·계산·판단 요청은 conversation의 `pending_request`에 남아
+짧은 재요청에서 복원되고, profile update만으로 답변 작업을 완료 처리하지 않는다.
 새 채팅은 이전 채팅의 주제를 사용하지 않지만 프로필은 유지된다. 서버는 채팅 내용을
 영구 저장하지 않으며 이전 assistant 문장을 학교 규정 Evidence로 사용하지 않는다.
 도구·문맥·자연어 초안 검증의 상세 계약은
@@ -155,7 +157,14 @@ QUESTION_ANALYSIS → SCHEMA_SELECTION → CYPHER_GENERATION
 
 실행하지 않은 단계를 완료로 만들지 않으며 가짜 퍼센트, hidden chain-of-thought, system prompt와 모델 원문은 보내지 않는다. 화면은 callback이 실제 도착한 단계 행만 그때 생성해 진행 중·완료·실패로 누적하고, 아직 발생하지 않은 미래 단계를 `WAITING`으로 선생성하지 않는다. 완료된 행과 서버가 보낸 실제 소요시간은 답변 화면의 `처리 과정 보기`에도 유지한다. 연결을 취소하면 이미 완료된 행은 유지하고 당시 진행 중이던 행만 취소 상태로 표시한다. 브라우저에 해당 단계의 신뢰 가능한 시작 시각이 있으면 취소 시점까지 계산하고, 없으면 가짜 `0ms` 대신 시간을 생략한다. 안전 파이프라인이 후보를 재생성할 때는 실패 오류 코드와 `안전한 질의를 다시 생성하는 중` 이벤트를 남기되 실패 후보 원문은 보내지 않는다.
 
-`POST /api/ask`는 `progress`, 선택적 `clarification_options`, 선택적 `inspection_update`, `result`, `error` SSE 이벤트를 보낸 뒤 스트림을 종료한다. `result.response`는 승인된 8개 wire 필드이고 `result.presentation`은 상태 라벨, PDF page group, 공개 PDF 상태와 선택적 debug metadata다. `inspection_update`는 단계별 allowlist 요약만 담으며 실제 확정 시점에 `result`보다 먼저 전송될 수 있다.
+`POST /api/ask`는 `progress`, 선택적 `clarification_options`, 선택적
+`inspection_update`, `profile_update`, `outcome`, `request_fulfillment`, `result`, `error`
+SSE 이벤트를 보낸 뒤 스트림을 종료한다. `result.response`는 승인된 8개 wire 필드이고
+`result.presentation`은 상태 라벨, PDF page group, 공개 PDF 상태와 선택적 debug
+metadata다. `request_fulfillment version=1`은 요청 항목별 결과와 전체
+`COMPLETE/PARTIAL/UNRESOLVED` 상태만 전달하며 응답 사실을 재구성하지 않는다.
+`inspection_update`는 단계별 allowlist 요약만 담으며 실제 확정 시점에 `result`보다 먼저
+전송될 수 있다.
 
 각 실제 단계 행은 기본적으로 접힌 disclosure button이다. 키보드로 열고 닫을 수 있으며
 `aria-expanded`와 `aria-controls`가 연결된다. 완료된 행은 해당 assistant message에도

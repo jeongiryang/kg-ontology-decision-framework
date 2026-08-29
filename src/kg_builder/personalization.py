@@ -306,7 +306,8 @@ class ProfileExtractor:
         # Explicit correction wins over the earlier value in the same utterance.
         correction = re.search(
             r"(총|전체|교양|전공|일반선택|자유선택|일선)\s*(?:학점)?(?:은|이|는)?\s*"
-            r"(\d+(?:\.\d+)?)\s*(?:가|이)?\s*아니라\s*(\d+(?:\.\d+)?)\s*학점",
+            r"(\d+(?:\.\d+)?)\s*(?:학점)?\s*(?:가|이)?\s*아니라\s*"
+            r"(\d+(?:\.\d+)?)\s*학점",
             question,
         )
         corrected_span = correction.span() if correction else None

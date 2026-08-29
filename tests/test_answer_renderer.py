@@ -179,7 +179,7 @@ class StructuredClaimGroundingTests(unittest.TestCase):
         values = {claim.field: claim.value for claim in claims}
         self.assertEqual(values["fact_count"], 2)
         self.assertEqual(values["credits_sum"], 6)
-        self.assertIn("총 2과목이며 합계 6학점", answer.answer_text)
+        self.assertIn("총 2과목, 6학점", answer.answer_text)
         self.assertNotIn("총 6과목", answer.answer_text)
         swapped = tuple(
             replace(claim, value=6 if claim.field == "fact_count" else 2)

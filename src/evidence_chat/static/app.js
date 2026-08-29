@@ -62,6 +62,7 @@ let lastResult = null;
 let clarificationPresentation = null;
 let latestOutcome = null;
 let latestConversationUpdate = null;
+let latestRequestFulfillment = null;
 let agentTraceEvents = [];
 let currentConversationId = null;
 let activeTurnId = null;
@@ -88,7 +89,7 @@ const span = (className, text) => {
 };
 
 const CONVERSATION_DB = "evidence-chat-conversations";
-const CONVERSATION_DB_VERSION = 2;
+const CONVERSATION_DB_VERSION = 3;
 const CONVERSATION_STORE = "conversations";
 const MESSAGE_STORE = "messages";
 const CURRENT_CONVERSATION_KEY = "evidence-chat-current-conversation-v1";
@@ -141,7 +142,7 @@ async function listConversations() {
   const rows = await dbRequest(CONVERSATION_STORE, "readonly", (store) => store.getAll());
   return Array.isArray(rows)
     ? rows
-      .filter((item) => item && [1, 2].includes(item.version) &&
+      .filter((item) => item && [1, 2, 3].includes(item.version) &&
         typeof item.conversation_id === "string")
       .sort((left, right) => String(right.updated_at).localeCompare(String(left.updated_at)))
     : [];
@@ -153,7 +154,7 @@ async function loadConversationMessages(conversationId) {
   );
   return Array.isArray(rows)
     ? rows
-      .filter((item) => item && [1, 2].includes(item.version) &&
+      .filter((item) => item && [1, 2, 3].includes(item.version) &&
         ["user", "assistant"].includes(item.role) && typeof item.content === "string")
       .sort((left, right) => String(left.created_at).localeCompare(String(right.created_at)))
     : [];
@@ -180,6 +181,7 @@ async function createConversation() {
     recent_course_codes: [],
     recent_evidence_ids: [],
     pending_clarification: null,
+    pending_request: null,
   };
   await saveConversation(conversation);
   currentConversationId = conversation.conversation_id;
@@ -195,7 +197,7 @@ async function ensureConversation() {
   }
   if (currentConversationId) {
     const found = await dbRequest(CONVERSATION_STORE, "readonly", (store) => store.get(currentConversationId));
-    if (found && [1, 2].includes(found.version)) return found;
+    if (found && [1, 2, 3].includes(found.version)) return found;
   }
   return createConversation();
 }
@@ -263,11 +265,29 @@ function renderConversationMessage(message) {
   block.dataset.turnId = message.turn_id || "";
   const role = document.createElement("strong");
   role.className = "message-role";
-  role.textContent = message.role === "user" ? "나" : "학사 챗봇";
+  role.textContent = message.role === "user" ? "나" : "답변";
   const content = document.createElement("p");
   content.className = "message-content";
   content.textContent = message.content;
   block.append(role, content);
+  if (message.role === "assistant" && message.content.length > 1800) {
+    const contentId = opaqueId("answer-content");
+    content.id = contentId;
+    content.classList.add("is-collapsible", "is-collapsed");
+    const toggle = document.createElement("button");
+    toggle.type = "button";
+    toggle.className = "message-content-toggle";
+    toggle.setAttribute("aria-controls", contentId);
+    toggle.setAttribute("aria-expanded", "false");
+    toggle.textContent = "전체 답변 펼치기";
+    toggle.addEventListener("click", () => {
+      const expanded = toggle.getAttribute("aria-expanded") === "true";
+      toggle.setAttribute("aria-expanded", String(!expanded));
+      toggle.textContent = expanded ? "전체 답변 펼치기" : "답변 접기";
+      content.classList.toggle("is-collapsed", expanded);
+    });
+    block.append(toggle);
+  }
   if (message.role === "assistant") renderAssistantDetails(block, message);
   return block;
 }
@@ -282,14 +302,24 @@ function renderAssistantDetails(block, message) {
   const response = result && result.response;
   const presentation = result && result.presentation;
   const retryable = Boolean(message.error || (response && response.status === "SAFE_FAILURE"));
-  if (message.response_status) {
+  const fulfillmentStatus = snapshot.request_fulfillment &&
+    snapshot.request_fulfillment.version === 1
+    ? snapshot.request_fulfillment.status : null;
+  const statusLabel = fulfillmentStatus === "PARTIAL" ? "일부 완료"
+    : fulfillmentStatus === "UNRESOLVED" ? "확인 필요"
+    : RESPONSE_STATUS_LABELS[message.response_status] || message.response_status;
+  if (message.response_status || fulfillmentStatus) {
     const badge = document.createElement("span");
     badge.className = "badge turn-status";
-    badge.dataset.state = message.response_status;
-    badge.textContent = RESPONSE_STATUS_LABELS[message.response_status] || message.response_status;
+    badge.dataset.state = fulfillmentStatus === "PARTIAL" || fulfillmentStatus === "UNRESOLVED"
+      ? "INSUFFICIENT_EVIDENCE" : message.response_status;
+    badge.textContent = statusLabel;
     block.insertBefore(badge, block.querySelector(".message-content"));
   }
-  if (response && response.clarification) {
+  const normalizedMessage = String(message.content || "").replace(/\s+/g, " ").trim();
+  const normalizedClarification = String(response && response.clarification || "")
+    .replace(/\s+/g, " ").trim();
+  if (normalizedClarification && normalizedClarification !== normalizedMessage) {
     const clarification = document.createElement("p");
     clarification.className = "message-clarification";
     clarification.textContent = response.clarification;
@@ -322,7 +352,7 @@ function renderAssistantDetails(block, message) {
     }
   }
   if (Array.isArray(snapshot.agent_trace) && snapshot.agent_trace.length) {
-    tools.append(turnDisclosure("Agent 도구 기록", (body) =>
+    tools.append(turnDisclosure("조회 기록", (body) =>
       renderAgentTrace(body, snapshot.agent_trace)));
   }
   if (tools.childElementCount) block.append(tools);
@@ -459,6 +489,7 @@ async function beginConversationTurn(question) {
     recent_course_codes: conversation.recent_course_codes || [],
     recent_evidence_ids: conversation.recent_evidence_ids || [],
     pending_clarification: conversation.pending_clarification || null,
+    pending_request: conversation.pending_request || null,
   };
 }
 
@@ -476,6 +507,7 @@ function currentTurnSnapshot(result = lastResult, error = null) {
     timeline_events: timelineEvents,
     inspection_updates: [...inspectionUpdates.values()],
     agent_trace: agentTraceEvents,
+    request_fulfillment: latestRequestFulfillment,
     error,
   };
 }
@@ -491,6 +523,7 @@ async function finishConversationTurn(update, snapshot = currentTurnSnapshot()) 
   conversation.recent_evidence_ids = Array.isArray(update.evidence_ids)
     ? update.evidence_ids : [];
   conversation.pending_clarification = update.pending_clarification || null;
+  conversation.pending_request = update.pending_request || null;
   conversation.version = CONVERSATION_DB_VERSION;
   await saveConversation(conversation);
   await saveConversationMessage({
@@ -850,7 +883,7 @@ function mountLiveAssistant() {
   block.dataset.turnId = activeTurnId || "";
   const role = document.createElement("strong");
   role.className = "message-role";
-  role.textContent = "학사 챗봇";
+  role.textContent = "답변 준비 중";
   const content = document.createElement("p");
   content.className = "message-content live-answer";
   content.textContent = "질문을 분석하고 있습니다…";
@@ -886,6 +919,7 @@ async function ask(question, displayQuestion = question) {
   clarificationPresentation = null;
   latestOutcome = null;
   latestConversationUpdate = null;
+  latestRequestFulfillment = null;
   agentTraceEvents = [];
   liveAssistantNode = null;
 
@@ -939,8 +973,13 @@ async function ask(question, displayQuestion = question) {
           clarificationPresentation = payload;
         } else if (payload.type === "profile_update" && payload.version === 1) {
           saveProfile(payload.profile);
+          if (Array.isArray(payload.changed_fields) && payload.changed_fields.length) {
+            showNotice(el.profileNotice, "입력한 학적 정보를 프로필에 반영했습니다.", false);
+          }
         } else if (payload.type === "outcome" && payload.version === 1) {
           latestOutcome = payload;
+        } else if (payload.type === "request_fulfillment" && payload.version === 1) {
+          latestRequestFulfillment = payload;
         } else if (payload.type === "conversation_update" && payload.version === 1) {
           latestConversationUpdate = payload;
         } else if (payload.type === "agent_trace" && payload.version === 1) {
@@ -993,6 +1032,7 @@ async function ask(question, displayQuestion = question) {
           recent_course_codes: [],
           evidence_ids: response.used_evidence_ids || [],
           pending_clarification: null,
+          pending_request: null,
           display_answer: response.answer_text || "답변을 확인하지 못했습니다.",
           response_status: response.status || "SAFE_FAILURE",
           citation_ids: [],

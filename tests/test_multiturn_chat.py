@@ -181,13 +181,23 @@ class IndexedDbPresentationTests(unittest.TestCase):
     def test_versioned_indexeddb_rooms_and_safe_dom_contract(self):
         script = Path("src/evidence_chat/static/app.js").read_text(encoding="utf-8")
         markup = Path("src/evidence_chat/static/index.html").read_text(encoding="utf-8")
+        styles = Path("src/evidence_chat/static/app.css").read_text(encoding="utf-8")
         self.assertIn('indexedDB.open(CONVERSATION_DB, CONVERSATION_DB_VERSION)', script)
-        self.assertIn('const CONVERSATION_DB_VERSION = 2', script)
+        self.assertIn('const CONVERSATION_DB_VERSION = 3', script)
+        self.assertGreaterEqual(script.count('[1, 2, 3].includes'), 3)
         self.assertIn('createObjectStore(CONVERSATION_STORE', script)
         self.assertIn('createObjectStore(MESSAGE_STORE', script)
         self.assertIn('recent_messages: recent', script)
         self.assertIn('localStorage.setItem(CURRENT_CONVERSATION_KEY', script)
         self.assertIn('presentation_snapshot', script)
+        self.assertIn('pending_request', script)
+        self.assertIn('payload.type === "request_fulfillment"', script)
+        self.assertIn('fulfillmentStatus === "PARTIAL" ? "일부 완료"', script)
+        self.assertIn('fulfillmentStatus === "UNRESOLVED" ? "확인 필요"', script)
+        self.assertIn("normalizedClarification !== normalizedMessage", script)
+        self.assertIn('"조회 기록"', script)
+        self.assertIn('toggle.textContent = "전체 답변 펼치기"', script)
+        self.assertIn('toggle.setAttribute("aria-controls", contentId)', script)
         self.assertIn('scroll_top', script)
         self.assertIn('renderTurnChoices', script)
         self.assertIn('response.status === "SAFE_FAILURE"', script)
@@ -199,6 +209,8 @@ class IndexedDbPresentationTests(unittest.TestCase):
         self.assertIn('id="ask-form" class="chat-composer"', markup)
         self.assertNotIn('id="answer-again"', markup)
         self.assertNotIn('id="screen-progress"', markup)
+        self.assertIn("white-space: pre-wrap", styles)
+        self.assertIn("scrollbar-width: none", styles)
 
 
 if __name__ == "__main__":

@@ -77,6 +77,9 @@ BASE_FILTER_BINDINGS: dict[str, FilterBinding] = {
     "rule_id": FilterBinding("Rule", "rule_id"),
     "rule_ids": FilterBinding("Rule", "rule_id", "PROPERTY_IN_PARAMETER"),
     "area_id": FilterBinding("EducationArea", "area_id"),
+    "area_ids": FilterBinding(
+        "EducationArea", "area_id", "PROPERTY_IN_PARAMETER"
+    ),
     "major_type": FilterBinding("ApplicabilityScope", "major_type"),
     "admission_type": FilterBinding("ApplicabilityScope", "admission_type"),
     # 확장 family 전용 필터
@@ -580,6 +583,8 @@ BASE_MODE_FILTERS: dict[SelectionMode, frozenset[str]] = {
         {
             "academic_year",
             "department_id",
+            "area_id",
+            "area_ids",
             "course_codes",
             "completion_type",
             "grade_year",

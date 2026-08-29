@@ -109,6 +109,7 @@ INTERNAL_CONTEXT_KEYS = (
     "course_codes_by_name",
     "course_identities",
     "rule_match_text",
+    "course_education_areas",
 )
 # 질문 낱말이 규칙 설명과 겹치는지 볼 때 인정하는 최소 길이. 조사가 붙은 낱말은
 # 앞에서부터 잘라 가며 맞춰 본다.
@@ -217,7 +218,7 @@ _REQUESTED_FIELD_PATTERNS: Mapping[str, re.Pattern[str]] = {
 }
 _COURSE_FIELD_HINTS: Mapping[str, re.Pattern[str]] = {
     "course_code": re.compile(r"(?:과목\s*코드|학수번호)"),
-    "grade_year": re.compile(r"(?:학년|권장\s*시기|언제\s*(?:들|듣|개설|수강|편성|배치))"),
+    "grade_year": re.compile(r"(?:학년(?!도)|권장\s*시기|언제\s*(?:들|듣|개설|수강|편성|배치))"),
     "semester": re.compile(r"(?:학기|개설\s*시기|언제\s*(?:들|듣|개설|수강|편성|배치))"),
     "credits": re.compile(
         r"(?:몇\s*학점|\d+\s*학점|학점(?:은|이|을|를|과|와|도)?|0학점)"
@@ -234,6 +235,14 @@ _COURSE_LIST_HINT = re.compile(
     r"과목(?:은|이|을|들|\s*목록)|어떤\s*과목|정확히\s*어떤|중\s*어떤|"
     r"과목\s*중|지정된\s*과목|빠뜨|순서|둘\s*다|"
     r"(?:중|가운데).{0,12}(?:하나|아무거나))"
+)
+_COURSE_LIST_REQUEST = re.compile(
+    r"(?:(?:모든|전체|전부|모두|다)[ \t]*(?:과목|강의|수업|과목명)|"
+    r"(?:과목|강의|수업|과목명).{0,30}(?:모든|전체|전부|모두|다|빠짐없이|몽땅)"
+    r"[ \t]*(?:보여|알려|출력|정리|목록)|"
+    r"(?:과목|강의|수업|과목명)(?:은|는|이|가|을|를|들)?[ \t]*(?:목록|명단)|"
+    r"(?:과목|강의|수업|과목명).{0,12}(?:보여|알려|출력|정리)|"
+    r"(?:과목|강의|수업)(?:은|는|이|가|을|를|들)?(?:명)?[ \t]*(?:한[ \t]*번에[ \t]*)?정리)"
 )
 _GENERAL_RULE_HINT = re.compile(
     r"(?:이수요건|요건|기준|최소|적어도|최대|초과|면제|의무|대체|균형교양|졸업\s*학점|잔여\s*학점|"
@@ -275,6 +284,13 @@ def planner_response_schema(catalog: SchemaCatalog) -> dict[str, Any]:
         "major_type": {"type": "string", "enum": sorted(catalog.controlled_vocabularies["major_type"])},
         "admission_type": {"type": "string", "enum": sorted(catalog.controlled_vocabularies["admission_type"])},
         "area_id": {"type": "string"},
+        "area_ids": {
+            "type": "array",
+            "items": {"type": "string"},
+            "minItems": 1,
+            "maxItems": 20,
+            "uniqueItems": True,
+        },
         # 확장 fact family 전용 필터
         "credit_category": {"type": "string"},
         "source_was_blank": {"type": "boolean"},
@@ -461,6 +477,54 @@ def build_planner_context(
             }
         )
     }
+    course_area_ids = {
+        relationship["to_id"]
+        for relationship in data["relationships"]
+        if relationship["type"] == "IN_AREA"
+        and "CourseOffering" in nodes_by_id.get(relationship["from_id"], {}).get(
+            "labels", ()
+        )
+    }
+    area_nodes = {
+        node["id"]: node
+        for node in data["nodes"]
+        if "EducationArea" in node["labels"]
+        and isinstance(node["properties"].get("area_id"), str)
+        and isinstance(node["properties"].get("name_ko"), str)
+    }
+    area_children: dict[str, set[str]] = {}
+    for relationship in data["relationships"]:
+        if relationship["type"] == "PARENT_OF" and relationship["from_id"] in area_nodes:
+            area_children.setdefault(relationship["from_id"], set()).add(
+                relationship["to_id"]
+            )
+
+    def offering_area_descendants(area_node_id: str) -> tuple[str, ...]:
+        pending = [area_node_id]
+        visited: set[str] = set()
+        found: set[str] = set()
+        while pending:
+            current = pending.pop()
+            if current in visited:
+                continue
+            visited.add(current)
+            if current in course_area_ids:
+                found.add(area_nodes[current]["properties"]["area_id"])
+            pending.extend(area_children.get(current, ()))
+        return tuple(sorted(found))
+
+    course_education_areas = []
+    for node_id, node in area_nodes.items():
+        descendants = offering_area_descendants(node_id)
+        if descendants:
+            course_education_areas.append(
+                {
+                    "area_id": node["properties"]["area_id"],
+                    "name_ko": node["properties"]["name_ko"],
+                    "offering_area_ids": list(descendants),
+                }
+            )
+    course_education_areas.sort(key=lambda item: (item["name_ko"], item["area_id"]))
     # 질문에 원문 표기 그대로 나올 수 있으나 프롬프트에 싣기에는 수가 많은 값.
     # 계획 프롬프트에 넣지 않고, 질문 문자열에 그대로 있을 때만 필터로 채택한다.
     question_matchable_values = {
@@ -550,6 +614,7 @@ def build_planner_context(
         "course_identities": sorted(
             course_identities, key=lambda item: (item["course_code"], item["course_id"])
         ),
+        "course_education_areas": course_education_areas,
         "filterable_values": filterable_values,
         "departments": sorted(departments, key=lambda item: item["department_id"]),
         "verified_rule_identifiers": sorted(rule_ids, key=lambda item: item["rule_id"]),
@@ -794,6 +859,11 @@ class LocalQueryPlanner:
                 value, label = item.get("value"), item.get("description_ko")
                 if isinstance(value, str) and isinstance(label, str) and label:
                     terms.setdefault(name, {})[label] = value
+                    # Common academic abbreviations are derived from the declared
+                    # Korean label (전공필수 -> 전필, 전공선택 -> 전선).  The code does
+                    # not maintain a second answer vocabulary or bind a question.
+                    if label.startswith("전공") and len(label) > 2:
+                        terms[name]["전" + label[2]] = value
         return terms
 
     def _complete_scope(
@@ -1797,8 +1867,16 @@ class LocalQueryPlanner:
 
         if (
             re.search(r"(?:영어|대학영어)", question)
-            and re.search(r"(?:시험|공인)", question)
-            and re.search(r"(?:전부|전체|모두|각각|시험별)", question)
+            and re.search(r"(?:기준|요건|점수)", question)
+            and (
+                re.search(r"(?:시험|공인)", question)
+                and re.search(r"(?:전부|전체|모두|각각|시험별)", question)
+                or not re.search(
+                    r"(?:TOEIC|토익|TOEFL|토플|TEPS|텝스|OPIc|오픽|G-?TELP|FLEX)",
+                    question,
+                    re.IGNORECASE,
+                )
+            )
         ):
             # This selects the registered atomic threshold family.  Values remain in
             # Verified Rule rows and are never copied from the question or an answer
@@ -1949,6 +2027,9 @@ class LocalQueryPlanner:
                 },
                 self.catalog,
             )
+        course_list = self._deterministic_course_list_plan(question)
+        if course_list is not None:
+            return course_list
         zero_credit_required = bool(
             re.search(
                 r"(?:0\s*학점.{0,20}(?:전공\s*필수|필수\s*전공)|"
@@ -2011,6 +2092,79 @@ class LocalQueryPlanner:
         if rule is not None:
             return rule
         return None
+
+    def _deterministic_course_list_plan(self, question: str) -> QueryPlan | None:
+        """Route general course-list requests through the verified offering family.
+
+        The request shape is linguistic, while department, area identifiers and
+        controlled-vocabulary values all come from the loaded schema/bundle.  This
+        keeps ``all/list`` semantics general and avoids a question or answer table.
+        """
+
+        if not _COURSE_LIST_REQUEST.search(question):
+            return None
+        if self.course_resolver.find_mentions(question):
+            return None
+        default = self.context.get("default_scope") or {}
+        filters: dict[str, Any] = {"academic_year": default.get("academic_year")}
+
+        matched_area: Mapping[str, Any] | None = None
+        areas = self.context.get("course_education_areas")
+        if isinstance(areas, list):
+            candidates = [
+                item
+                for item in areas
+                if isinstance(item, Mapping)
+                and isinstance(item.get("name_ko"), str)
+                and item["name_ko"] in question
+                and isinstance(item.get("area_id"), str)
+            ]
+            if candidates:
+                matched_area = max(candidates, key=lambda item: len(item["name_ko"]))
+        if matched_area is not None:
+            descendants = matched_area.get("offering_area_ids")
+            if isinstance(descendants, list) and len(descendants) > 1:
+                filters["area_ids"] = list(descendants)
+            else:
+                filters["area_id"] = matched_area["area_id"]
+        else:
+            filters["department_id"] = default.get("department_id")
+
+        filters = self._adopt_vocabulary_terms(
+            question,
+            filters,
+            allowed_filters_for_mode(SelectionMode.COURSE_LIST),
+        )
+        completion_terms = self._vocabulary_terms().get("completion_type", {})
+        mentioned_completion_types = {
+            value for term, value in completion_terms.items() if term in question
+        }
+        if len(mentioned_completion_types) > 1:
+            filters.pop("completion_type", None)
+        grade_match = re.search(r"(?<!\d)([1-6])\s*학년", question)
+        semester_match = re.search(r"(?<!\d)([12])\s*학기", question)
+        if grade_match:
+            filters["grade_year"] = int(grade_match.group(1))
+        if semester_match:
+            filters["semester"] = (
+                "FIRST" if semester_match.group(1) == "1" else "SECOND"
+            )
+
+        requested = ["name_ko", "completion_type"]
+        for field, pattern in _COURSE_FIELD_HINTS.items():
+            if pattern.search(question) and field not in requested:
+                requested.append(field)
+        return QueryPlan.from_dict(
+            {
+                "question": question,
+                "intent": "COURSE_LIST",
+                "filters": filters,
+                "requested_fields": requested,
+                "evidence_required": True,
+                "selection_mode": SelectionMode.COURSE_LIST.value,
+            },
+            self.catalog,
+        )
 
     def plan(
         self, question: str, *, resolved: Mapping[str, Any] | None = None

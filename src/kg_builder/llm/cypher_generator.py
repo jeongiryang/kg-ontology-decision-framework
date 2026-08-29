@@ -55,6 +55,7 @@ def build_syntax_scaffold(plan: QueryPlan, schema_subset: Mapping[str, Any]) -> 
             "Department": "d",
             "CourseOffering": "o",
             "Course": "c",
+            "EducationArea": "a",
             "Evidence": "e",
         }
         matches = []
@@ -70,6 +71,8 @@ def build_syntax_scaffold(plan: QueryPlan, schema_subset: Mapping[str, Any]) -> 
                 "MATCH (cv:CurriculumVersion)-[:HAS_OFFERING]->"
                 "(o:CourseOffering)-[:OF_COURSE]->(c:Course)"
             )
+        if {"area_id", "area_ids"}.intersection(plan.filters):
+            matches.append("MATCH (o)-[:IN_AREA]->(a:EducationArea)")
         matches.append("MATCH (o)-[:SUPPORTED_BY]->(e:Evidence)")
         fact_alias, fact_id = "o", "offering_id"
     elif family == "Rule":

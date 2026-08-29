@@ -2037,6 +2037,11 @@
         "operator": "EQUALS",
         "property": "area_id"
       },
+      "area_ids": {
+        "label": "EducationArea",
+        "operator": "PROPERTY_IN_PARAMETER",
+        "property": "area_id"
+      },
       "competency_id": {
         "label": "Competency",
         "operator": "EQUALS",

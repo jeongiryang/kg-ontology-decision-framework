@@ -1108,6 +1108,10 @@ async def ask(request: Request) -> Response:
                         personalized = agent_result.personalized
                         response = personalized.response
                         loop.call_soon_threadsafe(
+                            queue.put_nowait,
+                            agent_result.request_fulfillment_update(),
+                        )
+                        loop.call_soon_threadsafe(
                             queue.put_nowait, agent_result.conversation_update()
                         )
                         loop.call_soon_threadsafe(

@@ -678,8 +678,30 @@ kbd {
 .conversation-message.is-assistant { margin-right: auto; background: var(--panel); }
 .conversation-message.is-pending { border-color: var(--accent); }
 .message-role { margin-bottom: 2px; }
-.message-content { line-height: 1.65; }
-.turn-status { display: inline-block; margin: 0 0 7px; }
+.message-content {
+  margin: 0;
+  line-height: 1.65;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.message-content.is-collapsible.is-collapsed {
+  max-height: 28rem;
+  overflow: hidden;
+  mask-image: linear-gradient(to bottom, #000 82%, transparent);
+}
+.message-content-toggle {
+  justify-self: start;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 5px 9px;
+  background: var(--panel-2);
+  color: var(--accent);
+  font: inherit;
+  font-size: .75rem;
+  cursor: pointer;
+}
+.message-content-toggle:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.turn-status { display: inline-block; margin: 0 0 7px; opacity: .78; font-size: .68rem; }
 .message-clarification { margin-top: 8px; color: var(--warn); }
 .message-tools { display: flex; flex-wrap: wrap; gap: 7px; margin-top: 11px; }
 .turn-disclosure {
@@ -705,8 +727,8 @@ kbd {
   box-shadow: var(--shadow); font-size: .78rem;
 }
 .chat-shell > .examples {
-  margin: 0; padding: 7px 14px 5px; justify-content: flex-start; overflow-x: auto;
-  flex-wrap: nowrap; border-top: 1px solid var(--line); background: var(--panel);
+  margin: 0; padding: 7px 14px 5px; justify-content: flex-start; overflow: hidden;
+  flex-wrap: wrap; border-top: 1px solid var(--line); background: var(--panel);
 }
 .chat-shell > .examples button { flex: none; padding: 5px 10px; font-size: .74rem; }
 .chat-composer {
@@ -728,11 +750,15 @@ kbd {
   .chat-intro .ask-sub { display: none; }
   .conversation-transcript { padding: 14px 10px; }
   .conversation-message { max-width: 94%; }
+  .conversation-message.is-assistant { width: 100%; max-width: 100%; }
   .conversation-message.is-user { max-width: 86%; }
   .message-tools { display: grid; grid-template-columns: 1fr; }
   .turn-disclosure[open], .turn-disclosure { width: 100%; }
   .page-body { grid-template-columns: 1fr; }
-  .chat-shell > .examples { padding-inline: 10px; }
+  .chat-shell > .examples {
+    padding-inline: 10px; flex-wrap: nowrap; overflow-x: auto; scrollbar-width: none;
+  }
+  .chat-shell > .examples::-webkit-scrollbar { display: none; }
   .chat-composer { padding: 6px 9px 9px; }
   .composer-meta { align-items: flex-start; }
   .composer-meta .hint { font-size: .68rem; }

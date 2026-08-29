@@ -86,6 +86,19 @@ class UserProfileTests(unittest.TestCase):
         self.assertEqual(corrected.profile.credits_by_category["major"], 45)
         self.assertEqual(corrected.conflicts, ())
 
+    def test_credit_correction_replaces_existing_value_and_accepts_repeated_unit(self):
+        current = self.extractor.extract(
+            "교양 30학점, 전공 42학점, 일반선택 12학점이야.", UserProfile()
+        ).profile
+        corrected = self.extractor.extract(
+            "전공은 42학점이 아니라 45학점이야. 다시 계산해줘.", current
+        )
+        self.assertEqual(
+            corrected.profile.credits_by_category,
+            {"general": 30.0, "major": 45.0, "free_elective": 12.0},
+        )
+        self.assertEqual(corrected.conflicts, ())
+
     def test_toeic_speaking_is_not_also_extracted_as_toeic(self):
         extracted = self.extractor.extract(
             "TOEIC Speaking 130점과 일반 TOEIC 700점이 있어.", UserProfile()
@@ -142,11 +155,59 @@ class UserProfileTests(unittest.TestCase):
         )
         for question in (
             "컴퓨터공학과 전공필수 과목을 보여 줘.",
+            "컴공과 과목의 모든 과목명을 다 출력해 줘.",
+            "2026 컴공 3학년 과목을 한 번에 정리해 줘.",
             "컴공이고 자료구조를 들었어. 더 필요한 필수 과목을 알고 싶어.",
+            "편입생에게도 공통 교양 이수 의무가 있는지 근거로 설명해 줘.",
             "서울대학교 컴퓨터공학과 규정을 검색해 줘.",
         ):
             with self.subTest(question=question):
                 self.assertFalse(service._is_profile_statement_only(question))
+
+    def test_open_next_term_recommendation_asks_for_current_grade_only(self):
+        service = PersonalizedCurriculumChatService(
+            _ResponseService(ChatResponse.unresolved("request:recommendation")),
+            bundle_path=BUNDLE,
+        )
+        question = "컴공과인데 자료구조를 들었어. 다음 학기에 무엇을 듣는 게 좋아?"
+        extraction = self.extractor.extract(question, UserProfile())
+
+        outcome = service._preflight(question, extraction)
+
+        self.assertIsNotNone(outcome)
+        self.assertEqual(outcome.status, OutcomeStatus.NEEDS_USER_INFO)
+        self.assertEqual(outcome.required_user_fields, ("current_grade_year",))
+        self.assertIn("현재 학년", outcome.message)
+
+    def test_verified_course_list_completeness_uses_course_identity_and_evidence(self):
+        service = PersonalizedCurriculumChatService(
+            _ResponseService(ChatResponse.unresolved("request:complete-count")),
+            bundle_path=BUNDLE,
+        )
+        self.assertEqual(
+            service.expected_unique_course_count(
+                {
+                    "academic_year": 2026,
+                    "department_id": "department:cwnu:cse",
+                }
+            ),
+            37,
+        )
+        self.assertEqual(
+            service.expected_unique_course_count(
+                {
+                    "academic_year": 2026,
+                    "area_ids": [
+                        "area:general:balanced:digital-communication",
+                        "area:general:balanced:humanities-arts",
+                        "area:general:balanced:nature-science-technology",
+                        "area:general:balanced:society-culture",
+                    ],
+                }
+            ),
+            189,
+        )
+
     def test_negated_course_is_not_recorded_as_completed(self):
         extracted = self.extractor.extract(
             "운영체제는 듣지 않고 데이터통신을 이수했어.", UserProfile()
@@ -195,7 +256,7 @@ class PersonalizedOutcomeTests(unittest.TestCase):
         )
 
         self.assertIsNotNone(limitation)
-        self.assertIn("직접 VERIFIED 근거", limitation)
+        self.assertIn("직접 근거", limitation)
 
     def test_named_mandatory_rule_answers_generic_credit_substitution_safely(self):
         from tests.test_evidence_chat import _answerable_response
@@ -243,6 +304,31 @@ class PersonalizedOutcomeTests(unittest.TestCase):
         )
 
         self.assertIsNone(limitation)
+
+    def test_next_semester_eligibility_requires_direct_restriction_evidence(self):
+        from tests.test_evidence_chat import _answerable_response
+
+        response = _answerable_response(count=2)
+        service = PersonalizedCurriculumChatService(
+            _ResponseService(response), bundle_path=BUNDLE
+        )
+        for fact_id in response.used_fact_ids:
+            service.nodes[fact_id] = {
+                "id": fact_id,
+                "labels": ["CourseOffering"],
+                "properties": {
+                    "status": "VERIFIED",
+                    "description_ko": "교육과정상 개설 학년과 학기를 확인했다.",
+                },
+            }
+
+        limitation = service._grounding_limitation(
+            "자료구조를 들은 다음 학기에 고급자료구조를 들을 수 있어?",
+            response,
+        )
+
+        self.assertIsNotNone(limitation)
+        self.assertIn("직접 근거", limitation)
 
     def test_elliptical_academic_terms_do_not_fail_scope_preflight(self):
         base = _ResponseService(ChatResponse.not_found("unused"))
@@ -323,7 +409,7 @@ class PersonalizedOutcomeTests(unittest.TestCase):
         result = service.ask("편입생의 전공필수도 면제인가요?")
         self.assertEqual(result.outcome.status, OutcomeStatus.INSUFFICIENT_EVIDENCE)
         self.assertEqual(result.outcome.required_user_fields, ())
-        self.assertIn("VERIFIED 근거", result.outcome.message)
+        self.assertIn("직접 근거", result.outcome.message)
 
     def test_explicit_course_substitution_is_evidence_gap_not_clarification(self):
         base = _ResponseService(
@@ -336,7 +422,7 @@ class PersonalizedOutcomeTests(unittest.TestCase):
 
         self.assertEqual(result.outcome.status, OutcomeStatus.INSUFFICIENT_EVIDENCE)
         self.assertEqual(result.outcome.required_user_fields, ())
-        self.assertIn("대체 인정을 확정할 VERIFIED 근거", result.outcome.message)
+        self.assertIn("대체 인정을 확정할 직접 근거", result.outcome.message)
 
     def test_explicit_other_curriculum_is_out_of_scope_without_query(self):
         base = _ResponseService(ChatResponse.not_found("unused"))
@@ -344,6 +430,14 @@ class PersonalizedOutcomeTests(unittest.TestCase):
         result = service.ask("2025학년도 컴퓨터공학과 기준을 알려줘")
         self.assertEqual(result.outcome.status, OutcomeStatus.OUT_OF_SCOPE)
         self.assertEqual(base.calls, 0)
+
+    def test_data_declared_institution_scope_rejects_another_university(self):
+        base = _ResponseService(ChatResponse.not_found("unused"))
+        service = PersonalizedCurriculumChatService(base, bundle_path=BUNDLE)
+        result = service.ask("서울대학교 컴퓨터공학과 규정을 검색해 줘.")
+        self.assertEqual(result.outcome.status, OutcomeStatus.OUT_OF_SCOPE)
+        self.assertEqual(base.calls, 0)
+        self.assertIn("2026학년도", result.outcome.message)
 
     def test_missing_verified_fact_is_not_relabelled_as_missing_user_data(self):
         base = _ResponseService(ChatResponse.not_found("request"))

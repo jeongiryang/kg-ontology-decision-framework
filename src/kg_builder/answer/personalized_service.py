@@ -46,6 +46,11 @@ _MORE_COURSES = re.compile(
     r"(?:(?:뭐|무엇|어떤|무슨)\s*(?:과목)?(?:을|를)?\s*더|"
     r"더\s*(?:들|채우|이수)|앞으로.{0,16}(?:들|채우|이수))"
 )
+_OPEN_NEXT_TERM_RECOMMENDATION = re.compile(
+    r"(?:다음[ \t]*(?:학기)?에?.{0,16}(?:무엇|뭘|어떤[ \t]*과목).{0,12}"
+    r"(?:듣|수강|좋|추천)|(?:무엇|뭘|어떤[ \t]*과목).{0,12}"
+    r"(?:다음[ \t]*(?:학기)?|듣는[ \t]*게[ \t]*좋))"
+)
 _COURSE_IDENTITY_QUESTION = re.compile(
     r"(?:서로\s*다른\s*과목|같은\s*과목|과목명(?:이|은)?.{0,12}다르|"
     r"표기.{0,12}다르|어떤\s*것으로\s*검색|둘\s*다.{0,12}(?:신청|수강)|"
@@ -110,6 +115,16 @@ class PersonalizedCurriculumChatService:
         self.service = service
         bundle = json.loads(bundle_path.read_text(encoding="utf-8"))
         self.nodes = {node["id"]: node for node in bundle["nodes"]}
+        self.relationships = tuple(bundle["relationships"])
+        self.supported_institution_names = frozenset(
+            alias
+            for node in bundle["nodes"]
+            if "Institution" in node.get("labels", ())
+            for name in (node.get("properties", {}).get("name_ko"),)
+            if isinstance(name, str) and name
+            for alias in (name, re.sub(r"^국립", "", name))
+            if alias
+        )
         self.offering_course_names = {
             relationship["from_id"]: self.nodes.get(relationship["to_id"], {})
             .get("properties", {})
@@ -126,6 +141,93 @@ class PersonalizedCurriculumChatService:
         }
         self.course_resolver = CourseNameResolver.from_bundle(bundle)
         self.extractor = ProfileExtractor(self.course_resolver)
+
+    def expected_unique_course_count(self, filters: Mapping[str, Any]) -> int:
+        """Count the loaded Course identities in one normalized list scope.
+
+        This is a completeness guard over the same Verified bundle, not an answer
+        side channel.  Returned names and facts still come exclusively from the
+        approved Neo4j rows and their direct Evidence.
+        """
+
+        curriculum_by_offering = {
+            relationship["to_id"]: relationship["from_id"]
+            for relationship in self.relationships
+            if relationship["type"] == "HAS_OFFERING"
+        }
+        department_by_curriculum = {
+            relationship["from_id"]: relationship["to_id"]
+            for relationship in self.relationships
+            if relationship["type"] == "FOR_DEPARTMENT"
+        }
+        area_by_offering: dict[str, set[str]] = {}
+        course_by_offering: dict[str, str] = {}
+        evidence_by_fact: dict[str, set[str]] = {}
+        for relationship in self.relationships:
+            if relationship["type"] == "IN_AREA":
+                area_id = self.nodes.get(relationship["to_id"], {}).get(
+                    "properties", {}
+                ).get("area_id")
+                if isinstance(area_id, str):
+                    area_by_offering.setdefault(relationship["from_id"], set()).add(
+                        area_id
+                    )
+            elif relationship["type"] == "OF_COURSE":
+                course_by_offering[relationship["from_id"]] = relationship["to_id"]
+            elif relationship["type"] == "SUPPORTED_BY":
+                evidence_by_fact.setdefault(relationship["from_id"], set()).add(
+                    relationship["to_id"]
+                )
+        found: set[str] = set()
+        for offering_id, curriculum_id in curriculum_by_offering.items():
+            offering = self.nodes.get(offering_id, {}).get("properties", {})
+            curriculum = self.nodes.get(curriculum_id, {}).get("properties", {})
+            department_node_id = department_by_curriculum.get(curriculum_id, "")
+            department = self.nodes.get(department_node_id, {}).get("properties", {})
+            if offering.get("status") != "VERIFIED":
+                continue
+            if not any(
+                self.nodes.get(evidence_id, {})
+                .get("properties", {})
+                .get("verification_status")
+                == "VERIFIED"
+                for evidence_id in evidence_by_fact.get(offering_id, ())
+            ):
+                continue
+            if filters.get("academic_year") is not None and curriculum.get(
+                "academic_year"
+            ) != filters["academic_year"]:
+                continue
+            if filters.get("department_id") is not None:
+                expected_department = filters["department_id"]
+                if expected_department not in {
+                    department_node_id,
+                    department.get("department_id"),
+                }:
+                    continue
+            if filters.get("completion_type") is not None and offering.get(
+                "completion_type"
+            ) != filters["completion_type"]:
+                continue
+            if filters.get("grade_year") is not None and filters["grade_year"] not in (
+                offering.get("grade_year") or ()
+            ):
+                continue
+            if filters.get("semester") is not None and offering.get("semester") != filters[
+                "semester"
+            ]:
+                continue
+            expected_areas = filters.get("area_ids") or (
+                [filters["area_id"]] if filters.get("area_id") else []
+            )
+            if expected_areas and not area_by_offering.get(offering_id, set()).intersection(
+                expected_areas
+            ):
+                continue
+            course_id = course_by_offering.get(offering_id)
+            if course_id:
+                found.add(course_id)
+        return len(found)
 
     def ask(
         self,
@@ -174,8 +276,8 @@ class PersonalizedCurriculumChatService:
             return False
         return not bool(
             re.search(
-                r"(?:알려|보여|검색|찾아|알고[ \t]*싶|원해|궁금|뭐|무엇|어떤|"
-                r"얼마|몇|어떻게|계산|분석|추천|확인|조회|해야|되(?:나|지|나요)|"
+                r"(?:알려|보여|출력|목록|검색|찾아|알고[ \t]*싶|원해|궁금|뭐|무엇|어떤|"
+                r"얼마|몇|어떻게|계산|분석|추천|설명|정리|확인|조회|해야|되(?:나|지|나요)|"
                 r"할까|인가요|맞아|충족|판단|근거와[ \t]*함께)",
                 question,
             )
@@ -203,17 +305,27 @@ class PersonalizedCurriculumChatService:
                 OutcomeStatus.OUT_OF_SCOPE,
                 "현재는 2026학년도 공통 교양과 컴퓨터공학과 교육과정만 확인할 수 있습니다.",
             )
+        mentioned_institutions = set(
+            re.findall(r"[가-힣A-Za-z0-9·]+대학교", question)
+        )
+        if mentioned_institutions and not mentioned_institutions.issubset(
+            self.supported_institution_names
+        ):
+            return DecisionOutcome(
+                OutcomeStatus.OUT_OF_SCOPE,
+                "현재는 2026학년도 공통 교양과 컴퓨터공학과 교육과정만 확인할 수 있습니다.",
+            )
         if re.search(r"(?:재수강|F학점|성적에\s*포함)", question):
             return DecisionOutcome(
                 OutcomeStatus.INSUFFICIENT_EVIDENCE,
-                "현재 PDF와 Verified KG에는 성적·재수강에 따른 개인별 졸업요건 적용 규정이 없습니다.",
+                "현재 확인 가능한 교육과정 자료에는 성적·재수강에 따른 개인별 졸업요건 적용 규정이 없습니다.",
                 limitations=("성적·재수강 적용 규정 근거 없음",),
             )
         if _UNAVAILABLE_ADMINISTRATIVE_RULE.search(question):
             return DecisionOutcome(
                 OutcomeStatus.INSUFFICIENT_EVIDENCE,
                 "질문은 현재 교육과정과 관련 있지만, 휴학·복학·전과에 따른 적용 여부를 "
-                "확정할 VERIFIED 근거가 현재 PDF와 KG에 없습니다. 학사 담당 부서 확인이 "
+                "확정할 직접 근거가 현재 교육과정 자료에 없습니다. 학사 담당 부서 확인이 "
                 "필요합니다.",
                 limitations=("학적 변동에 따른 적용 규정 근거 없음",),
             )
@@ -232,7 +344,7 @@ class PersonalizedCurriculumChatService:
             return DecisionOutcome(
                 OutcomeStatus.INSUFFICIENT_EVIDENCE,
                 "교육과정상 개설 정보는 확인할 수 있지만 실시간 잔여석, 증원과 "
-                "시간표는 현재 PDF와 Verified KG에 없습니다.",
+                "시간표는 현재 확인 가능한 교육과정 자료에 없습니다.",
                 limitations=("실시간 수강신청 정보 없음",),
             )
         if (
@@ -253,6 +365,11 @@ class PersonalizedCurriculumChatService:
                     f"적용 교육과정을 확인하려면 {labels} 정보가 필요합니다. "
                     "확인 가능한 값부터 알려 주세요."
                 )
+            elif _OPEN_NEXT_TERM_RECOMMENDATION.search(question):
+                message = (
+                    f"다음 학기 과목을 조건부로 추천하려면 {labels} 정보가 필요합니다. "
+                    "현재 학년부터 알려 주세요."
+                )
             else:
                 message = (
                     f"개인별 계산에는 {labels} 정보가 필요합니다. "
@@ -272,6 +389,11 @@ class PersonalizedCurriculumChatService:
         # Negated personal-record wording must not trigger the holistic-profile gate.
         if _GENERAL_WITHOUT_PERSONAL_RECORD.search(question):
             return []
+        if (
+            _OPEN_NEXT_TERM_RECOMMENDATION.search(question)
+            and profile.current_grade_year is None
+        ):
+            return ["current_grade_year"]
         if re.search(r"\d+(?:\.\d+)?[ \t]*학점", question) and re.search(
             r"(?:대체|대신|채워|충족|인정|가능|돼|되는)", question
         ):
@@ -433,7 +555,7 @@ class PersonalizedCurriculumChatService:
             return DecisionOutcome(
                 OutcomeStatus.INSUFFICIENT_EVIDENCE,
                 self._insufficient_message(question),
-                limitations=("현재 Verified KG에서 확정 근거를 찾지 못했습니다.",),
+                limitations=("현재 교육과정 자료에서 확정 근거를 찾지 못했습니다.",),
             )
         if response.status is ChatStatus.CLARIFICATION_REQUIRED:
             if re.search(
@@ -443,7 +565,7 @@ class PersonalizedCurriculumChatService:
                 return DecisionOutcome(
                     OutcomeStatus.INSUFFICIENT_EVIDENCE,
                     "과목의 교육과정상 정보는 확인할 수 있지만 실시간 수강신청 가능 여부, "
-                    "잔여석, 증원과 시간표는 현재 PDF와 Verified KG에 없습니다.",
+                    "잔여석, 증원과 시간표는 현재 확인 가능한 교육과정 자료에 없습니다.",
                     limitations=("실시간 수강신청 정보 없음",),
                 )
             if re.search(r"(?:면제|대체)", question) and re.search(
@@ -453,7 +575,7 @@ class PersonalizedCurriculumChatService:
                 return DecisionOutcome(
                     OutcomeStatus.INSUFFICIENT_EVIDENCE,
                     "질문에 면제·대체 대상을 이미 명시했지만, 그 적용을 확정할 "
-                    "VERIFIED 근거가 현재 PDF와 KG에 없습니다. 사용자 정보를 더 "
+                    "직접 근거가 현재 교육과정 자료에 없습니다. 사용자 정보를 더 "
                     "입력해도 확인되지 않은 규정을 추측하지 않습니다.",
                     limitations=("면제·대체 적용 근거 없음",),
                 )
@@ -464,7 +586,7 @@ class PersonalizedCurriculumChatService:
                 return DecisionOutcome(
                     OutcomeStatus.INSUFFICIENT_EVIDENCE,
                     "질문에 대체·인정 대상을 이미 명시했지만, 해당 과목 사이의 "
-                    "대체 인정을 확정할 VERIFIED 근거가 현재 PDF와 KG에 없습니다. "
+                    "대체 인정을 확정할 직접 근거가 현재 교육과정 자료에 없습니다. "
                     "사용자 정보를 더 입력해도 확인되지 않은 규정을 추측하지 않습니다.",
                     limitations=("과목 대체 인정 근거 없음",),
                 )
@@ -553,7 +675,7 @@ class PersonalizedCurriculumChatService:
                 observed = float(total.group(1))
                 if observed < threshold:
                     return (
-                        f"{response.answer_text} 사용자 진술 {observed:g}학점은 검증된 "
+                        f"{response.answer_text} 현재 입력한 {observed:g}학점은 교육과정 "
                         f"최소 {threshold:g}학점에 {threshold - observed:g}학점 부족합니다."
                     )
         required_offerings = [
@@ -600,21 +722,21 @@ class PersonalizedCurriculumChatService:
             names = [name for name in remaining if isinstance(name, str)]
             if names:
                 return (
-                    f"{response.answer_text} 사용자 진술로 이수한 과목을 제외하면, "
-                    f"검증된 전공필수 목록에서 남은 과목은 {', '.join(names)}입니다."
+                    f"{response.answer_text} 입력한 이수 과목을 제외하면, "
+                    f"교육과정 전공필수 목록에서 남은 과목은 {', '.join(names)}입니다."
                 )
         if required_offerings and re.search(
             r"(?:빠뜨|누락|빼|제외|안\s*들|못\s*들|다른\s*전공|학점만.{0,12}(?:맞|채))",
             question,
         ):
             return (
-                f"{response.answer_text} 사용자 진술처럼 지정된 전공필수 과목을 "
+                f"{response.answer_text} 입력한 내역처럼 지정된 전공필수 과목을 "
                 "누락했다면 다른 전공과목의 학점만으로 과목 누락이 자동 해소됐다고 "
                 "판정할 수 없습니다."
             )
         if "권장" in question and re.search(r"(?:반드시|필수)", question):
             return (
-                f"{response.answer_text} 이 항목들은 Verified KG에서 학과 권장 과목으로 "
+                f"{response.answer_text} 이 항목들은 교육과정에서 학과 권장 과목으로 "
                 "확인되며, 권장이라는 사실만으로 졸업 필수 과목이라고 단정할 수는 없습니다."
             )
         if re.search(
@@ -657,8 +779,8 @@ class PersonalizedCurriculumChatService:
             if len(identities) == 1:
                 identity = identities[0]
                 return (
-                    f"Verified KG에서는 질문의 표기를 하나의 과목 identity로 해석합니다. "
-                    f"등록된 표기는 {identity.name_ko}, 학수번호는 {identity.course_code}입니다. "
+                    f"교육과정에는 두 표기가 같은 과목으로 등록되어 있습니다. "
+                    f"등록 과목명은 {identity.name_ko}, 학수번호는 {identity.course_code}입니다. "
                     f"{response.answer_text}"
                 )
         if "절반" in question and "total" in credits:
@@ -675,7 +797,7 @@ class PersonalizedCurriculumChatService:
                 completed = credits["total"]
                 ratio = completed / target * 100
                 return (
-                    f"사용자가 제공한 총 이수학점은 {completed:g}학점이고, 검증된 "
+                    f"현재 입력한 총 이수학점은 {completed:g}학점이고, 교육과정 "
                     f"졸업학점 기준은 {target:g}학점이므로 학점 수 기준으로 "
                     f"약 {ratio:.1f}%입니다. 과목별 필수요건 충족 여부는 별도입니다."
                 )
@@ -700,7 +822,8 @@ class PersonalizedCurriculumChatService:
                 elif "졸업학점 기준" in description:
                     thresholds["total"] = float(value)
             observed = dict(credits)
-            if "total" not in observed and observed:
+            derived_total = "total" not in observed and bool(observed)
+            if derived_total:
                 observed["total"] = sum(observed.values())
             labels = {"general": "교양", "major": "전공", "total": "총 이수학점"}
             calculations: list[str] = []
@@ -708,10 +831,14 @@ class PersonalizedCurriculumChatService:
                 if category not in observed or category not in thresholds:
                     continue
                 deficit = max(thresholds[category] - observed[category], 0)
+                current = (
+                    f"현재 입력한 영역별 학점 합계는 {observed[category]:g}학점"
+                    if category == "total" and derived_total
+                    else f"현재 입력한 {labels[category]}은 {observed[category]:g}학점"
+                )
                 calculations.append(
-                    f"{labels[category]}은 사용자 진술 {observed[category]:g}학점, "
-                    f"검증된 기준 {thresholds[category]:g}학점으로 학점 수 기준 "
-                    f"{deficit:g}학점이 남습니다."
+                    f"{current}이고, 교육과정 최소 기준은 "
+                    f"{thresholds[category]:g}학점이므로 {deficit:g}학점이 남습니다."
                 )
             if calculations:
                 return " ".join(calculations) + " 과목별·영역별 필수요건은 별도입니다."
@@ -729,7 +856,7 @@ class PersonalizedCurriculumChatService:
                 if isinstance(observed, (int, float)) and isinstance(threshold, (int, float)):
                     result = "충족합니다" if observed >= threshold else "충족하지 못합니다"
                     comparisons.append(
-                        f"사용자 진술 {test} {observed:g}점은 검증된 최소 "
+                        f"현재 입력한 {test} {observed:g}점은 교육과정 최소 "
                         f"{threshold:g}점 기준을 {result}."
                     )
             if comparisons:
@@ -813,9 +940,10 @@ class PersonalizedCurriculumChatService:
             (r"(?:별도\s*표시|사실상\s*필수)", ("별도", "사실상")),
             (
                 r"(?:다음\s*해|내년|실제\s*개설|실시간[ \t]*정보|잔여\s*석|자리|증원|시간대|"
+                r"(?:다음[ \t]*학기).{0,24}(?:들을[ \t]*수|수강[ \t]*가능|신청[ \t]*가능)|"
                 r"(?:다른|늦은|[1-6]\s*학년).{0,20}(?:수강|신청|들어).{0,20}(?:가능|제한|돼|되|졸업)|"
                 r"권장\s*시기.{0,20}수강\s*제한)",
-                ("실제 개설", "시간표", "수강 제한"),
+                ("실제 개설", "시간표", "수강 제한", "선수"),
             ),
         )
         for pattern, required_terms in checks:
@@ -823,8 +951,8 @@ class PersonalizedCurriculumChatService:
                 term in descriptions for term in required_terms
             ):
                 return (
-                    "질문의 적용·대체·신청 여부까지 확정하는 직접 VERIFIED 근거는 "
-                    "현재 PDF와 KG에 없습니다. 확인된 사실과 해당 판단은 구분해야 합니다."
+                    "질문의 적용·대체·신청 여부까지 확정하는 직접 근거는 현재 "
+                    "교육과정 자료에 없습니다. 확인된 사실과 해당 판단은 구분해야 합니다."
                 )
         if re.search(r"(?:남은.{0,20}영역|어느.{0,8}영역|영역을\s*더)", question):
             if not any(term in descriptions for term in ("잔여", "선택", "확대교양")):
@@ -893,7 +1021,7 @@ class PersonalizedCurriculumChatService:
         goal = profile.career_goal
         prefix = f"사용자가 제공한 진로 목표({goal})를 고려하면 " if goal else ""
         return (
-            f"{prefix}현재 Verified KG에서 확인되는 과목의 학년·학기·이수구분을 "
+            f"{prefix}현재 교육과정에서 확인되는 과목의 학년·학기·이수구분을 "
             "바탕으로 수강 순서를 검토할 수 있습니다. 다만 이번 조회에서는 추천을 "
             "뒷받침할 확정 과목 사실을 찾지 못했으므로 특정 과목을 단정해 추천하지 "
             "않습니다. 목표 분야나 후보 과목을 알려 주면 조건부로 비교할 수 있습니다."
@@ -904,10 +1032,10 @@ class PersonalizedCurriculumChatService:
         if re.search(r"(?:성적|재수강|자리|증원|시간대|실제\s*개설|휴학|복학|전과|인정)", question):
             return (
                 "질문은 현재 교육과정과 관련 있지만, 적용·수강 가능 여부를 확정할 "
-                "VERIFIED 근거가 현재 PDF와 KG에 없습니다. 학사 담당 부서 확인이 필요합니다."
+                "직접 근거가 현재 교육과정 자료에 없습니다. 학사 담당 부서 확인이 필요합니다."
             )
         return (
-            "현재 PDF와 Verified KG에서 이 질문을 확정할 직접 근거를 찾지 못했습니다. "
+            "현재 확인 가능한 교육과정 자료에서 이 질문을 확정할 직접 근거를 찾지 못했습니다. "
             "사용자 정보를 더 입력해도 확인되지 않은 규정을 추측하지 않습니다."
         )
 
@@ -939,6 +1067,7 @@ class PersonalizedCurriculumChatService:
             "admission_year": "입학연도 또는 학번",
             "curriculum_year": "적용 교육과정 연도",
             "department_id": "학과",
+            "current_grade_year": "현재 학년",
             "completed_courses": "이수 과목",
             "credits": "이수학점",
             "credits.general": "교양 이수학점",

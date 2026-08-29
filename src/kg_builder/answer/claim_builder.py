@@ -354,6 +354,14 @@ class ClaimBuilder:
                 len(items),
                 unit="COURSE",
             ),
+            GroundedClaim(
+                _claim_id("aggregate", "unique_course_count", fact_ids),
+                ClaimType.AGGREGATE,
+                provenance,
+                "unique_course_count",
+                len({item.entity_id for item in items}),
+                unit="COURSE",
+            ),
         ]
         if all(item.credits is not None for item in items):
             claims.append(
