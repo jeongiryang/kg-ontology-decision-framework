@@ -51,6 +51,7 @@ _COURSE_SUBSTITUTION = re.compile(
     r"(?:(?:대신|대체).{0,24}(?:인정|가능|돼|되)|"
     r"(?:인정|가능).{0,24}(?:대신|대체))"
 )
+_SUBSTITUTION_RULE_FOLLOWUP = re.compile(r"(?:대체|인정|산입)")
 _ELLIPTICAL_FOLLOWUP = re.compile(
     r"^[ \t]*(?:학수번호|과목코드|학점|이수구분|언제|몇[ \t]*학점|"
     r"다시|둘의|둘[ \t]*다|그중|그[ \t]*추천|그[ \t]*기준|같은[ \t]*거|"
@@ -764,6 +765,45 @@ class AgenticCurriculumChatService:
         personalized = self._combine_grounded(
             tool_results, personalized, question=question
         )
+        # A result-driven recovery query is intentionally narrower than the user's
+        # original request.  Re-apply the presentation service's semantic evidence
+        # boundary to the combined, sealed response so a nearby verified rule cannot
+        # replace the missing rule the user actually asked about (for example, a
+        # generic credit threshold cannot establish course substitution).  This does
+        # not alter Claims or Citations; it only keeps the five-state outcome honest.
+        grounding_limitation = getattr(self.service, "_grounding_limitation", None)
+        if (
+            personalized.response.status is ChatStatus.ANSWERABLE
+            and callable(grounding_limitation)
+        ):
+            limitation = grounding_limitation(question, personalized.response)
+            if limitation is not None:
+                grounded_message = getattr(self.service, "_grounded_message", None)
+                message = (
+                    grounded_message(
+                        question, personalized.profile, personalized.response
+                    )
+                    if callable(grounded_message)
+                    else personalized.outcome.message
+                )
+                personalized = PersonalizedChatResult(
+                    response=personalized.response,
+                    outcome=DecisionOutcome(
+                        OutcomeStatus.INSUFFICIENT_EVIDENCE,
+                        "\n\n".join(dict.fromkeys((message, limitation))),
+                        required_user_fields=(
+                            personalized.outcome.required_user_fields
+                        ),
+                        used_profile_fields=personalized.outcome.used_profile_fields,
+                        limitations=tuple(
+                            dict.fromkeys(
+                                (*personalized.outcome.limitations, limitation)
+                            )
+                        ),
+                    ),
+                    profile=personalized.profile,
+                    changed_profile_fields=personalized.changed_profile_fields,
+                )
         if (
             ToolName.CALCULATE_REMAINING_CREDITS in calls
             and personalized.response.status is ChatStatus.ANSWERABLE
@@ -1069,6 +1109,10 @@ class AgenticCurriculumChatService:
             normalized = " ".join(candidate.split())
             if normalized in executed_questions:
                 raise ValueError("agent repeated a grounded query")
+            if _COURSE_SUBSTITUTION.search(question) and not _SUBSTITUTION_RULE_FOLLOWUP.search(
+                candidate
+            ):
+                raise ValueError("agent next question dropped the substitution intent")
             if candidate not in pending and not self._related_followup(
                 question, plan, conversation, candidate
             ):
@@ -1089,6 +1133,10 @@ class AgenticCurriculumChatService:
         conversation: ConversationContext | None,
         candidate: str,
     ) -> bool:
+        if _COURSE_SUBSTITUTION.search(question) and not _SUBSTITUTION_RULE_FOLLOWUP.search(
+            candidate
+        ):
+            return False
         allowed_text = " ".join(
             [
                 question,
@@ -1253,10 +1301,19 @@ class AgenticCurriculumChatService:
         if followup is not None:
             if not isinstance(followup, str) or not followup.strip() or len(followup) > 2000:
                 raise ValueError("agent follow-up query is invalid")
-            original_terms = set(re.findall(r"[가-힣A-Za-z]{2,}", original))
-            followup_terms = set(re.findall(r"[가-힣A-Za-z]{2,}", followup))
-            if not original_terms.intersection(followup_terms) and not raw_codes:
-                raise ValueError("agent follow-up query changed the user topic")
+            # A missing substitution rule cannot be recovered with a merely nearby
+            # graduation-credit or course-offering lookup. Keep only a narrower
+            # query that still asks about substitution/recognition; otherwise stop
+            # with the original evidence gap instead of presenting unrelated facts.
+            if _COURSE_SUBSTITUTION.search(original) and not _SUBSTITUTION_RULE_FOLLOWUP.search(
+                followup
+            ):
+                followup = None
+            else:
+                original_terms = set(re.findall(r"[가-힣A-Za-z]{2,}", original))
+                followup_terms = set(re.findall(r"[가-힣A-Za-z]{2,}", followup))
+                if not original_terms.intersection(followup_terms) and not raw_codes:
+                    raise ValueError("agent follow-up query changed the user topic")
         raw_subquestions = payload.get("subquestions", [])
         if (
             not isinstance(raw_subquestions, list)

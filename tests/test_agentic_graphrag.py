@@ -234,6 +234,77 @@ class AgentOrchestratorTests(unittest.TestCase):
         self.assertEqual(assessment.metadata["decision"], "QUERY")
         self.assertEqual(assessment.metadata["reason"], "MISSING_EVIDENCE")
 
+    def test_recovery_result_rechecks_original_question_grounding_boundary(self):
+        """A nearby verified rule may not replace the rule the user requested."""
+
+        from tests.test_evidence_chat import _answerable_response
+
+        class BoundaryService(FakePersonalizedService):
+            def ask(self, question, *, profile=None, resolved=None, progress_callback=None):
+                del resolved, progress_callback
+                self.questions.append(question)
+                if len(self.questions) == 1:
+                    return PersonalizedChatResult(
+                        ChatResponse.unresolved("request:boundary-miss"),
+                        DecisionOutcome(
+                            OutcomeStatus.INSUFFICIENT_EVIDENCE,
+                            "직접 근거를 찾지 못했습니다.",
+                        ),
+                        profile or UserProfile(),
+                    )
+                response = _answerable_response(count=1)
+                return PersonalizedChatResult(
+                    response,
+                    DecisionOutcome(OutcomeStatus.ANSWERED, response.answer_text),
+                    profile or UserProfile(),
+                )
+
+            @staticmethod
+            def _grounding_limitation(question, response):
+                del response
+                return "원질문의 직접 VERIFIED 근거가 없습니다." if "대신" in question else None
+
+            @staticmethod
+            def _grounded_message(question, profile, response):
+                del question, profile
+                return response.answer_text
+
+        narrower = "두 과목의 대신 인정 근거를 확인해 주세요."
+        llm = FakeLLM(
+            [
+                {
+                    "resolved_question": "두 과목의 대체 인정 규정을 확인해 주세요.",
+                    "referenced_course_codes": [],
+                    "tools": ["query_curriculum"],
+                    "topic": "과목 대체",
+                    "followup_question": narrower,
+                    "subquestions": [],
+                },
+                {
+                    "action": "QUERY",
+                    "next_question": narrower,
+                    "reason": "MISSING_EVIDENCE",
+                },
+                {
+                    "sections": [],
+                    "intro": "",
+                    "closing": "",
+                },
+            ]
+        )
+        result = AgenticCurriculumChatService(
+            BoundaryService(),
+            llm,
+            policy=AgentPolicy.from_env({"KG_AGENT_MODE": "agentic"}),
+        ).ask("두 과목 중 하나를 대신 들어도 인정돼?")
+
+        self.assertEqual(
+            result.personalized.outcome.status,
+            OutcomeStatus.INSUFFICIENT_EVIDENCE,
+        )
+        self.assertEqual(result.personalized.response.status, ChatStatus.ANSWERABLE)
+        self.assertIn("직접 VERIFIED 근거", result.display_answer)
+
     def test_fact_packet_repairs_only_failed_section_before_canonical_fallback(self):
         from tests.test_evidence_chat import _answerable_response
 
@@ -434,6 +505,34 @@ class AgentOrchestratorTests(unittest.TestCase):
         self.assertIn("CDA0008", inherited.question)
         self.assertIsNone(inherited.followup_question)
         self.assertEqual(inherited.subquestions, ())
+
+    def test_substitution_recovery_cannot_drift_to_nearby_credit_rule(self):
+        service = AgenticCurriculumChatService(
+            FakePersonalizedService(), FakeLLM([])
+        )
+        original = "고급 과목으로 대신 들으면 인정돼?"
+        plan = service._validate_plan(
+            original,
+            context(),
+            {
+                "resolved_question": original,
+                "referenced_course_codes": [],
+                "tools": ["query_curriculum"],
+                "topic": "과목 대체",
+                "followup_question": "졸업학점 기준을 확인해 주세요.",
+                "subquestions": [],
+            },
+        )
+
+        self.assertIsNone(plan.followup_question)
+        self.assertFalse(
+            service._related_followup(
+                original,
+                plan,
+                context(),
+                "졸업학점 기준을 확인해 주세요.",
+            )
+        )
 
     def test_single_advisory_result_keeps_its_grounded_recommendation(self):
         from tests.test_evidence_chat import _answerable_response

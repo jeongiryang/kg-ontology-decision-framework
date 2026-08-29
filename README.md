@@ -73,7 +73,7 @@
 - Evidence 원문 및 발췌 PDF·원본 PDF·인쇄 페이지 Citation
 - 19페이지 PDF 이미지와 PyMuPDF 실제 텍스트 검색 강조
 - Starlette/SSE 처리 타임라인과 상태별 UI
-- 상세 모드의 선택 스키마·승인 Cypher·정적 조회 그래프
+- 상세 모드의 선택 스키마·승인 Cypher·실제 승인 traversal 그래프
 - `localStorage` 기반 versioned 사용자 프로필, 채팅 정보 추출·정정·후속 질문 재사용
 - `IndexedDB` 기반 versioned 채팅방·메시지 저장, 대명사·생략·주제 전환 지원
 - `ANSWERED`, `NEEDS_USER_INFO`, `INSUFFICIENT_EVIDENCE`, `OUT_OF_SCOPE`,
@@ -195,10 +195,10 @@ Neo4j query 설정과 Ollama가 준비된 WSL2 셸에서 실행합니다.
 uv run python -m evidence_chat.server
 ```
 
-브라우저에서 `http://127.0.0.1:8501`을 엽니다. 선택 스키마, 승인 Cypher와 정적 조회 그래프를 표시하려면 로컬 `.env`에서 다음 값을 선택적으로 사용합니다.
+브라우저에서 `http://127.0.0.1:8501`을 엽니다. 선택 스키마, 승인 Cypher와 실제 승인 traversal 그래프를 표시하려면 로컬 `.env`에서 다음 값을 선택적으로 사용합니다.
 
 ```dotenv
-KG_CHAT_SHOW_QUERY_DETAILS=true
+KG_CHAT_SHOW_QUERY_DETAILS=full
 ```
 
 상세 모드도 정적 검증과 동일 candidate의 Neo4j `EXPLAIN`을 통과한 comment-free canonical Cypher만 표시합니다. 실패·폐기 후보, prompt, 모델 원문, 접속정보와 로컬 경로는 표시하지 않습니다.

@@ -55,6 +55,10 @@ _COURSE_OMISSION_NECESSITY = re.compile(
     r"(?:반드시|꼭)[ \t]*.{0,18}(?:들|이수|수강)(?:해야|할)|"
     r"(?:들|이수|수강)(?:어야|해야)[ \t]*(?:돼|되))"
 )
+_COURSE_SUBSTITUTION_JUDGMENT = re.compile(
+    r"(?:(?:대신|대체).{0,24}(?:인정|가능|돼|되)|"
+    r"(?:인정|가능).{0,24}(?:대신|대체))"
+)
 _GENERAL_WITHOUT_PERSONAL_RECORD = re.compile(
     r"(?:성적표|개인[ \t]*(?:이력|정보)|수강[ \t]*내역)[ \t]*(?:없이|제외).{0,24}"
     r"(?:가능한[ \t]*)?(?:일반|공통|전체)[ \t]*(?:기준|요건|규정)"
@@ -452,6 +456,17 @@ class PersonalizedCurriculumChatService:
                     "입력해도 확인되지 않은 규정을 추측하지 않습니다.",
                     limitations=("면제·대체 적용 근거 없음",),
                 )
+            if (
+                _COURSE_SUBSTITUTION_JUDGMENT.search(question)
+                and self.course_resolver.find_mentions(question)
+            ):
+                return DecisionOutcome(
+                    OutcomeStatus.INSUFFICIENT_EVIDENCE,
+                    "질문에 대체·인정 대상을 이미 명시했지만, 해당 과목 사이의 "
+                    "대체 인정을 확정할 VERIFIED 근거가 현재 PDF와 KG에 없습니다. "
+                    "사용자 정보를 더 입력해도 확인되지 않은 규정을 추측하지 않습니다.",
+                    limitations=("과목 대체 인정 근거 없음",),
+                )
             return DecisionOutcome(
                 OutcomeStatus.NEEDS_USER_INFO,
                 response.clarification or "답변에 필요한 정보를 조금 더 알려 주세요.",
@@ -755,7 +770,8 @@ class PersonalizedCurriculumChatService:
         )
         checks = (
             (
-                r"(?:대신\s*(?:채워|채울|들)|대체할|상쇄|자동\s*대체|"
+                r"(?:대신\s*(?:채워|채울|들|하|해|했|할)|"
+                r"대체\s*(?:하|해|했|할)|상쇄|자동\s*대체|"
                 r"(?:전공|일반선택|확대교양|다른\s*과목)으로\s*(?:채워|채울|들)|"
                 r"다른\s*전공(?:필수|선택)?(?:\s*과목)?\s*(?:학점)?으로\s*"
                 r"(?:채워|채울|대체))",

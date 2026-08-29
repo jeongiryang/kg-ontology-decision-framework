@@ -40,7 +40,7 @@ KG_LLM_MAX_OUTPUT_TOKENS=2048
 KG_AGENT_MODE=agentic
 
 KG_CHAT_PDF_PATH=/local/ignored/path/2026_curriculum_excerpt.pdf
-KG_CHAT_SHOW_QUERY_DETAILS=false
+KG_CHAT_SHOW_QUERY_DETAILS=off
 ```
 
 질의 자격증명은 ingestion 자격증명으로 fallback하지 않는다. 동적 Cypher 운영에는 별도 읽기 전용 계정이 최종 방어선이다. Community Edition 등으로 권한 분리가 보장되지 않는 환경은 PoC의 잔여 운영 위험이다.
@@ -72,7 +72,7 @@ Starlette lifespan에서 다음 객체를 한 번 구성하고 `app.state`에 �
 | `KG_AGENT_MODE` | `agentic` | 승인 결과를 보고 중단·재탐색하는 bounded Agent 정책 |
 | `KG_CHAT_CLIENT_TIMEOUT_SECONDS` | `180` | 브라우저 대기 제한(60~900초) |
 | `KG_CHAT_DEBUG` | `false` | 정제된 request ID/error code 표시 |
-| `KG_CHAT_SHOW_QUERY_DETAILS` | `false` | 처리 완료 후 승인된 Cypher와 정적 조회 정보 표시 |
+| `KG_CHAT_SHOW_QUERY_DETAILS` | `off` | `full`에서만 승인 Cypher·실제 traversal 상세 표시 (`summary`는 단계 요약만) |
 | `KG_CHAT_PDF_PATH` | 빈 값 | Git 제외된 19쪽 발췌 PDF 경로 |
 | `CHATBOT_HOST` | `127.0.0.1` | 로컬 bind 주소 |
 | `CHATBOT_PORT` | `8501` | UI 포트 |
@@ -163,7 +163,7 @@ QUESTION_ANALYSIS → SCHEMA_SELECTION → CYPHER_GENERATION
 정보가 없는 단계에는 disclosure를 만들거나 임의 설명을 생성하지 않고 상태·실제
 소요시간만 표시한다.
 
-`KG_CHAT_SHOW_QUERY_DETAILS=true`일 때만 단계 disclosure에 정제된 QueryPlan, 선택
+`KG_CHAT_SHOW_QUERY_DETAILS=full`일 때만 단계 disclosure에 정제된 QueryPlan, 선택
 스키마, 승인된 읽기 전용 Cypher, 정제된 파라미터, EXPLAIN 연산자,
 행·Fact·VERIFIED Evidence·Claim·Citation 수와 단계 시간을 추가한다. 승인 Cypher는
 `NEO4J_EXPLAIN`, 그래프 조회 결과는 `GRAPH_EXECUTION` 단계 안에 배치한다. 공개
@@ -176,37 +176,42 @@ Cypher는 lexer가 실제 주석을 제거한 comment-free canonical 문자열�
 
 승인된 Cypher는 가로 스크롤, 접기·펼치기와 키보드 접근 가능한 복사 버튼을 제공한다. 검증 전·실패 후보 Cypher, 접속 URI·계정, 로컬 경로, 비밀번호·토큰·API key, system prompt, 모델 원문, traceback, 내부 승인 seal·digest는 상세 모드에서도 포함하지 않는다. sealed `ChatResponse` 8필드는 변경하지 않는다.
 
-상세 모드에는 해당 assistant message의 단계 목록과 함께 `선택 스키마`, `승인 Cypher`,
-`조회 그래프` 탭을 제공한다. 처리 중에는 실제 callback의 텍스트 타임라인만 표시하고
-graph를 점진적으로 다시 그리거나 탐색 경로를 재생하지 않는다. 선택 스키마 탭은 실제
-`SCHEMA_SELECTION`의 label·relationship, 승인 Cypher 탭은 같은 후보의 정적 검증과
-EXPLAIN을 통과한 canonical Cypher, 조회 그래프 탭은 EXPLAIN 승인 질의 구조와
-ClaimValidator 승인 provenance를 정적으로 표시한다. 재시도에서 실패한 후보는
-projection을 만들지 않으며 모든 후보가 실패하면 관련 탭을 활성화하지 않는다.
+상세 모드는 각 assistant message 아래에 `그래프 탐색`과 `Cypher 보기`를 독립된
+disclosure로 제공한다. 새 질문이 와도 이전 turn의 snapshot을 다시 읽으므로 그래프,
+Cypher, 처리 과정이 덮어써지지 않는다. `그래프 탐색`은 실행이 끝난 뒤 승인된 실제
+traversal 순서를 재생할 수 있으며 Neo4j 실행 중계를 가장하지 않는다. 재시도에서 실패한
+후보는 projection을 만들지 않으며 모든 후보가 실패하면 관련 disclosure를 표시하지 않는다.
 
-## inspection 그래프 projection
+## inspection traversal projection
 
 상세 모드의 그래프는 Neo4j 전체 데이터를 탐색하지 않고 이미 승인된 런타임 산출물을
-표시용으로 축소한다. 별도 DB 조회와 쓰기 쿼리는 없다.
+표시용으로 축소한다. 별도 DB 조회와 쓰기 쿼리는 없다. 내부 Label·Relationship Type과
+Cypher는 영어 계약을 유지하며 노드·관계·실행 단계의 사용자 표기만 generated schema
+catalog의 한국어 이름을 사용한다.
 
-- 질의 구조 그래프는 EXPLAIN까지 통과한 canonical Cypher의 label·relationship을
-  generated schema catalog에 다시 대조해 만든다.
-- 결과 provenance 그래프는 ResultValidator를 통과한 `VERIFIED` 행과
-  ClaimValidator가 승인한 `(fact_id, evidence_id)` 집합이 정확히 일치할 때만 만든다.
+- 질의 구조 그래프는 EXPLAIN까지 통과한 canonical Cypher에서 validator가 추출한
+  순서 있는 MATCH hop만 사용한다. 승인 hop이 없으면 관계 간선을 추정하지 않는다.
+- 통합 traversal 그래프는 위 hop, Neo4j `PROFILE`의 실제 operator·행 수·DB 접근 수,
+  ResultValidator를 통과한 `VERIFIED` 행과 ClaimValidator가 승인한
+  `(fact_id, evidence_id)` 집합이 정확히 일치할 때만 만든다.
 - 결과 edge는 직접 `SUPPORTED_BY`만 허용한다. 승인 전 행, 사용하지 않은 Evidence,
   `REVIEW_REQUIRED` 항목은 projection에 들어가지 않는다.
 - 브라우저 node ID는 요청마다 새 HMAC key로 만든 opaque `ui:*` 값이다. raw Neo4j
   element ID, Fact/Evidence ID, 승인 seal·digest는 envelope에 포함하지 않는다.
 - 노출 필드는 표시명, node type, 검증 상태와 Evidence의 발췌 페이지만이다.
 
-versioned `inspection_update` 하위의 `query_graph`와 `provenance_graph`는 presentation
+versioned `inspection_update` 하위의 `query_graph`, `traversal_graph`와
+`provenance_graph`는 presentation
 전용이다. 답변이나 Citation을 변경할 권한이 없으며
 sealed `ChatResponse`에는 추가되지 않는다. 브라우저는 외부 라이브러리 없이 반응형 SVG
 `viewBox`, 결정론적 type-column 레이아웃과 `ResizeObserver`를 사용한다. 기본 화면은
 컨테이너 너비에 맞추고 확대했을 때만 pan·가로 스크롤을 허용한다. 긴 node 이름은 두 줄
 뒤 ellipsis와 SVG title로 보존하고 관계 label은 배경 상자와 offset으로 edge와 분리한다.
 확대·축소·화면 맞춤·초기화, 키보드 node 선택과 관계 목록 fallback을 제공하며 좁은
-화면에서는 위에서 아래로 배치한다.
+화면에서는 위에서 아래로 배치한다. traversal order 배지와 실제 관계 순서를 재생하는
+기능은 승인된 `traversal_order`만 사용한다. `prefers-reduced-motion: reduce`에서는 이동
+효과 없이 최종 방문 상태와 순서 목록을 즉시 표시한다. Neo4j가 hop별 실시간 이벤트를
+제공하는 것처럼 표현하거나 임의 지연·가짜 경로를 만들지 않는다.
 
 ## Citation과 PDF 표시
 
@@ -257,8 +262,10 @@ UI는 질문 입력·진행·결과의 별도 3단계 화면과 `새 질문하�
 누적된 뒤 같은 turn의 최종 답변으로 교체된다. 하단 입력창에서 바로 다음 질문을 보내며
 동일한 `conversation_id`를 유지한다. 새 대화 문맥은 `새 채팅` 버튼으로만 만든다.
 
-각 assistant turn 아래에서 그 turn의 근거·PDF, 처리 과정, 승인 Cypher·inspection,
-Agent 도구 기록을 독립적으로 열 수 있다. PDF modal과 상세 패널을 열어도 입력창과 대화
+각 assistant turn 아래에서 그 turn의 `근거 N개`, `처리 과정`, `그래프 탐색`,
+`Cypher 보기`, Agent 도구 기록을 독립적으로 열 수 있다. 처리 과정은 실제 단계 데이터가
+있는 경우에만 펼치며 대상·작업·시점·위치·목적·방법을 고정된 안전 문구와 공개 측정값으로
+요약한다. LLM의 원문이나 hidden reasoning은 사용하지 않는다. PDF modal과 상세 패널을 열어도 입력창과 대화
 위치를 잃지 않는다. 사용자가 과거 메시지를 읽고 있으면 스트리밍 중 강제로 아래로
 이동하지 않고 최신 메시지 이동 버튼을 표시한다. 채팅방 생성·최근순 선택·개별/전체 삭제,
 새로고침 복원과 모바일 레이아웃을 제공하며 프로필 초기화는 채팅 삭제와 분리한다.

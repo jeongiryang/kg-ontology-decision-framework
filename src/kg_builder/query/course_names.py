@@ -18,12 +18,14 @@ from typing import Iterable, Mapping
 _NON_WORD = re.compile(r"[^0-9A-Za-z가-힣]+")
 _PARTICLE_SUFFIXES = (
     "으로는",
+    "로는",
     "에서는",
     "이라는",
     "이라고",
     "까지",
     "부터",
     "으로",
+    "로",
     "에서",
     "에게",
     "에는",

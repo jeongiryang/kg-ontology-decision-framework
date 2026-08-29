@@ -160,6 +160,10 @@ class UserProfileTests(unittest.TestCase):
         matches = self.resolver.find_mentions("수학과 프로그래밍 실력이 부족해")
         self.assertEqual(matches, ())
 
+    def test_course_name_with_instrumental_particle_resolves_identity(self):
+        matches = self.resolver.find_mentions("고급자료구조로 대신하면 인정돼?")
+        self.assertEqual(tuple(item.name_ko for item in matches), ("고급자료구조",))
+
     def test_unknown_schema_and_invalid_ranges_fail_closed(self):
         with self.assertRaises(ProfileValidationError):
             UserProfile.from_payload({"version": 99})
@@ -170,6 +174,29 @@ class UserProfileTests(unittest.TestCase):
 
 
 class PersonalizedOutcomeTests(unittest.TestCase):
+    def test_course_substitution_wording_requires_direct_verified_evidence(self):
+        from tests.test_evidence_chat import _answerable_response
+
+        response = _answerable_response(count=1)
+        service = PersonalizedCurriculumChatService(
+            _ResponseService(response), bundle_path=BUNDLE
+        )
+        service.nodes[response.used_fact_ids[0]] = {
+            "id": response.used_fact_ids[0],
+            "labels": ["Rule"],
+            "properties": {
+                "status": "VERIFIED",
+                "description_ko": "일반 졸업학점 기준은 130학점이다.",
+            },
+        }
+
+        limitation = service._grounding_limitation(
+            "한 과목을 다른 과목으로 대신하면 인정돼?", response
+        )
+
+        self.assertIsNotNone(limitation)
+        self.assertIn("직접 VERIFIED 근거", limitation)
+
     def test_course_omission_necessity_wording_is_general_not_question_specific(self):
         for question in (
             "이 과목 안 들으면 안 되는지 알려 줘.",
@@ -226,6 +253,19 @@ class PersonalizedOutcomeTests(unittest.TestCase):
         self.assertEqual(result.outcome.status, OutcomeStatus.INSUFFICIENT_EVIDENCE)
         self.assertEqual(result.outcome.required_user_fields, ())
         self.assertIn("VERIFIED 근거", result.outcome.message)
+
+    def test_explicit_course_substitution_is_evidence_gap_not_clarification(self):
+        base = _ResponseService(
+            ChatResponse.clarification_required(
+                "request:substitution-gap", "무엇을 알고 싶으신가요?"
+            )
+        )
+        service = PersonalizedCurriculumChatService(base, bundle_path=BUNDLE)
+        result = service.ask("고급자료구조로 자료구조를 대신하면 인정돼?")
+
+        self.assertEqual(result.outcome.status, OutcomeStatus.INSUFFICIENT_EVIDENCE)
+        self.assertEqual(result.outcome.required_user_fields, ())
+        self.assertIn("대체 인정을 확정할 VERIFIED 근거", result.outcome.message)
 
     def test_explicit_other_curriculum_is_out_of_scope_without_query(self):
         base = _ResponseService(ChatResponse.not_found("unused"))

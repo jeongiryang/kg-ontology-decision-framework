@@ -27,6 +27,24 @@ class ProvenanceContract:
     evidence_variable: str
 
 
+@dataclass(frozen=True, slots=True)
+class PathStep:
+    """One directed hop of the approved MATCH pattern, in written order.
+
+    검증기는 MATCH 를 파싱하면서 이 경로를 이미 만들지만 종전에는 라벨·관계 이름을
+    알파벳으로 정렬한 집합만 내보내 순서가 사라졌다. 그래서 화면은 질의가 실제로
+    밟은 경로 대신 온톨로지가 허용하는 간선의 교차곱을 그릴 수밖에 없었다.
+    여기서 순서를 그대로 실어 보내 "몇 번째로 어느 관계를 탔는지"를 표시 가능하게 한다.
+    """
+
+    order: int
+    start_variable: str
+    start_label: str
+    relationship_type: str
+    end_variable: str
+    end_label: str
+
+
 @dataclass(frozen=True, slots=True, init=False)
 class ValidatedCypher:
     """Validator-issued value; direct construction is intentionally rejected."""
@@ -37,6 +55,9 @@ class ValidatedCypher:
     labels: tuple[str, ...]
     relationship_types: tuple[str, ...]
     provenance: ProvenanceContract
+    # 승인된 MATCH 경로를 쓰인 순서 그대로. labels/relationship_types 는 정렬된
+    # 집합이라 순서를 담지 못한다.
+    path_edges: tuple[PathStep, ...]
     _seal: object = field(repr=False, compare=False)
 
     def __init__(
@@ -47,6 +68,7 @@ class ValidatedCypher:
         labels: tuple[str, ...],
         relationship_types: tuple[str, ...],
         provenance: ProvenanceContract,
+        path_edges: tuple[PathStep, ...] = (),
         *,
         _seal: object | None = None,
     ) -> None:
@@ -56,6 +78,7 @@ class ValidatedCypher:
             ("text", text),
             ("parameters", parameters),
             ("limit", limit),
+            ("path_edges", path_edges),
             ("labels", labels),
             ("relationship_types", relationship_types),
             ("provenance", provenance),
@@ -73,6 +96,7 @@ class ValidatedCypher:
         labels: tuple[str, ...],
         relationship_types: tuple[str, ...],
         provenance: ProvenanceContract,
+        path_edges: tuple[PathStep, ...] = (),
     ) -> "ValidatedCypher":
         return cls(
             text,
@@ -81,6 +105,7 @@ class ValidatedCypher:
             labels,
             relationship_types,
             provenance,
+            path_edges,
             _seal=_VALIDATION_SEAL,
         )
 
@@ -478,6 +503,33 @@ class CypherValidator:
             labels=tuple(sorted(labels)),
             relationship_types=tuple(sorted(relationship_types)),
             provenance=provenance,
+            path_edges=self._path_steps(edges, variable_labels),
+        )
+
+    @staticmethod
+    def _path_steps(
+        edges: list[RelationshipEdge], variable_labels: dict[str, set[str]]
+    ) -> tuple[PathStep, ...]:
+        """Number the approved MATCH hops in the order the pattern writes them.
+
+        한 변수에 라벨이 여러 개 붙는 경우는 표시에서만 첫 라벨을 쓴다. 검증은 이미
+        위에서 라벨 집합 전체로 마쳤으므로 여기서 계약이 느슨해지지 않는다.
+        """
+
+        def one_label(variable: str) -> str:
+            found = sorted(variable_labels.get(variable, set()))
+            return found[0] if found else variable
+
+        return tuple(
+            PathStep(
+                order=index,
+                start_variable=edge.start_variable,
+                start_label=one_label(edge.start_variable),
+                relationship_type=edge.relationship_type,
+                end_variable=edge.end_variable,
+                end_label=one_label(edge.end_variable),
+            )
+            for index, edge in enumerate(edges, start=1)
         )
 
     def _parse_clauses(self, sanitized: str) -> list[Clause]:
@@ -670,7 +722,11 @@ class CypherValidator:
         }
         if plan.selection_mode is SelectionMode.SINGLE_COURSE:
             required.update({"course_identity", "name_ko"})
-        if set(sources) != required:
+        # 탐색 화면이 뿌리 노드를 실제 이름으로 부르려면 그 이름을 돌려받아야 한다.
+        # 계약을 넓히지 않기 위해 **이 별칭 하나만** 선택적으로 허용하고, 값이
+        # 온톨로지가 선언한 속성인지까지 아래에서 다시 확인한다.
+        optional = {"scope_identity"} & set(sources)
+        if set(sources) - optional != required:
             self._fail(
                 "CYPHER_RETURN_FIELD_MISMATCH",
                 f"RETURN aliases must exactly match required contract: {sorted(required)}",
@@ -724,6 +780,14 @@ class CypherValidator:
                 )
             expected["course_identity"] = (course_variables[0], "course_id")
             expected["name_ko"] = (course_variables[0], "name_ko")
+        if "scope_identity" in sources:
+            variable, prop = sources["scope_identity"]
+            labels = variable_labels.get(variable, set())
+            if "CurriculumVersion" not in labels or prop != "version_name":
+                self._fail(
+                    "CYPHER_SCOPE_IDENTITY_INVALID",
+                    "scope_identity must return CurriculumVersion.version_name",
+                )
         for alias, source in expected.items():
             if sources[alias] != source:
                 self._fail(

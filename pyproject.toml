@@ -29,5 +29,6 @@ evidence_chat = ["static/*"]
 [dependency-groups]
 dev = [
     "httpx2>=0.2.0",
+    "playwright>=1.62.0",
     "pytest>=9.1.1",
 ]

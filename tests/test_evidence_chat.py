@@ -17,8 +17,19 @@ from evidence_chat.chat_adapter import CHAT_RESPONSE_FIELDS, ChatResponseAdapter
 from evidence_chat.graph_projection import (
     build_provenance_projection,
     build_query_structure_projection,
+    build_traversal_projection,
 )
-from evidence_chat.server import ChatState, InspectionCollector, create_app
+from evidence_chat.server import (
+    DETAIL_FULL,
+    DETAIL_OFF,
+    DETAIL_SUMMARY,
+    SUMMARY_HIDDEN_FIELDS,
+    ChatState,
+    InspectionCollector,
+    _env_detail_level,
+    create_app,
+)
+from kg_builder.config import ConfigurationError
 from kg_builder.answer.contracts import ChatErrorCode, ChatResponse, ChatStatus
 from kg_builder.answer.personalized_service import PersonalizedCurriculumChatService
 from kg_builder.answer.service import CurriculumChatService
@@ -642,6 +653,14 @@ class PdfEvidenceTests(unittest.TestCase):
 class StarletteRouteTests(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):
         self.chat = _ChatStub(_answerable_response())
+        # ChatState 가 `.env` 를 읽으므로 기본값을 기대하는 테스트는 값을 직접 고정한다.
+        # 고정하지 않으면 개발자 로컬 `.env` 에 따라 결과가 달라지고, `.env` 가 없는
+        # CI 와 서로 다른 것을 검증하게 된다.
+        self._env = mock.patch.dict(
+            "os.environ", {"KG_CHAT_SHOW_QUERY_DETAILS": "false", "KG_CHAT_DEBUG": "false"}
+        )
+        self._env.start()
+        self.addCleanup(self._env.stop)
         self.app = create_app(lambda: ChatState(self.chat))
         self.lifespan = self.app.router.lifespan_context(self.app)
         await self.lifespan.__aenter__()
@@ -686,6 +705,11 @@ class StarletteRouteTests(unittest.IsolatedAsyncioTestCase):
         chat = _ClarificationChatStub(
             ChatResponse.clarification_required("request-clarify", "어느 학과를 말씀하시나요?")
         )
+        env = mock.patch.dict(
+            "os.environ", {"KG_CHAT_SHOW_QUERY_DETAILS": "false", "KG_CHAT_DEBUG": "false"}
+        )
+        env.start()
+        self.addCleanup(env.stop)
         app = create_app(lambda: ChatState(chat))
         async with app.router.lifespan_context(app):
             async with httpx2.AsyncClient(
@@ -828,6 +852,8 @@ class StarletteRouteTests(unittest.IsolatedAsyncioTestCase):
                 "relationships",
                 "node_label_count",
                 "relationship_count",
+                "label_names_ko",
+                "relationship_names_ko",
             },
             "CYPHER_GENERATION": {
                 "candidate_generated",
@@ -850,9 +876,10 @@ class StarletteRouteTests(unittest.IsolatedAsyncioTestCase):
                 "labels",
                 "relationships",
                 "limit",
+                "path",
                 "query_graph",
             },
-            "GRAPH_EXECUTION": {"row_count", "query_elapsed_ms"},
+            "GRAPH_EXECUTION": {"row_count", "query_elapsed_ms", "traversal_steps"},
             "RESULT_VALIDATION": {
                 "row_count",
                 "fact_count",
@@ -868,6 +895,7 @@ class StarletteRouteTests(unittest.IsolatedAsyncioTestCase):
                 "aggregate",
                 "citation_target_count",
                 "provenance_graph",
+                "traversal_graph",
             },
             "ANSWER_RENDERING": {
                 "citation_count",
@@ -970,7 +998,6 @@ class StarletteRouteTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("Number.isFinite(event.elapsed_ms)", script)
         self.assertIn('setAttribute("aria-expanded"', script)
         self.assertIn('setAttribute("aria-controls"', script)
-        self.assertIn('setAttribute("role", "tablist"', script)
         self.assertNotIn("progress-exploration", markup)
         self.assertNotIn("answer-exploration", markup)
         self.assertNotIn("screen-progress", markup)
@@ -981,10 +1008,14 @@ class StarletteRouteTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("finishConversationTurn", script)
         self.assertIn("renderAssistantDetails", script)
         self.assertIn("event.isComposing", script)
+        self.assertIn('turnDisclosure("그래프 탐색"', script)
+        self.assertIn('turnDisclosure("Cypher 보기"', script)
+        self.assertIn("addFiveWOneH", script)
+        self.assertIn("addTraversalControls", script)
+        self.assertIn("prefers-reduced-motion: reduce", script)
         self.assertIn("ResizeObserver", script)
-        self.assertNotIn("graph-path-traverse", style)
-        self.assertNotIn("is-query-pulse", script)
-        self.assertNotIn("animatedGraphs", script)
+        self.assertIn("shows-traversal", script)
+        self.assertIn("graph-traversal-flow", style)
         self.assertIn("overflow-x: hidden", style)
         self.assertIn("graphLabelLines", script)
         self.assertIn("renderGraphFallback", script)
@@ -1054,6 +1085,20 @@ class InspectionGraphProjectionTests(unittest.TestCase):
             ["CourseOffering", "Course", "Evidence"],
             ["OF_COURSE", "SUPPORTED_BY", "NOT_A_RELATION"],
             opaque_key=b"query-test-key",
+            path_edges=[
+                {
+                    "order": 1,
+                    "start_label": "CourseOffering",
+                    "relationship_type": "OF_COURSE",
+                    "end_label": "Course",
+                },
+                {
+                    "order": 2,
+                    "start_label": "CourseOffering",
+                    "relationship_type": "SUPPORTED_BY",
+                    "end_label": "Evidence",
+                },
+            ],
         )
         self.assertIsNotNone(graph)
         self.assertEqual(graph["version"], 1)
@@ -1064,6 +1109,16 @@ class InspectionGraphProjectionTests(unittest.TestCase):
         )
         serialized = json.dumps(graph, ensure_ascii=False)
         self.assertNotIn("NOT_A_RELATION", serialized)
+
+    def test_query_projection_never_invents_edges_without_an_approved_path(self):
+        graph = build_query_structure_projection(
+            ["CourseOffering", "Course", "Evidence"],
+            ["OF_COURSE", "SUPPORTED_BY"],
+            opaque_key=b"query-test-key",
+        )
+        self.assertIsNotNone(graph)
+        self.assertEqual(graph["edges"], [])
+        self.assertFalse(graph["ordered"])
 
     def test_provenance_projection_requires_exact_verified_pairs(self):
         row = _offering_row()
@@ -1091,6 +1146,146 @@ class InspectionGraphProjectionTests(unittest.TestCase):
             )
         )
 
+    def test_traversal_projection_uses_only_approved_rows_and_pairs(self):
+        row = _offering_row()
+        pair = (row["fact_id"], row["evidence_id"])
+        graph = build_traversal_projection(
+            [
+                {
+                    "order": 1,
+                    "start_label": "CourseOffering",
+                    "relationship_type": "SUPPORTED_BY",
+                    "end_label": "Evidence",
+                }
+            ],
+            {"academic_year": 2026},
+            [row],
+            [pair],
+            opaque_key=b"traversal-test-key",
+            traversal_steps=[
+                {
+                    "order": 1,
+                    "operator": "Expand(All)",
+                    "relationship_type": "SUPPORTED_BY",
+                    "rows": 1,
+                    "db_hits": 2,
+                    "share_ms": 3.5,
+                }
+            ],
+        )
+        self.assertIsNotNone(graph)
+        self.assertTrue(graph["ordered"])
+        self.assertEqual(
+            {edge["relationship"] for edge in graph["edges"]},
+            {"SUPPORTED_BY"},
+        )
+        self.assertTrue(all(node["id"].startswith("ui:") for node in graph["nodes"]))
+        serialized = json.dumps(graph, ensure_ascii=False)
+        self.assertNotIn(row["fact_id"], serialized)
+        self.assertNotIn(row["evidence_id"], serialized)
+        self.assertIn("relationship_ko", serialized)
+
+    def test_profile_details_with_sensitive_markers_are_removed(self):
+        collector = InspectionCollector(DETAIL_FULL)
+        update = collector.record(
+            ProgressEvent(
+                ProgressPhase.GRAPH_EXECUTION,
+                ProgressState.COMPLETED,
+                4,
+                {
+                    "row_count": 1,
+                    "traversal_steps": [
+                        {
+                            "order": 1,
+                            "operator": "NodeIndexSeek",
+                            "rows": 1,
+                            "db_hits": 1,
+                            "share_ms": 4,
+                            "detail": "password=synthetic-password-marker /home/private",
+                        }
+                    ],
+                },
+            )
+        )
+        self.assertEqual(update["summary"]["traversal_steps"][0]["detail"], "")
+        serialized = json.dumps(update, ensure_ascii=False)
+        self.assertNotIn("synthetic-password-marker", serialized)
+        self.assertNotIn("/home/", serialized)
+
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class DetailLevelTests(unittest.TestCase):
+    """추적 공개 수준 3값과 그 검열 효과."""
+
+    def test_legacy_boolean_values_map_to_full_and_off(self) -> None:
+        cases = {
+            "full": DETAIL_FULL, "summary": DETAIL_SUMMARY, "off": DETAIL_OFF,
+            "true": DETAIL_FULL, "yes": DETAIL_FULL, "1": DETAIL_FULL,
+            "false": DETAIL_OFF, "no": DETAIL_OFF, "0": DETAIL_OFF,
+            "FULL": DETAIL_FULL, " summary ": DETAIL_SUMMARY,
+        }
+        for raw, expected in cases.items():
+            with self.subTest(raw=raw):
+                with mock.patch.dict("os.environ", {"KG_CHAT_SHOW_QUERY_DETAILS": raw}):
+                    self.assertEqual(_env_detail_level("KG_CHAT_SHOW_QUERY_DETAILS"), expected)
+
+    def test_unset_defaults_to_off(self) -> None:
+        with mock.patch.dict("os.environ", {}, clear=True):
+            self.assertEqual(_env_detail_level("KG_CHAT_SHOW_QUERY_DETAILS"), DETAIL_OFF)
+
+    def test_invalid_value_is_rejected(self) -> None:
+        with mock.patch.dict("os.environ", {"KG_CHAT_SHOW_QUERY_DETAILS": "verbose"}):
+            with self.assertRaises(ConfigurationError):
+                _env_detail_level("KG_CHAT_SHOW_QUERY_DETAILS")
+
+    def test_summary_level_drops_query_derived_fields(self) -> None:
+        """summary 는 승인 Cypher·파라미터·계획·질문 파생값을 내보내지 않는다."""
+
+        full = InspectionCollector(DETAIL_FULL)
+        summary = InspectionCollector(DETAIL_SUMMARY)
+        details = {
+            "validated_cypher": "MATCH (o:CourseOffering) WHERE o.status = 'VERIFIED' RETURN o LIMIT 1",
+            "parameters": {"academic_year": 2026},
+            "labels": ["CourseOffering"],
+            "relationship_types": ["SUPPORTED_BY"],
+            "path_edges": [
+                {
+                    "order": 1,
+                    "start_label": "CurriculumVersion",
+                    "relationship_type": "HAS_RULE",
+                    "end_label": "Rule",
+                }
+            ],
+            "limit": 1,
+            "candidate_attempt": 1,
+            "parameter_binding_verified": True,
+            "direct_evidence_path_verified": True,
+        }
+        for collector in (full, summary):
+            collector.record(
+                ProgressEvent(
+                    ProgressPhase.CYPHER_GENERATION, ProgressState.STARTED, 0,
+                    {"candidate_attempt": 1},
+                )
+            )
+        static_event = ProgressEvent(
+            ProgressPhase.STATIC_VALIDATION, ProgressState.COMPLETED, 1, details
+        )
+        explain_event = ProgressEvent(
+            ProgressPhase.NEO4J_EXPLAIN, ProgressState.COMPLETED, 1,
+            {"operators": ["NodeIndexSeek"], "candidate_attempt": 1},
+        )
+        full.record(static_event)
+        summary.record(static_event)
+        full_explain = full.record(explain_event)
+        summary_explain = summary.record(explain_event)
+
+        self.assertIn("approved_cypher", full_explain["summary"])
+        for field in SUMMARY_HIDDEN_FIELDS:
+            with self.subTest(field=field):
+                self.assertNotIn(field, summary_explain["summary"])
+        self.assertNotIn("operators", summary_explain["summary"])
+        self.assertNotIn("MATCH", json.dumps(summary_explain, ensure_ascii=False))

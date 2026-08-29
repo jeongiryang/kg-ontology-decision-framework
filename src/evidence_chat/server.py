@@ -23,6 +23,7 @@ from threading import Thread
 from typing import Any, Protocol
 
 import anyio
+from dotenv import load_dotenv
 from neo4j import GraphDatabase
 from starlette.applications import Starlette
 from starlette.requests import Request
@@ -54,6 +55,7 @@ from kg_builder.query.query_explainer import QueryExplainer
 from kg_builder.query.query_plan import MAX_QUESTION_LENGTH
 from kg_builder.query.query_trace import EMAIL_PATTERN, PHONE_PATTERN, STUDENT_ID_PATTERN
 from kg_builder.query.safety_pipeline import SafetyPipeline
+from kg_builder.query.schema_catalog import SchemaCatalog
 from kg_builder.query.schema_selector import QuerySchemaSelector
 from kg_builder.personalization import ProfileValidationError, UserProfile
 
@@ -61,6 +63,8 @@ from . import pdf_evidence
 from .chat_adapter import ChatResponseAdapter
 from .graph_projection import (
     build_provenance_projection,
+    describe_operator_ko,
+    build_traversal_projection,
     build_query_structure_projection,
 )
 
@@ -73,6 +77,41 @@ DEFAULT_MAX_CONCURRENT = 1
 MAX_BODY_BYTES = 64 * 1024
 # 되묻기로 채울 수 있는 항목 수 상한. 이 이상은 정상 흐름이 아니다.
 MAX_RESOLVED_ENTRIES = 8
+# 승인된 MATCH 경로의 최대 hop 수. 검증기가 허용하는 경로보다 넉넉하다.
+MAX_PATH_EDGES = 32
+_SAFE_TYPE_NAME = re.compile(r"[A-Za-z][A-Za-z0-9_]{0,79}\Z")
+
+# 추적 화면의 공개 수준. 기본은 off다. 승인 Cypher와 traversal projection도 서버
+# 환경에서 명시적으로 full을 선택한 로컬 개발·시연 환경에만 보낸다.
+DETAIL_FULL = "full"
+DETAIL_SUMMARY = "summary"
+DETAIL_OFF = "off"
+DETAIL_LEVELS = (DETAIL_FULL, DETAIL_SUMMARY, DETAIL_OFF)
+# 기존 boolean 값과의 하위 호환. true -> full, false -> off 로 읽는다.
+_LEGACY_DETAIL = {
+    "1": DETAIL_FULL, "true": DETAIL_FULL, "yes": DETAIL_FULL, "on": DETAIL_FULL,
+    "0": DETAIL_OFF, "false": DETAIL_OFF, "no": DETAIL_OFF, "off": DETAIL_OFF,
+}
+
+
+def _env_detail_level(name: str) -> str:
+    """Read the three-valued trace visibility, accepting the old boolean values."""
+
+    raw = os.getenv(name)
+    if raw is None:
+        return DETAIL_OFF
+    value = raw.strip().lower()
+    if value in DETAIL_LEVELS:
+        return value
+    if value in _LEGACY_DETAIL:
+        return _LEGACY_DETAIL[value]
+    if not value:
+        return DETAIL_OFF
+    raise ConfigurationError(
+        f"{name} must be one of {', '.join(DETAIL_LEVELS)} (or legacy true/false)"
+    )
+
+_AUTOSTRING = re.compile(r"\$autostring_\d+|\$autoint_\d+")
 
 EXAMPLE_QUESTIONS = (
     "2026학년도 교양 최소 이수학점은?",
@@ -94,6 +133,107 @@ class ChatService(Protocol):
     ) -> ChatResponse: ...
 
 
+# ── 브라우저로 내보내는 필드 목록 ──────────────────────────────────────────────
+# 여기 없는 값은 나가지 않는다. 각 항목에 왜 안전한지를 한 줄씩 적는다. 나중에 이
+# 목록만 보면 공개 범위를 알 수 있어야 한다.
+#
+# 절대 내보내지 않는 것: 접속 정보·토큰·내부 경로·스택트레이스·시스템 프롬프트.
+PUBLISHED_FIELDS: dict[str, dict[str, str]] = {
+    "QUESTION_ANALYSIS": {
+        "status": "계획 판정 코드. 통제된 열거값이라 자유 문자열이 아니다",
+        "query_plan": "검증을 통과한 QueryPlan. 값은 사용자 질문에서 왔고 온톨로지 필터로 한정된다",
+        "missing": "부족한 항목의 통제 코드. 대문자 스네이크만 통과시킨다",
+        "clarification_available": "되묻기 가능 여부. 불리언",
+    },
+    "SCHEMA_SELECTION": {
+        "labels": "온톨로지가 선언한 라벨 이름. 공개 명세에 있는 값이다",
+        "relationships": "온톨로지가 선언한 관계 타입. 위와 같다",
+        "node_label_count": "개수. 정수",
+        "relationship_count": "개수. 정수",
+        "label_names_ko": "라벨의 한국어 표기. ontology_spec.json 의 name_ko 이며 공개 명세에 있는 값이다",
+        "relationship_names_ko": "관계 타입의 한국어 표기. 공개 온톨로지 명세에서 가져온다",
+    },
+    "CYPHER_GENERATION": {
+        "candidate_generated": "후보 생성 여부. 불리언",
+        "candidate_attempt": "시도 회차. 1~10 정수",
+        "retry": "재시도 여부. 불리언",
+        "message": "고정 안내 문구. 모델 출력이 아니다",
+    },
+    "STATIC_VALIDATION": {
+        "read_only_syntax_verified": "검사 통과 여부. 불리언",
+        "ontology_schema_verified": "검사 통과 여부. 불리언",
+        "parameter_binding_verified": "검사 통과 여부. 불리언",
+        "direct_evidence_path_verified": "검사 통과 여부. 불리언",
+        "comment_free_canonical": "검사 통과 여부. 불리언",
+        "limit": "LIMIT 값. 정수",
+    },
+    "NEO4J_EXPLAIN": {
+        "approved_cypher": "검증기를 통과한 질의. 공개 온톨로지에서 생성돼 비밀이 아니다",
+        "parameters": "질의 파라미터. 온톨로지 필터로 한정되고 키 이름으로 비밀값을 거른다",
+        "operators": "Neo4j 실행계획 operator 이름. 서버 내부 경로를 담지 않는다",
+        "labels": "SCHEMA_SELECTION 과 같은 성격",
+        "relationships": "SCHEMA_SELECTION 과 같은 성격",
+        "limit": "LIMIT 값. 정수",
+        "path": "승인된 MATCH 경로. 온톨로지 라벨·관계 이름만 담는다",
+        "query_graph": "위 경로로 만든 표시용 투영. 식별자는 HMAC 로 가린다",
+    },
+    "GRAPH_EXECUTION": {
+        "row_count": "반환 행 수. 정수",
+        "query_elapsed_ms": "실측 소요 시간. 정수",
+        "traversal_steps": "PROFILE 실측 단계. operator 이름·행수·DB 접근·한국어 설명",
+    },
+    "RESULT_VALIDATION": {
+        "row_count": "정수",
+        "fact_count": "정수",
+        "verified_evidence_count": "정수",
+        "fact_status_verified": "불리언",
+        "evidence_status_verified": "불리언",
+        "direct_provenance_verified": "불리언",
+        "rejected_row_count": "정수",
+    },
+    "CLAIM_BUILDING": {
+        "claim_count": "정수",
+        "claim_types": "통제된 열거값",
+        "aggregate": "불리언",
+        "citation_target_count": "정수",
+        "provenance_graph": "승인된 Fact-Evidence 쌍의 투영. 식별자는 HMAC 로 가린다",
+        "traversal_graph": "위와 같은 성격의 통합 투영",
+    },
+    "ANSWER_RENDERING": {
+        "citation_count": "정수",
+        "deterministic_renderer": "불리언",
+        "final_answer_llm_calls": "정수",
+    },
+    "COMPLETED": {
+        "total_elapsed_ms": "정수",
+        "stage_timings_ms": "단계별 실측 시간. 정수 맵",
+        "final_status": "통제된 열거값",
+        "retry_count": "정수",
+        "citation_count": "정수",
+    },
+}
+
+# summary 수준에서 가리는 필드. 질의 원문과 그로부터 파생된 값만 뺀다.
+SUMMARY_HIDDEN_FIELDS = frozenset(
+    {
+        "approved_cypher",
+        "parameters",
+        "query_plan",
+        "question_text",
+        "path",
+        "operators",
+        "labels",
+        "relationships",
+        "label_names_ko",
+        "relationship_names_ko",
+        "query_graph",
+        "traversal_graph",
+        "provenance_graph",
+        "traversal_steps",
+    }
+)
+
+
 class InspectionCollector:
     """Build stage-scoped inspection updates from approved pipeline facts only."""
 
@@ -103,13 +243,25 @@ class InspectionCollector:
             "parameters",
             "labels",
             "relationship_types",
+            "path_edges",
             "limit",
         }
     )
     _SECRET_KEY_MARKERS = ("password", "token", "secret", "api_key", "uri")
+    _SECRET_VALUE_MARKERS = (
+        "password",
+        "token",
+        "api key",
+        "api_key",
+        "secret",
+        "bolt://",
+        "neo4j://",
+        "/home/",
+    )
     _LIMIT = re.compile(r"\bLIMIT\s+(\d+)\s*\Z", re.IGNORECASE)
 
-    def __init__(self) -> None:
+    def __init__(self, detail_level: str = DETAIL_OFF) -> None:
+        self.detail_level = detail_level
         self.stage_timings_ms: dict[str, int] = {}
         self._active_attempt: int | None = None
         self._pending_query: dict[str, Any] = {}
@@ -118,6 +270,7 @@ class InspectionCollector:
         self._opaque_key = secrets.token_bytes(32)
         self._retry_count = 0
         self._result_validation_approved = False
+        self._traversal_steps: list[dict[str, Any]] = []
 
     @staticmethod
     def _candidate_attempt(event: ProgressEvent) -> int | None:
@@ -199,6 +352,142 @@ class InspectionCollector:
         return sorted({item for item in value if isinstance(item, str) and len(item) <= 80})
 
     @staticmethod
+    def _label_names_ko(labels: list[str]) -> dict[str, str]:
+        """Map each candidate label to its ontology name_ko, English when absent."""
+
+        try:
+            catalog = SchemaCatalog.from_generated()
+        except Exception:
+            return {}
+        return {label: catalog.label_ko(label) for label in labels}
+
+    @staticmethod
+    def _relationship_names_ko(relationships: list[str]) -> dict[str, str]:
+        """Map approved relationship types to public Korean display names."""
+
+        try:
+            catalog = SchemaCatalog.from_generated()
+        except Exception:
+            return {}
+        return {
+            relationship: catalog.relationship_ko(relationship)
+            for relationship in relationships
+        }
+
+    def _annotate_steps_ko(self, steps: list[dict[str, Any]]) -> None:
+        """Attach a Korean sentence saying what each engine step actually checked."""
+
+        if not steps:
+            return
+        try:
+            catalog = SchemaCatalog.from_generated()
+        except Exception:
+            return
+        pairs = {
+            item["relationship_type"]: (item["start_label"], item["end_label"])
+            for item in self._safe_path_edges(self._approved_query.get("path_edges"))
+        }
+        for step in steps:
+            try:
+                step["explanation_ko"] = describe_operator_ko(step, catalog, pairs)
+            except Exception:
+                step["explanation_ko"] = ""
+
+    @staticmethod
+    def _safe_traversal_steps(value: Any) -> list[dict[str, Any]]:
+        """Keep the engine's measured steps in execution order.
+
+        시간은 Neo4j 가 주지 않으므로 ``share_ms`` 는 총 실행 시간을 DB 접근 횟수
+        비율로 나눈 **배분값**이다. 화면이 그렇게 표시한다.
+        """
+
+        if not isinstance(value, (list, tuple)):
+            return []
+        steps: list[dict[str, Any]] = []
+        for item in list(value)[:MAX_PATH_EDGES]:
+            if not isinstance(item, dict):
+                continue
+            order = item.get("order")
+            operator = item.get("operator")
+            if (
+                not isinstance(order, int)
+                or isinstance(order, bool)
+                or order < 1
+                or not isinstance(operator, str)
+                or not _SAFE_TYPE_NAME.fullmatch(operator.replace("(", "").replace(")", ""))
+            ):
+                continue
+            # 엔진이 적은 설명. 파라미터 자리표시는 값을 담고 있지 않지만 내부 표기라
+            # 사람이 읽을 수 있게 다듬는다.
+            raw_detail = item.get("detail")
+            detail = ""
+            if isinstance(raw_detail, str) and not any(
+                marker in raw_detail.lower()
+                for marker in InspectionCollector._SECRET_VALUE_MARKERS
+            ):
+                detail = InspectionCollector._mask_text(
+                    _AUTOSTRING.sub("<값>", raw_detail)
+                )[:160]
+            relationship = item.get("relationship_type")
+            steps.append(
+                {
+                    "order": order,
+                    "operator": operator,
+                    "relationship_type": relationship
+                    if isinstance(relationship, str)
+                    and _SAFE_TYPE_NAME.fullmatch(relationship)
+                    else None,
+                    "rows": item.get("rows") if isinstance(item.get("rows"), int) else 0,
+                    "db_hits": item.get("db_hits")
+                    if isinstance(item.get("db_hits"), int)
+                    else 0,
+                    "share_ms": item.get("share_ms")
+                    if isinstance(item.get("share_ms"), (int, float))
+                    and not isinstance(item.get("share_ms"), bool)
+                    else 0,
+                    "detail": detail,
+                }
+            )
+        return steps
+
+    @staticmethod
+    def _safe_path_edges(value: Any) -> list[dict[str, Any]]:
+        """Keep the approved MATCH hops in order, dropping anything malformed.
+
+        _safe_strings 와 달리 정렬하지 않는다. 순서 자체가 이 값의 내용이다.
+        """
+
+        if not isinstance(value, (list, tuple)):
+            return []
+        steps: list[dict[str, Any]] = []
+        for item in list(value)[:MAX_PATH_EDGES]:
+            if not isinstance(item, dict):
+                continue
+            order = item.get("order")
+            start = item.get("start_label")
+            relationship = item.get("relationship_type")
+            end = item.get("end_label")
+            if (
+                not isinstance(order, int)
+                or isinstance(order, bool)
+                or order < 1
+                or not all(
+                    isinstance(name, str) and _SAFE_TYPE_NAME.fullmatch(name)
+                    for name in (start, relationship, end)
+                )
+            ):
+                continue
+            steps.append(
+                {
+                    "order": order,
+                    "start_label": start,
+                    "relationship_type": relationship,
+                    "end_label": end,
+                }
+            )
+        return steps
+
+    @staticmethod
     def _safe_count(value: Any) -> int:
         return (
             value
@@ -206,8 +495,14 @@ class InspectionCollector:
             else 0
         )
 
-    @staticmethod
-    def _update(event: ProgressEvent, summary: dict[str, Any]) -> dict[str, Any]:
+    def _update(self, event: ProgressEvent, summary: dict[str, Any]) -> dict[str, Any]:
+        # summary 수준에서는 질의 원문과 그로부터 파생된 값을 가린다.
+        if self.detail_level == DETAIL_SUMMARY:
+            summary = {
+                key: value
+                for key, value in summary.items()
+                if key not in SUMMARY_HIDDEN_FIELDS
+            }
         payload: dict[str, Any] = {
             "type": "inspection_update",
             "version": 2,
@@ -216,7 +511,7 @@ class InspectionCollector:
             "summary": summary,
             "elapsed_ms": event.elapsed_ms,
         }
-        attempt = InspectionCollector._candidate_attempt(event)
+        attempt = self._candidate_attempt(event)
         if attempt is not None:
             payload["attempt"] = attempt
         return payload
@@ -314,12 +609,19 @@ class InspectionCollector:
                 self._pending_attempt = None
                 self.stage_timings_ms[event.phase.value] = event.elapsed_ms
                 if self._approved_query:
+                    approved_path = self._safe_path_edges(
+                        self._approved_query.get("path_edges")
+                    )
                     query_graph = build_query_structure_projection(
                         self._safe_strings(self._approved_query.get("labels")),
                         self._safe_strings(
                             self._approved_query.get("relationship_types")
                         ),
                         opaque_key=self._opaque_key,
+                        path_edges=approved_path,
+                        parameters=self._safe_mapping(
+                            self._approved_query.get("parameters")
+                        ),
                     )
                     return self._update(
                         event,
@@ -338,6 +640,7 @@ class InspectionCollector:
                                 self._approved_query.get("relationship_types")
                             ),
                             "limit": self._approved_query["limit"],
+                            "path": approved_path,
                             "query_graph": query_graph,
                         },
                     )
@@ -365,6 +668,10 @@ class InspectionCollector:
                 "relationships": relationships,
                 "node_label_count": len(labels),
                 "relationship_count": len(relationships),
+                # 처리 중 화면이 후보 노드를 한국어로 그린다. 표기는 온톨로지 명세의
+                # name_ko 에서만 오고, 없으면 영문 원형이 그대로 남는다.
+                "label_names_ko": self._label_names_ko(labels),
+                "relationship_names_ko": self._relationship_names_ko(relationships),
             }
         elif event.phase is ProgressPhase.CYPHER_GENERATION:
             summary = {
@@ -374,9 +681,15 @@ class InspectionCollector:
                 "message": "LLM이 Cypher 후보를 생성했습니다. 안전 검증을 진행합니다.",
             }
         elif event.phase is ProgressPhase.GRAPH_EXECUTION:
+            traversal_steps = self._safe_traversal_steps(
+                event.details.get("traversal_steps")
+            )
+            self._annotate_steps_ko(traversal_steps)
+            self._traversal_steps = traversal_steps
             summary = {
                 "row_count": self._safe_count(event.details.get("row_count")),
                 "query_elapsed_ms": event.elapsed_ms,
+                "traversal_steps": traversal_steps,
             }
         elif event.phase is ProgressPhase.RESULT_VALIDATION:
             fact_status_verified = event.details.get("fact_status_verified") is True
@@ -418,7 +731,18 @@ class InspectionCollector:
                     pairs,
                     opaque_key=self._opaque_key,
                 )
+            traversal_graph = None
+            if self._result_validation_approved and isinstance(rows, (list, tuple)) and isinstance(pairs, (list, tuple)):
+                traversal_graph = build_traversal_projection(
+                    self._safe_path_edges(self._approved_query.get("path_edges")),
+                    self._safe_mapping(self._approved_query.get("parameters")),
+                    rows,
+                    pairs,
+                    opaque_key=self._opaque_key,
+                    traversal_steps=self._traversal_steps,
+                )
             summary = {
+                "traversal_graph": traversal_graph,
                 "claim_count": self._safe_count(event.details.get("claim_count")),
                 "claim_types": self._safe_strings(event.details.get("claim_types")),
                 "aggregate": event.details.get("aggregate") is True,
@@ -492,7 +816,7 @@ class ChatState:
         self.error: str | None = None
         self.error_code: str | None = None
         self.debug = False
-        self.show_query_details = False
+        self.detail_level = DETAIL_OFF
         self.max_concurrent = DEFAULT_MAX_CONCURRENT
         self.client_timeout_seconds = DEFAULT_CLIENT_TIMEOUT_SECONDS
         self.limiter: anyio.Semaphore | None = None
@@ -504,8 +828,14 @@ class ChatState:
 
     def open(self) -> None:
         try:
+            # `.env` 를 먼저 읽는다. 종전에는 load_dotenv 가 LLMSettings.from_env()
+            # 안에서만 불렸고 그 호출이 아래에 있어서, KG_CHAT_* 네 개는 프로세스
+            # 환경변수로 넘길 때만 적용되고 `.env` 값은 조용히 무시됐다. 그래서
+            # `.env.example` 과 배포 문서가 안내하는 KG_CHAT_SHOW_QUERY_DETAILS 를
+            # 켜도 처리 과정 상세가 열리지 않았다(2026-08-28 실측).
+            load_dotenv(override=False)
             self.debug = _env_bool("KG_CHAT_DEBUG")
-            self.show_query_details = _env_bool("KG_CHAT_SHOW_QUERY_DETAILS")
+            self.detail_level = _env_detail_level("KG_CHAT_SHOW_QUERY_DETAILS")
             self.max_concurrent = _env_int(
                 "KG_CHAT_MAX_CONCURRENT", DEFAULT_MAX_CONCURRENT, 1, 4
             )
@@ -605,7 +935,8 @@ async def health(request: Request) -> Response:
         "max_question_length": MAX_QUESTION_LENGTH,
         "client_timeout_seconds": state.client_timeout_seconds,
         "debug": state.debug,
-        "show_query_details": state.show_query_details,
+        "show_query_details": state.detail_level != DETAIL_OFF,
+        "detail_level": state.detail_level,
     }
     if state.debug:
         payload["error_code"] = state.error_code
@@ -630,7 +961,18 @@ def _clarification_options_event(event: ProgressEvent) -> dict[str, Any] | None:
         item
         for item in raw_missing if isinstance(item, str) and re.fullmatch(r"[A-Z_]{1,80}", item)
     ] if isinstance(raw_missing, (list, tuple)) else []
-    raw_options = event.details.get("clarification_options")
+    options = safe_choice_dicts(event.details.get("clarification_options"))
+    return {
+        "type": "clarification_options",
+        "version": 1,
+        "missing": missing,
+        "options": options,
+    }
+
+
+def safe_choice_dicts(raw_options: Any) -> list[dict[str, Any]]:
+    """Normalise planner Choice objects into the browser-safe option shape."""
+
     options: list[dict[str, Any]] = []
     if isinstance(raw_options, (list, tuple)):
         for option in raw_options[:100]:
@@ -665,12 +1007,7 @@ def _clarification_options_event(event: ProgressEvent) -> dict[str, Any] | None:
                     else None,
                 }
             )
-    return {
-        "type": "clarification_options",
-        "version": 1,
-        "missing": missing,
-        "options": options,
-    }
+    return options
 
 
 async def ask(request: Request) -> Response:
@@ -733,7 +1070,7 @@ async def ask(request: Request) -> Response:
     async def stream() -> AsyncIterator[bytes]:
         queue: asyncio.Queue[dict[str, Any]] = asyncio.Queue()
         loop = asyncio.get_running_loop()
-        collector = InspectionCollector()
+        collector = InspectionCollector(state.detail_level)
 
         async def run_request() -> None:
             finished: asyncio.Future[None] = loop.create_future()
@@ -744,7 +1081,7 @@ async def ask(request: Request) -> Response:
                 clarification_update = _clarification_options_event(event)
                 if clarification_update is not None:
                     loop.call_soon_threadsafe(queue.put_nowait, clarification_update)
-                if state.show_query_details and inspection_update is not None:
+                if state.detail_level != DETAIL_OFF and inspection_update is not None:
                     loop.call_soon_threadsafe(queue.put_nowait, inspection_update)
 
             def worker() -> None:
