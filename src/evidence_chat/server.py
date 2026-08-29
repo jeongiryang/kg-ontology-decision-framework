@@ -32,6 +32,10 @@ from starlette.staticfiles import StaticFiles
 
 from kg_builder.answer.contracts import ChatResponse
 from kg_builder.answer.service import CurriculumChatService
+from kg_builder.answer.personalized_service import (
+    PersonalizedChatResult,
+    PersonalizedCurriculumChatService,
+)
 from kg_builder.config import ConfigurationError, Neo4jQuerySettings
 from kg_builder.llm.client import LLMConfigurationError, LLMSettings, create_llm_client
 from kg_builder.llm.cypher_generator import LocalCypherGenerator
@@ -50,6 +54,7 @@ from kg_builder.query.query_plan import MAX_QUESTION_LENGTH
 from kg_builder.query.query_trace import EMAIL_PATTERN, PHONE_PATTERN, STUDENT_ID_PATTERN
 from kg_builder.query.safety_pipeline import SafetyPipeline
 from kg_builder.query.schema_selector import QuerySchemaSelector
+from kg_builder.personalization import ProfileValidationError, UserProfile
 
 from . import pdf_evidence
 from .chat_adapter import ChatResponseAdapter
@@ -533,7 +538,9 @@ class ChatState:
                 model=llm_settings.model,
                 generator_retries=llm_settings.max_retries,
             )
-            self.service = CurriculumChatService(query_service)
+            self.service = PersonalizedCurriculumChatService(
+                CurriculumChatService(query_service)
+            )
         except (ConfigurationError, LLMConfigurationError):
             self.error = "서비스 환경 설정을 확인해 주세요."
             self.error_code = "CHAT_CONFIGURATION_ERROR"
@@ -668,9 +675,14 @@ async def ask(request: Request) -> Response:
         payload = json.loads(raw or b"{}")
     except json.JSONDecodeError:
         return JSONResponse({"error": "JSON 본문을 해석할 수 없습니다."}, status_code=400)
-    if not isinstance(payload, dict) or not set(payload) <= {"question", "resolved"}:
+    if not isinstance(payload, dict) or not set(payload) <= {
+        "question",
+        "resolved",
+        "profile",
+    }:
         return JSONResponse(
-            {"error": "question 과 resolved 필드만 전송할 수 있습니다."}, status_code=400
+            {"error": "question, resolved, profile 필드만 전송할 수 있습니다."},
+            status_code=400,
         )
     # 되묻기에서 사용자가 고른 값. 서버는 대화 상태를 들지 않으므로 매 요청에 함께
     # 온다. 값이 실제로 제시된 선택지였는지는 계획 계층이 다시 만들어 대조한다.
@@ -678,6 +690,12 @@ async def ask(request: Request) -> Response:
     if not isinstance(resolved, dict) or len(resolved) > MAX_RESOLVED_ENTRIES:
         return JSONResponse(
             {"error": "resolved 는 항목 수가 제한된 객체여야 합니다."}, status_code=400
+        )
+    try:
+        profile = UserProfile.from_payload(payload.get("profile"))
+    except ProfileValidationError:
+        return JSONResponse(
+            {"error": "저장된 사용자 정보 형식을 확인해 주세요."}, status_code=422
         )
     question = payload.get("question")
     if not isinstance(question, str) or not question.strip():
@@ -718,11 +736,39 @@ async def ask(request: Request) -> Response:
 
             def worker() -> None:
                 try:
-                    response = service.ask(
-                        question,
-                        resolved=resolved or None,
-                        progress_callback=on_progress,
-                    )
+                    if isinstance(service, PersonalizedCurriculumChatService):
+                        personalized = service.ask(
+                            question,
+                            profile=profile,
+                            resolved=resolved or None,
+                            progress_callback=on_progress,
+                        )
+                        response = personalized.response
+                        loop.call_soon_threadsafe(
+                            queue.put_nowait,
+                            {
+                                "type": "profile_update",
+                                "version": 1,
+                                "profile": personalized.profile.to_dict(),
+                                "changed_fields": list(
+                                    personalized.changed_profile_fields
+                                ),
+                            },
+                        )
+                        loop.call_soon_threadsafe(
+                            queue.put_nowait,
+                            {
+                                "type": "outcome",
+                                "version": 1,
+                                **personalized.outcome.to_dict(),
+                            },
+                        )
+                    else:
+                        response = service.ask(
+                            question,
+                            resolved=resolved or None,
+                            progress_callback=on_progress,
+                        )
                     result = adapter.adapt(response)
                     loop.call_soon_threadsafe(queue.put_nowait, result)
                 except Exception:

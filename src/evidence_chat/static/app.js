@@ -17,6 +17,21 @@ const el = {
   submit: $("submit"),
   examples: $("examples"),
   askNotice: $("ask-notice"),
+  profileForm: $("profile-form"),
+  profileAdmissionYear: $("profile-admission-year"),
+  profileDepartment: $("profile-department"),
+  profileGrade: $("profile-grade"),
+  profileAdmissionType: $("profile-admission-type"),
+  profileMajorType: $("profile-major-type"),
+  profileCreditTotal: $("profile-credit-total"),
+  profileCreditGeneral: $("profile-credit-general"),
+  profileCreditMajor: $("profile-credit-major"),
+  profileCreditFree: $("profile-credit-free"),
+  profileCareerGoal: $("profile-career-goal"),
+  profileCourseSummary: $("profile-course-summary"),
+  profileCourseList: $("profile-course-list"),
+  profileReset: $("profile-reset"),
+  profileNotice: $("profile-notice"),
   spinner: $("spinner"),
   progressTitle: $("progress-title"),
   progressNow: $("progress-now"),
@@ -72,6 +87,7 @@ let graphScales = new Map();
 let activeExplorationTab = "schema";
 let lastResult = null;
 let clarificationPresentation = null;
+let latestOutcome = null;
 const graphResizeObserver = typeof window.ResizeObserver === "function"
   ? new window.ResizeObserver((entries) => {
       entries.forEach((entry) => {
@@ -97,6 +113,145 @@ const span = (className, text) => {
 // `trail` 은 화면에만 쓰는 기록이다. 서버로 보내지 않으며 조회에도 관여하지 않는다.
 // 무엇을 물었고 무엇을 골라 여기까지 왔는지 사용자가 되짚을 수 있게 하는 용도다.
 const CLARIFY_KEY = "evidence-chat-clarify";
+const PROFILE_KEY = "evidence-chat-profile-v1";
+const PROFILE_VERSION = 1;
+
+function emptyProfile() {
+  return {
+    version: PROFILE_VERSION,
+    admission_year: null,
+    curriculum_year: null,
+    department_id: null,
+    current_grade_year: null,
+    current_semester: null,
+    admission_type: null,
+    major_type: null,
+    completed_courses: [],
+    credits: {},
+    english_credentials: [],
+    career_goal: null,
+    note: null,
+  };
+}
+
+function validProfileShape(value) {
+  return value && value.version === PROFILE_VERSION &&
+    Array.isArray(value.completed_courses) &&
+    Array.isArray(value.english_credentials) &&
+    value.credits && typeof value.credits === "object" && !Array.isArray(value.credits);
+}
+
+function loadProfile() {
+  try {
+    const value = JSON.parse(localStorage.getItem(PROFILE_KEY) || "null");
+    return validProfileShape(value) ? value : emptyProfile();
+  } catch (_) {
+    return emptyProfile();
+  }
+}
+
+function saveProfile(value) {
+  profile = validProfileShape(value) ? value : emptyProfile();
+  try {
+    localStorage.setItem(PROFILE_KEY, JSON.stringify(profile));
+  } catch (_) {
+    showNotice(el.profileNotice, "브라우저 저장소에 사용자 정보를 저장하지 못했습니다.", true);
+  }
+  renderProfileForm();
+}
+
+function numericOrNull(node, minimum, maximum) {
+  const raw = node.value.trim();
+  if (!raw) return null;
+  const value = Number(raw);
+  if (!Number.isFinite(value) || value < minimum || value > maximum) {
+    throw new Error(`${node.closest("label").firstChild.textContent.trim()} 값을 확인해 주세요.`);
+  }
+  return value;
+}
+
+function renderProfileForm() {
+  if (!el.profileForm) return;
+  el.profileAdmissionYear.value = profile.admission_year || "";
+  el.profileDepartment.value = profile.department_id || "";
+  el.profileGrade.value = profile.current_grade_year || "";
+  el.profileAdmissionType.value = profile.admission_type || "";
+  el.profileMajorType.value = profile.major_type || "";
+  el.profileCreditTotal.value = profile.credits.total ?? "";
+  el.profileCreditGeneral.value = profile.credits.general ?? "";
+  el.profileCreditMajor.value = profile.credits.major ?? "";
+  el.profileCreditFree.value = profile.credits.free_elective ?? "";
+  el.profileCareerGoal.value = profile.career_goal || "";
+  const names = profile.completed_courses.map((item) => item.name_ko).filter(Boolean);
+  el.profileCourseSummary.textContent = names.length
+    ? `저장된 이수 과목 ${names.length}개`
+    : "채팅에서 알려 준 이수 과목이 여기에 반영됩니다.";
+  el.profileCourseList.replaceChildren();
+  profile.completed_courses.forEach((course) => {
+    const item = document.createElement("span");
+    item.className = "profile-course-item";
+    item.append(span("", course.name_ko || course.course_code || "이름 없는 과목"));
+    const remove = document.createElement("button");
+    remove.type = "button";
+    remove.className = "profile-course-remove";
+    remove.textContent = "삭제";
+    remove.setAttribute("aria-label", `${course.name_ko || course.course_code || "과목"} 삭제`);
+    remove.addEventListener("click", () => {
+      saveProfile({
+        ...profile,
+        completed_courses: profile.completed_courses.filter(
+          (candidate) => candidate.course_code !== course.course_code,
+        ),
+      });
+      showNotice(el.profileNotice, "이수 과목을 브라우저 프로필에서 삭제했습니다.", false);
+    });
+    item.append(remove);
+    el.profileCourseList.append(item);
+  });
+}
+
+let profile = loadProfile();
+
+if (el.profileForm) {
+  el.profileForm.addEventListener("submit", (event) => {
+    event.preventDefault();
+    try {
+      const admissionYear = numericOrNull(el.profileAdmissionYear, 1900, 9999);
+      const credits = {};
+      const creditInputs = {
+        total: el.profileCreditTotal,
+        general: el.profileCreditGeneral,
+        major: el.profileCreditMajor,
+        free_elective: el.profileCreditFree,
+      };
+      Object.entries(creditInputs).forEach(([name, node]) => {
+        const value = numericOrNull(node, 0, 300);
+        if (value !== null) credits[name] = value;
+      });
+      saveProfile({
+        ...profile,
+        admission_year: admissionYear,
+        curriculum_year: admissionYear,
+        department_id: el.profileDepartment.value || null,
+        current_grade_year: numericOrNull(el.profileGrade, 1, 6),
+        admission_type: el.profileAdmissionType.value || null,
+        major_type: el.profileMajorType.value || null,
+        credits,
+        career_goal: el.profileCareerGoal.value.trim() || null,
+      });
+      showNotice(el.profileNotice, "이 브라우저에 사용자 정보를 저장했습니다.", false);
+    } catch (error) {
+      showNotice(el.profileNotice, error.message || "입력값을 확인해 주세요.", true);
+    }
+  });
+  el.profileReset.addEventListener("click", () => {
+    try { localStorage.removeItem(PROFILE_KEY); } catch (_) { /* no-op */ }
+    profile = emptyProfile();
+    renderProfileForm();
+    showNotice(el.profileNotice, "저장된 사용자 정보를 초기화했습니다.", false);
+  });
+  renderProfileForm();
+}
 
 function emptyClarify(question = "") {
   return { question, resolved: {}, trail: [] };
@@ -273,6 +428,7 @@ async function ask(question) {
   activeExplorationTab = "schema";
   lastResult = null;
   clarificationPresentation = null;
+  latestOutcome = null;
   renderTimelines();
   el.timelineSection.hidden = true;
   el.progressBack.textContent = "요청 취소";
@@ -290,8 +446,8 @@ async function ask(question) {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(
         Object.keys(clarify.resolved).length
-          ? { question, resolved: clarify.resolved }
-          : { question }
+          ? { question, resolved: clarify.resolved, profile }
+          : { question, profile }
       ),
       signal: activeController.signal,
     });
@@ -318,6 +474,10 @@ async function ask(question) {
           renderProgress(payload);
         } else if (payload.type === "clarification_options") {
           clarificationPresentation = payload;
+        } else if (payload.type === "profile_update" && payload.version === 1) {
+          saveProfile(payload.profile);
+        } else if (payload.type === "outcome" && payload.version === 1) {
+          latestOutcome = payload;
         } else if (payload.type === "inspection_update") {
           renderInspectionUpdate(payload);
         } else if (payload.type === "result") {
@@ -1288,9 +1448,20 @@ function renderGraphPanel(container, title, graph) {
 function renderAnswer(result) {
   const response = result.response;
   const presentation = result.presentation;
-  el.answerBadge.textContent = presentation.status_label;
-  el.answerBadge.dataset.state = response.status;
-  el.answerTitle.textContent = response.answer_text;
+  const outcomeLabels = {
+    ANSWERED: "근거 확인 답변",
+    NEEDS_USER_INFO: "사용자 정보 필요",
+    INSUFFICIENT_EVIDENCE: "근거 부족",
+    OUT_OF_SCOPE: "지원 범위 밖",
+    ADVISORY: "조건부 안내",
+  };
+  el.answerBadge.textContent = latestOutcome
+    ? (outcomeLabels[latestOutcome.status] || presentation.status_label)
+    : presentation.status_label;
+  el.answerBadge.dataset.state = latestOutcome ? latestOutcome.status : response.status;
+  el.answerTitle.textContent = latestOutcome && latestOutcome.message
+    ? latestOutcome.message
+    : response.answer_text;
 
   el.clarification.hidden = !response.clarification;
   el.clarification.textContent = response.clarification || "";

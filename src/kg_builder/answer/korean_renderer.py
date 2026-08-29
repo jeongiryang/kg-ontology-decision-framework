@@ -287,12 +287,39 @@ class KoreanAnswerRenderer:
             (claim for claim in claims if claim.field == "completion_type"), None
         )
         label = ENUM_KO.get(scope.value, "해당") if scope else "해당"
-        course_text = ", ".join(
-            f"{item.display_name}({item.credits}학점)"
-            if item.credits is not None
-            else item.display_name
-            for item in items
-        )
+        def item_text(item) -> str:
+            details: list[str] = []
+            # course_code is present only when the approved QueryPlan requested it;
+            # ordinary offering lists therefore remain unchanged.
+            if item.course_code:
+                details.append(item.course_code)
+            if item.completion_type and scope is None:
+                details.append(ENUM_KO.get(item.completion_type, item.completion_type))
+            if item.grade_year not in (None, (), []) and scope is None:
+                years = (
+                    item.grade_year
+                    if isinstance(item.grade_year, (list, tuple))
+                    else (item.grade_year,)
+                )
+                details.append("·".join(str(value) for value in years) + "학년")
+            if item.semester and scope is None:
+                semesters = (
+                    item.semester
+                    if isinstance(item.semester, (list, tuple))
+                    else (item.semester,)
+                )
+                details.append(
+                    "·".join(ENUM_KO.get(value, str(value)) for value in semesters)
+                )
+            if item.credits is not None:
+                details.append(f"{item.credits}학점")
+            return (
+                f"{item.display_name}({', '.join(details)})"
+                if details
+                else item.display_name
+            )
+
+        course_text = ", ".join(item_text(item) for item in items)
         result = f"{label} 과목은 {course_text}로 총 {aggregates['fact_count'].value}과목"
         if "credits_sum" in aggregates:
             result += f"이며 합계 {aggregates['credits_sum'].value}학점"

@@ -88,7 +88,7 @@ class LocalLLMIntegrationTests(unittest.TestCase):
         return result
 
     def test_six_representative_questions_and_database_invariance(self) -> None:
-        self.assertEqual(self.before, (1518, 3260, 511))
+        self.assertEqual(self.before, (1536, 3287, 520))
         questions = {
             "general": "2026학년도 교양 최소 이수학점은?",
             "balanced": "2026학년도 균형교양 이수요건은?",

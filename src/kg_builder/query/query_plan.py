@@ -41,7 +41,15 @@ FILTER_BINDINGS = BASE_FILTER_BINDINGS
 SUPPORTED_FILTERS = frozenset(FILTER_BINDINGS)
 REQUIRED_SCOPE_FILTERS = frozenset({"academic_year"})
 DEPARTMENT_SCOPED_FILTERS = frozenset(
-    {"grade_year", "semester", "completion_type", "credits", "course_code", "name_ko"}
+    {
+        "grade_year",
+        "semester",
+        "completion_type",
+        "credits",
+        "course_code",
+        "course_codes",
+        "name_ko",
+    }
 )
 DEPARTMENT_SCOPED_FIELDS = frozenset(
     {
@@ -170,6 +178,21 @@ class QueryPlan:
                 if not isinstance(value, str) or not value.strip():
                     raise QueryPlanError(f"{name} must be a non-empty string")
                 filters[name] = value.strip()
+        if "course_codes" in filters:
+            course_codes = filters["course_codes"]
+            if (
+                not isinstance(course_codes, list)
+                or not course_codes
+                or any(
+                    not isinstance(value, str) or not value.strip()
+                    for value in course_codes
+                )
+                or len(set(course_codes)) != len(course_codes)
+            ):
+                raise QueryPlanError(
+                    "course_codes must be a non-empty array of unique strings"
+                )
+            filters["course_codes"] = [value.strip() for value in course_codes]
         # A stable catalog identifier takes precedence over a display name.  Keeping
         # both would make an otherwise exact lookup fail when the display name is stale.
         if "course_code" in filters and "name_ko" in filters:
@@ -205,7 +228,14 @@ class QueryPlan:
             set(filters).intersection(DEPARTMENT_SCOPED_FILTERS)
             or set(normalized_fields).intersection(DEPARTMENT_SCOPED_FIELDS)
         )
-        if department_scope_required and "department_id" not in filters:
+        stable_course_identity = bool(
+            {"course_code", "course_codes", "name_ko"}.intersection(filters)
+        )
+        if (
+            department_scope_required
+            and "department_id" not in filters
+            and not stable_course_identity
+        ):
             raise QueryPlanError(
                 "department_id is required for course and CourseOffering queries"
             )

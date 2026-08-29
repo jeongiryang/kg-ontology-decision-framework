@@ -57,11 +57,20 @@ def build_syntax_scaffold(plan: QueryPlan, schema_subset: Mapping[str, Any]) -> 
             "Course": "c",
             "Evidence": "e",
         }
-        matches = [
-            "MATCH (cv:CurriculumVersion)-[:FOR_DEPARTMENT]->(d:Department)",
-            "MATCH (cv)-[:HAS_OFFERING]->(o:CourseOffering)-[:OF_COURSE]->(c:Course)",
-            "MATCH (o)-[:SUPPORTED_BY]->(e:Evidence)",
-        ]
+        matches = []
+        if "department_id" in plan.filters:
+            matches.extend(
+                [
+                    "MATCH (cv:CurriculumVersion)-[:FOR_DEPARTMENT]->(d:Department)",
+                    "MATCH (cv)-[:HAS_OFFERING]->(o:CourseOffering)-[:OF_COURSE]->(c:Course)",
+                ]
+            )
+        else:
+            matches.append(
+                "MATCH (cv:CurriculumVersion)-[:HAS_OFFERING]->"
+                "(o:CourseOffering)-[:OF_COURSE]->(c:Course)"
+            )
+        matches.append("MATCH (o)-[:SUPPORTED_BY]->(e:Evidence)")
         fact_alias, fact_id = "o", "offering_id"
     elif family == "Rule":
         aliases = {
