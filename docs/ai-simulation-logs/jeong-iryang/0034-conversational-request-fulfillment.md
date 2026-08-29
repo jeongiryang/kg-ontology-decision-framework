@@ -9,8 +9,9 @@
 | 사용 에이전트 | Codex |
 | 작업 브랜치 | `feat/jeongiryang/conversational-request-fulfillment` |
 | 기준 commit | `8ea92cdf5dbb16f01eda52b5ad631563abc7b8ad` |
-| 관련 PR | Draft PR 생성 예정 |
-| 작업 상태 | 구현·로컬 검증 완료 |
+| 구현 commit | `ba7d1b782a9da1f23863674dbf369f0afe5085f8` |
+| 관련 PR | Draft PR #37 |
+| 작업 상태 | 구현·검증·Draft PR 생성 완료 |
 
 ## 1. 작업 목적
 
@@ -136,6 +137,7 @@ SafetyPipeline, VERIFIED Fact–Evidence와 팀원의 traversal UI는 유지한�
 | Verified migration check | PASS |
 | bundle validate/check/verify | PASS, DB counts 동일 |
 | `git diff --check` | PASS |
+| GitHub Actions `Query safety checks / unit-tests` | PASS |
 
 ## 8. 실패한 접근과 보완
 
