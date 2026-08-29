@@ -3,18 +3,19 @@
 "use strict";
 
 const $ = (id) => document.getElementById(id);
-const SCREEN_ORDER = ["ask", "progress", "answer"];
 const el = {
   status: $("status"),
-  stages: document.querySelectorAll(".stages li"),
-  screens: {
-    ask: $("screen-ask"),
-    progress: $("screen-progress"),
-    answer: $("screen-answer"),
-  },
+  conversationToggle: $("conversation-toggle"),
+  conversationPanel: $("conversation-panel"),
+  conversationNew: $("conversation-new"),
+  conversationClear: $("conversation-clear"),
+  conversationList: $("conversation-list"),
+  conversationTranscript: $("conversation-transcript"),
+  jumpLatest: $("jump-latest"),
   form: $("ask-form"),
   question: $("question"),
   submit: $("submit"),
+  composerStatus: $("composer-status"),
   examples: $("examples"),
   askNotice: $("ask-notice"),
   profileForm: $("profile-form"),
@@ -32,31 +33,6 @@ const el = {
   profileCourseList: $("profile-course-list"),
   profileReset: $("profile-reset"),
   profileNotice: $("profile-notice"),
-  spinner: $("spinner"),
-  progressTitle: $("progress-title"),
-  progressNow: $("progress-now"),
-  progressError: $("progress-error"),
-  progressBack: $("progress-back"),
-  elapsed: $("elapsed"),
-  asked: $("asked"),
-  progressSteps: $("progress-steps"),
-  answerQuestion: $("answer-question"),
-  answerBadge: $("answer-badge"),
-  answerTitle: $("answer-title"),
-  clarification: $("clarification"),
-  choices: $("choices"),
-  choiceList: $("choice-list"),
-  trail: $("answer-trail"),
-  scopeNotice: $("scope-notice"),
-  debugMeta: $("debug-meta"),
-  timelineSection: $("timeline-section"),
-  answerProgressSteps: $("answer-progress-steps"),
-  answerExploration: $("answer-exploration"),
-  evidenceSection: $("evidence-section"),
-  evidenceSummary: $("evidence-summary"),
-  evidencePages: $("evidence-pages"),
-  pdfNotice: $("pdf-notice"),
-  answerAgain: $("answer-again"),
   pdfModal: $("pdf-modal"),
   pdfModalTitle: $("pdf-modal-title"),
   pdfModalMeta: $("pdf-modal-meta"),
@@ -74,7 +50,6 @@ const el = {
 let pdfAvailable = false;
 let inFlight = false;
 let activeController = null;
-let elapsedTimer = null;
 let clientTimeoutMs = 180000;
 let pdfPageCount = 0;
 let modalState = null;
@@ -82,12 +57,17 @@ let modalZoom = 1;
 let queryDetailsEnabled = false;
 let timelineEvents = [];
 let inspectionUpdates = new Map();
-let expandedStages = new Set();
 let graphScales = new Map();
-let activeExplorationTab = "schema";
 let lastResult = null;
 let clarificationPresentation = null;
 let latestOutcome = null;
+let latestConversationUpdate = null;
+let agentTraceEvents = [];
+let currentConversationId = null;
+let activeTurnId = null;
+let activeAssistantMessageId = null;
+let liveAssistantNode = null;
+let shouldFollowLatest = true;
 const graphResizeObserver = typeof window.ResizeObserver === "function"
   ? new window.ResizeObserver((entries) => {
       entries.forEach((entry) => {
@@ -106,6 +86,460 @@ const span = (className, text) => {
   node.textContent = text;
   return node;
 };
+
+const CONVERSATION_DB = "evidence-chat-conversations";
+const CONVERSATION_DB_VERSION = 2;
+const CONVERSATION_STORE = "conversations";
+const MESSAGE_STORE = "messages";
+const CURRENT_CONVERSATION_KEY = "evidence-chat-current-conversation-v1";
+const RESPONSE_STATUS_LABELS = {
+  ANSWERED: "근거 확인 답변",
+  NEEDS_USER_INFO: "사용자 정보 필요",
+  INSUFFICIENT_EVIDENCE: "근거 부족",
+  OUT_OF_SCOPE: "지원 범위 밖",
+  ADVISORY: "조건부 안내",
+};
+
+function opaqueId(prefix) {
+  const value = typeof crypto.randomUUID === "function"
+    ? crypto.randomUUID()
+    : `${Date.now()}-${Math.random().toString(16).slice(2)}`;
+  return `${prefix}:${value}`;
+}
+
+function openConversationDb() {
+  return new Promise((resolve, reject) => {
+    const request = indexedDB.open(CONVERSATION_DB, CONVERSATION_DB_VERSION);
+    request.onupgradeneeded = () => {
+      const db = request.result;
+      if (!db.objectStoreNames.contains(CONVERSATION_STORE)) {
+        db.createObjectStore(CONVERSATION_STORE, { keyPath: "conversation_id" });
+      }
+      if (!db.objectStoreNames.contains(MESSAGE_STORE)) {
+        const store = db.createObjectStore(MESSAGE_STORE, { keyPath: "message_id" });
+        store.createIndex("conversation_id", "conversation_id", { unique: false });
+      }
+    };
+    request.onsuccess = () => resolve(request.result);
+    request.onerror = () => reject(new Error("대화 저장소를 열 수 없습니다."));
+  });
+}
+
+async function dbRequest(storeName, mode, operation) {
+  const db = await openConversationDb();
+  return new Promise((resolve, reject) => {
+    const transaction = db.transaction(storeName, mode);
+    const request = operation(transaction.objectStore(storeName));
+    request.onsuccess = () => resolve(request.result);
+    request.onerror = () => reject(new Error("대화 저장 작업을 완료하지 못했습니다."));
+    transaction.oncomplete = () => db.close();
+    transaction.onerror = () => reject(new Error("대화 저장 작업을 완료하지 못했습니다."));
+  });
+}
+
+async function listConversations() {
+  const rows = await dbRequest(CONVERSATION_STORE, "readonly", (store) => store.getAll());
+  return Array.isArray(rows)
+    ? rows
+      .filter((item) => item && [1, 2].includes(item.version) &&
+        typeof item.conversation_id === "string")
+      .sort((left, right) => String(right.updated_at).localeCompare(String(left.updated_at)))
+    : [];
+}
+
+async function loadConversationMessages(conversationId) {
+  const rows = await dbRequest(MESSAGE_STORE, "readonly", (store) =>
+    store.index("conversation_id").getAll(conversationId)
+  );
+  return Array.isArray(rows)
+    ? rows
+      .filter((item) => item && [1, 2].includes(item.version) &&
+        ["user", "assistant"].includes(item.role) && typeof item.content === "string")
+      .sort((left, right) => String(left.created_at).localeCompare(String(right.created_at)))
+    : [];
+}
+
+async function saveConversation(conversation) {
+  await dbRequest(CONVERSATION_STORE, "readwrite", (store) => store.put(conversation));
+}
+
+async function saveConversationMessage(message) {
+  await dbRequest(MESSAGE_STORE, "readwrite", (store) => store.put(message));
+}
+
+async function createConversation() {
+  const now = new Date().toISOString();
+  const conversation = {
+    version: CONVERSATION_DB_VERSION,
+    conversation_id: opaqueId("conversation"),
+    title: "새 채팅",
+    created_at: now,
+    updated_at: now,
+    summary: "",
+    current_topic: null,
+    recent_course_codes: [],
+    recent_evidence_ids: [],
+    pending_clarification: null,
+  };
+  await saveConversation(conversation);
+  currentConversationId = conversation.conversation_id;
+  clearClarify();
+  try { localStorage.setItem(CURRENT_CONVERSATION_KEY, currentConversationId); } catch (_) { /* no-op */ }
+  await renderConversationUi();
+  return conversation;
+}
+
+async function ensureConversation() {
+  if (!currentConversationId) {
+    try { currentConversationId = localStorage.getItem(CURRENT_CONVERSATION_KEY); } catch (_) { /* no-op */ }
+  }
+  if (currentConversationId) {
+    const found = await dbRequest(CONVERSATION_STORE, "readonly", (store) => store.get(currentConversationId));
+    if (found && [1, 2].includes(found.version)) return found;
+  }
+  return createConversation();
+}
+
+async function renderConversationUi() {
+  const conversations = await listConversations().catch(() => []);
+  el.conversationList.replaceChildren();
+  conversations.forEach((conversation) => {
+    const item = document.createElement("li");
+    const select = document.createElement("button");
+    select.type = "button";
+    select.className = "conversation-select";
+    select.textContent = conversation.title || "새 채팅";
+    select.disabled = inFlight;
+    select.setAttribute("aria-current", String(conversation.conversation_id === currentConversationId));
+    select.addEventListener("click", async () => {
+      await saveCurrentScrollPosition();
+      currentConversationId = conversation.conversation_id;
+      clearClarify();
+      try { localStorage.setItem(CURRENT_CONVERSATION_KEY, currentConversationId); } catch (_) { /* no-op */ }
+      await renderConversationUi();
+      el.conversationPanel.hidden = true;
+      el.conversationToggle.setAttribute("aria-expanded", "false");
+      el.question.focus();
+    });
+    const remove = document.createElement("button");
+    remove.type = "button";
+    remove.className = "conversation-delete";
+    remove.textContent = "삭제";
+    remove.disabled = inFlight;
+    remove.setAttribute("aria-label", `${conversation.title || "채팅"} 삭제`);
+    remove.addEventListener("click", async () => {
+      if (!window.confirm(`‘${conversation.title || "채팅"}’을 삭제할까요?`)) return;
+      await deleteConversation(conversation.conversation_id);
+      if (currentConversationId === conversation.conversation_id) currentConversationId = null;
+      await ensureConversation();
+    });
+    item.append(select, remove);
+    el.conversationList.append(item);
+  });
+  const active = currentConversationId
+    ? await loadConversationMessages(currentConversationId).catch(() => [])
+    : [];
+  el.conversationTranscript.replaceChildren();
+  active.forEach((message) => {
+    el.conversationTranscript.append(renderConversationMessage(message));
+  });
+  if (!active.length) {
+    const empty = document.createElement("p");
+    empty.className = "conversation-empty";
+    empty.textContent = "질문을 보내면 같은 채팅방에서 답변과 근거가 차례로 쌓입니다.";
+    el.conversationTranscript.append(empty);
+  }
+  const selected = conversations.find((item) => item.conversation_id === currentConversationId);
+  requestAnimationFrame(() => {
+    el.conversationTranscript.scrollTop = Number(selected && selected.scroll_top) ||
+      el.conversationTranscript.scrollHeight;
+    updateJumpLatest();
+  });
+}
+
+function renderConversationMessage(message) {
+  const block = document.createElement("article");
+  block.className = `conversation-message is-${message.role}`;
+  block.dataset.turnId = message.turn_id || "";
+  const role = document.createElement("strong");
+  role.className = "message-role";
+  role.textContent = message.role === "user" ? "나" : "학사 챗봇";
+  const content = document.createElement("p");
+  content.className = "message-content";
+  content.textContent = message.content;
+  block.append(role, content);
+  if (message.role === "assistant") renderAssistantDetails(block, message);
+  return block;
+}
+
+function renderAssistantDetails(block, message) {
+  const snapshot = message.presentation_snapshot;
+  if (!snapshot || snapshot.version !== 1) {
+    if (message.error) addRetryButton(block, message.source_question || "");
+    return;
+  }
+  const result = snapshot.result;
+  const response = result && result.response;
+  const presentation = result && result.presentation;
+  const retryable = Boolean(message.error || (response && response.status === "SAFE_FAILURE"));
+  if (message.response_status) {
+    const badge = document.createElement("span");
+    badge.className = "badge turn-status";
+    badge.dataset.state = message.response_status;
+    badge.textContent = RESPONSE_STATUS_LABELS[message.response_status] || message.response_status;
+    block.insertBefore(badge, block.querySelector(".message-content"));
+  }
+  if (response && response.clarification) {
+    const clarification = document.createElement("p");
+    clarification.className = "message-clarification";
+    clarification.textContent = response.clarification;
+    block.append(clarification);
+  }
+  renderTurnChoices(block, message.source_question || "", response, snapshot.clarification);
+
+  const tools = document.createElement("div");
+  tools.className = "message-tools";
+  if (presentation && Array.isArray(presentation.evidence_pages) && presentation.evidence_pages.length) {
+    const evidenceCount = presentation.evidence_pages.reduce(
+      (total, page) => total + (Array.isArray(page.evidence) ? page.evidence.length : 0), 0
+    );
+    tools.append(turnDisclosure(`근거 ${evidenceCount}개`, (body) =>
+      renderEvidenceInto(body, presentation)));
+  }
+  if (Array.isArray(snapshot.timeline_events) && snapshot.timeline_events.length) {
+    tools.append(turnDisclosure("처리 과정", (body) =>
+      renderTimelineInto(body, snapshot.timeline_events, snapshot.inspection_updates || [])));
+  }
+  if (queryDetailsEnabled && Array.isArray(snapshot.inspection_updates) && snapshot.inspection_updates.length) {
+    tools.append(turnDisclosure("Cypher·질의 추적", (body) =>
+      renderExplorationPanel(body, snapshot.inspection_updates, result)));
+  }
+  if (Array.isArray(snapshot.agent_trace) && snapshot.agent_trace.length) {
+    tools.append(turnDisclosure("Agent 도구 기록", (body) =>
+      renderAgentTrace(body, snapshot.agent_trace)));
+  }
+  if (tools.childElementCount) block.append(tools);
+  if (retryable) addRetryButton(block, message.source_question || "");
+}
+
+function turnDisclosure(label, renderBody) {
+  const details = document.createElement("details");
+  details.className = "turn-disclosure";
+  const summary = document.createElement("summary");
+  summary.textContent = label;
+  const body = document.createElement("div");
+  body.className = "turn-disclosure-body";
+  details.addEventListener("toggle", () => {
+    if (details.open && !body.dataset.rendered) {
+      renderBody(body);
+      body.dataset.rendered = "true";
+    }
+  });
+  details.append(summary, body);
+  return details;
+}
+
+function renderAgentTrace(container, events) {
+  const list = document.createElement("ol");
+  list.className = "agent-trace-list";
+  events.forEach((event) => {
+    const item = document.createElement("li");
+    const label = event && typeof event.detail === "string" ? event.detail : "도구 실행";
+    item.textContent = label;
+    list.append(item);
+  });
+  container.append(list);
+}
+
+function addRetryButton(block, question) {
+  if (!question) return;
+  const retry = document.createElement("button");
+  retry.type = "button";
+  retry.className = "ghost compact retry-turn";
+  retry.textContent = "이 질문 다시 시도";
+  retry.addEventListener("click", () => {
+    if (inFlight) return;
+    clearClarify();
+    clarify = emptyClarify(question);
+    saveClarify(clarify);
+    ask(question);
+  });
+  block.append(retry);
+}
+
+async function saveCurrentScrollPosition() {
+  if (!currentConversationId) return;
+  const conversation = await dbRequest(
+    CONVERSATION_STORE, "readonly", (store) => store.get(currentConversationId)
+  ).catch(() => null);
+  if (!conversation) return;
+  conversation.version = CONVERSATION_DB_VERSION;
+  conversation.scroll_top = el.conversationTranscript.scrollTop;
+  await saveConversation(conversation).catch(() => {});
+}
+
+async function deleteConversation(conversationId) {
+  const messages = await loadConversationMessages(conversationId).catch(() => []);
+  const db = await openConversationDb();
+  await new Promise((resolve, reject) => {
+    const transaction = db.transaction([CONVERSATION_STORE, MESSAGE_STORE], "readwrite");
+    transaction.objectStore(CONVERSATION_STORE).delete(conversationId);
+    const store = transaction.objectStore(MESSAGE_STORE);
+    messages.forEach((message) => store.delete(message.message_id));
+    transaction.oncomplete = resolve;
+    transaction.onerror = () => reject(new Error("채팅을 삭제하지 못했습니다."));
+  });
+  db.close();
+}
+
+async function clearConversations() {
+  if (!window.confirm("이 브라우저에 저장된 모든 채팅을 삭제할까요?")) return;
+  const db = await openConversationDb();
+  await new Promise((resolve, reject) => {
+    const transaction = db.transaction([CONVERSATION_STORE, MESSAGE_STORE], "readwrite");
+    transaction.objectStore(CONVERSATION_STORE).clear();
+    transaction.objectStore(MESSAGE_STORE).clear();
+    transaction.oncomplete = resolve;
+    transaction.onerror = () => reject(new Error("채팅을 초기화하지 못했습니다."));
+  });
+  db.close();
+  currentConversationId = null;
+  try { localStorage.removeItem(CURRENT_CONVERSATION_KEY); } catch (_) { /* no-op */ }
+  await createConversation();
+}
+
+async function beginConversationTurn(question) {
+  const conversation = await ensureConversation();
+  const messages = await loadConversationMessages(conversation.conversation_id);
+  activeTurnId = opaqueId("turn");
+  const now = new Date().toISOString();
+  if (conversation.title === "새 채팅" && meaningfulConversationTitle(question)) {
+    conversation.title = question.replace(/\s+/g, " ").slice(0, 36);
+  }
+  conversation.version = CONVERSATION_DB_VERSION;
+  conversation.updated_at = now;
+  await saveConversation(conversation);
+  const recent = messages.slice(-8).map((message) => ({
+    turn_id: message.turn_id,
+    role: message.role,
+    content: message.content,
+    created_at: message.created_at,
+    response_status: message.response_status || null,
+    citation_ids: message.citation_ids || [],
+    evidence_ids: message.evidence_ids || [],
+  }));
+  await saveConversationMessage({
+    version: CONVERSATION_DB_VERSION,
+    message_id: opaqueId("message"),
+    conversation_id: conversation.conversation_id,
+    turn_id: activeTurnId,
+    role: "user",
+    content: question,
+    created_at: now,
+    response_status: null,
+    citation_ids: [],
+    evidence_ids: [],
+  });
+  await renderConversationUi();
+  scrollConversationToLatest(true);
+  return {
+    version: 1,
+    conversation_id: conversation.conversation_id,
+    turn_id: activeTurnId,
+    recent_messages: recent,
+    summary: conversation.summary || "",
+    current_topic: conversation.current_topic || null,
+    recent_course_codes: conversation.recent_course_codes || [],
+    recent_evidence_ids: conversation.recent_evidence_ids || [],
+    pending_clarification: conversation.pending_clarification || null,
+  };
+}
+
+function meaningfulConversationTitle(question) {
+  const normalized = question.replace(/[\s!?.,~]+/g, "");
+  return normalized.length >= 4 && !/^(안녕|하이|반가워|테스트)$/.test(normalized);
+}
+
+function currentTurnSnapshot(result = lastResult, error = null) {
+  return {
+    version: 1,
+    result,
+    outcome: latestOutcome,
+    clarification: clarificationPresentation,
+    timeline_events: timelineEvents,
+    inspection_updates: [...inspectionUpdates.values()],
+    agent_trace: agentTraceEvents,
+    error,
+  };
+}
+
+async function finishConversationTurn(update, snapshot = currentTurnSnapshot()) {
+  if (!update || update.version !== 1 || update.conversation_id !== currentConversationId) return;
+  const conversation = await ensureConversation();
+  conversation.updated_at = update.created_at;
+  conversation.summary = update.summary || "";
+  conversation.current_topic = update.current_topic || null;
+  conversation.recent_course_codes = Array.isArray(update.recent_course_codes)
+    ? update.recent_course_codes : [];
+  conversation.recent_evidence_ids = Array.isArray(update.evidence_ids)
+    ? update.evidence_ids : [];
+  conversation.pending_clarification = update.pending_clarification || null;
+  conversation.version = CONVERSATION_DB_VERSION;
+  await saveConversation(conversation);
+  await saveConversationMessage({
+    version: CONVERSATION_DB_VERSION,
+    message_id: activeAssistantMessageId || opaqueId("message"),
+    conversation_id: update.conversation_id,
+    turn_id: update.turn_id,
+    role: "assistant",
+    content: update.display_answer,
+    created_at: update.created_at,
+    response_status: update.response_status,
+    citation_ids: update.citation_ids || [],
+    evidence_ids: update.evidence_ids || [],
+    source_question: clarify.question || "",
+    presentation_snapshot: snapshot,
+  });
+  await renderConversationUi();
+}
+
+async function saveFailedConversationTurn(question, message) {
+  if (!currentConversationId || !activeTurnId) return;
+  const now = new Date().toISOString();
+  await saveConversationMessage({
+    version: CONVERSATION_DB_VERSION,
+    message_id: activeAssistantMessageId || opaqueId("message"),
+    conversation_id: currentConversationId,
+    turn_id: activeTurnId,
+    role: "assistant",
+    content: message,
+    source_question: question,
+    created_at: now,
+    response_status: "SAFE_FAILURE",
+    citation_ids: [],
+    evidence_ids: [],
+    error: true,
+    presentation_snapshot: currentTurnSnapshot(null, "SAFE_FAILURE"),
+  });
+  await renderConversationUi();
+}
+
+el.conversationToggle.addEventListener("click", () => {
+  const opened = el.conversationPanel.hidden;
+  el.conversationPanel.hidden = !opened;
+  el.conversationToggle.setAttribute("aria-expanded", String(opened));
+});
+el.conversationNew.addEventListener("click", async () => {
+  if (inFlight) return;
+  await saveCurrentScrollPosition();
+  await createConversation();
+  el.conversationPanel.hidden = true;
+  el.conversationToggle.setAttribute("aria-expanded", "false");
+  el.question.focus();
+});
+el.conversationClear.addEventListener("click", async () => {
+  if (!inFlight) await clearConversations();
+});
 
 // 되묻기로 확정된 값. 서버는 대화 상태를 들지 않으므로 브라우저가 들고 매 요청에
 // 함께 보낸다. 값이 실제로 제시된 선택지였는지는 서버가 다시 만들어 대조한다.
@@ -254,13 +688,16 @@ if (el.profileForm) {
 }
 
 function emptyClarify(question = "") {
-  return { question, resolved: {}, trail: [] };
+  return { question, resolved: {}, trail: [], conversation_id: currentConversationId };
 }
 
 function loadClarify() {
   try {
     const saved = JSON.parse(sessionStorage.getItem(CLARIFY_KEY) || "null");
-    if (saved && typeof saved.question === "string" && saved.resolved) {
+    if (
+      saved && typeof saved.question === "string" && saved.resolved &&
+      (!saved.conversation_id || saved.conversation_id === currentConversationId)
+    ) {
       return { ...saved, trail: Array.isArray(saved.trail) ? saved.trail : [] };
     }
   } catch (error) {
@@ -288,18 +725,29 @@ function clearClarify() {
 
 let clarify = loadClarify();
 
-function showScreen(name) {
-  Object.entries(el.screens).forEach(([key, node]) =>
-    node.classList.toggle("is-active", key === name)
-  );
-  const current = SCREEN_ORDER.indexOf(name);
-  el.stages.forEach((item) => {
-    const index = SCREEN_ORDER.indexOf(item.dataset.stage);
-    item.classList.toggle("is-current", index === current);
-    item.classList.toggle("is-done", index < current);
-  });
-  window.scrollTo({ top: 0, behavior: "smooth" });
+function isNearConversationBottom() {
+  const remaining = el.conversationTranscript.scrollHeight -
+    el.conversationTranscript.scrollTop - el.conversationTranscript.clientHeight;
+  return remaining < 96;
 }
+
+function scrollConversationToLatest(force = false) {
+  if (force || shouldFollowLatest || isNearConversationBottom()) {
+    el.conversationTranscript.scrollTop = el.conversationTranscript.scrollHeight;
+    shouldFollowLatest = true;
+    el.jumpLatest.hidden = true;
+  } else {
+    el.jumpLatest.hidden = false;
+  }
+}
+
+function updateJumpLatest() {
+  shouldFollowLatest = isNearConversationBottom();
+  el.jumpLatest.hidden = shouldFollowLatest;
+}
+
+el.conversationTranscript.addEventListener("scroll", updateJumpLatest, { passive: true });
+el.jumpLatest.addEventListener("click", () => scrollConversationToLatest(true));
 
 function showNotice(node, message, isError) {
   node.textContent = message;
@@ -332,6 +780,7 @@ async function loadHealth() {
       text.textContent = "질의 서비스 준비됨 · PDF 탑재됨";
     }
     renderExamples(data.examples || []);
+    await renderConversationUi();
   } catch (_) {
     el.status.querySelector(".dot").dataset.state = "error";
     el.status.querySelector(".status-text").textContent = "서버 상태 확인 실패";
@@ -385,70 +834,77 @@ el.form.addEventListener("submit", (event) => {
     ask(question);
   }
 });
-el.progressBack.addEventListener("click", () => {
-  if (activeController) {
-    activeController.abort("user_cancelled");
-  } else {
-    showScreen("ask");
-  }
-});
-el.answerAgain.addEventListener("click", () => {
-  el.question.value = "";
-  autoGrow();
-  showScreen("ask");
-  el.question.focus();
-});
 
-function startElapsed() {
-  const started = performance.now();
-  el.elapsed.textContent = "0초";
-  elapsedTimer = window.setInterval(() => {
-    el.elapsed.textContent = `${Math.floor((performance.now() - started) / 1000)}초`;
-  }, 250);
+function mountLiveAssistant() {
+  const empty = el.conversationTranscript.querySelector(".conversation-empty");
+  if (empty) empty.remove();
+  const block = document.createElement("article");
+  block.className = "conversation-message is-assistant is-pending";
+  block.dataset.turnId = activeTurnId || "";
+  const role = document.createElement("strong");
+  role.className = "message-role";
+  role.textContent = "학사 챗봇";
+  const content = document.createElement("p");
+  content.className = "message-content live-answer";
+  content.textContent = "질문을 분석하고 있습니다…";
+  const timeline = document.createElement("ol");
+  timeline.className = "steps live-turn-timeline";
+  timeline.setAttribute("aria-label", "현재 응답 처리 단계");
+  block.append(role, content, timeline);
+  el.conversationTranscript.append(block);
+  liveAssistantNode = block;
+  scrollConversationToLatest(true);
 }
 
-function stopElapsed() {
-  if (elapsedTimer !== null) window.clearInterval(elapsedTimer);
-  elapsedTimer = null;
+function updateLiveAssistant(message = null) {
+  if (!liveAssistantNode || !liveAssistantNode.isConnected) return;
+  const content = liveAssistantNode.querySelector(".live-answer");
+  if (content && message) content.textContent = message;
+  const timeline = liveAssistantNode.querySelector(".live-turn-timeline");
+  if (timeline) renderTimelineInto(timeline, timelineEvents, [...inspectionUpdates.values()]);
+  scrollConversationToLatest(false);
 }
 
-async function ask(question) {
+async function ask(question, displayQuestion = question) {
   inFlight = true;
   el.submit.disabled = true;
-  el.asked.textContent = question;
-  el.answerQuestion.textContent = question;
-  el.progressError.hidden = true;
-  el.spinner.classList.remove("is-done");
-  el.progressTitle.textContent = "답변을 확인하고 있습니다";
-  el.progressNow.textContent = "질문 전송됨";
+  el.form.setAttribute("aria-busy", "true");
+  el.composerStatus.textContent = "답변을 확인하고 있습니다.";
+  el.question.value = "";
+  autoGrow();
   timelineEvents = [];
   inspectionUpdates = new Map();
-  expandedStages = new Set();
   graphScales = new Map();
-  activeExplorationTab = "schema";
   lastResult = null;
   clarificationPresentation = null;
   latestOutcome = null;
-  renderTimelines();
-  el.timelineSection.hidden = true;
-  el.progressBack.textContent = "요청 취소";
-  showScreen("progress");
-  startElapsed();
+  latestConversationUpdate = null;
+  agentTraceEvents = [];
+  liveAssistantNode = null;
 
   activeController = new AbortController();
   const timeout = window.setTimeout(() => activeController.abort("timeout"), clientTimeoutMs);
   let result = null;
   let failed = false;
+  let conversationContext = null;
 
   try {
+    conversationContext = await beginConversationTurn(displayQuestion);
+    activeAssistantMessageId = opaqueId("message");
+    mountLiveAssistant();
+    if (clarify.conversation_id !== conversationContext.conversation_id) {
+      clearClarify();
+      clarify = emptyClarify(question);
+    }
     const response = await fetch("/api/ask", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(
-        Object.keys(clarify.resolved).length
-          ? { question, resolved: clarify.resolved, profile }
-          : { question, profile }
-      ),
+      body: JSON.stringify({
+        question,
+        profile,
+        conversation: conversationContext,
+        ...(Object.keys(clarify.resolved).length ? { resolved: clarify.resolved } : {}),
+      }),
       signal: activeController.signal,
     });
     if (!response.ok || !response.body) {
@@ -470,23 +926,28 @@ async function ask(question) {
         if (!line) continue;
         const payload = JSON.parse(line.slice(6));
         if (payload.type === "progress") {
-          el.progressNow.textContent = payload.message;
           renderProgress(payload);
+          updateLiveAssistant(payload.message);
         } else if (payload.type === "clarification_options") {
           clarificationPresentation = payload;
         } else if (payload.type === "profile_update" && payload.version === 1) {
           saveProfile(payload.profile);
         } else if (payload.type === "outcome" && payload.version === 1) {
           latestOutcome = payload;
+        } else if (payload.type === "conversation_update" && payload.version === 1) {
+          latestConversationUpdate = payload;
+        } else if (payload.type === "agent_trace" && payload.version === 1) {
+          agentTraceEvents.push(payload);
         } else if (payload.type === "inspection_update") {
           renderInspectionUpdate(payload);
+          updateLiveAssistant();
         } else if (payload.type === "result") {
           result = payload;
           lastResult = payload;
         } else if (payload.type === "error") {
           failed = true;
           markTimelineFailed(payload.message, payload.error_code || "CHAT_REQUEST_FAILED");
-          showNotice(el.progressError, payload.message, true);
+          updateLiveAssistant(payload.message);
         }
       }
     }
@@ -497,41 +958,49 @@ async function ask(question) {
     markTimelineCancelled(
       timedOut ? "응답 대기 시간이 초과되었습니다." : "요청이 취소되었습니다."
     );
-    showNotice(
-      el.progressError,
-      timedOut
-        ? "응답 대기 시간이 초과되었습니다. 서버의 모델 요청은 잠시 더 실행될 수 있습니다."
-        : "요청이 취소되었거나 연결이 종료되었습니다.",
-      true
-    );
+    updateLiveAssistant(timedOut
+      ? "응답 대기 시간이 초과되었습니다. 다시 시도해 주세요."
+      : "요청이 취소되었거나 연결이 종료되었습니다.");
   } finally {
     window.clearTimeout(timeout);
-    stopElapsed();
     activeController = null;
     inFlight = false;
     el.submit.disabled = false;
-    el.spinner.classList.add("is-done");
-    el.progressTitle.textContent = failed ? "처리를 마치지 못했습니다" : "답변 완료";
-    el.progressBack.textContent = "질문 다시 입력";
+    el.form.removeAttribute("aria-busy");
+    el.composerStatus.textContent = failed ? "응답을 완료하지 못했습니다." : "답변이 완료되었습니다.";
   }
 
   if (result) {
-    // 렌더링에서 예외가 나도 화면은 넘어가야 한다. 종전에는 여기서 던지면
-    // 사용자가 '답변 완료' 상태의 진행 화면에 갇혔고, 무엇이 잘못됐는지도
-    // 알 수 없었다.
     try {
-      renderAnswer(result);
-      renderTimelines();
-      renderExplorationPanel(el.answerExploration);
+      if (latestConversationUpdate) {
+        await finishConversationTurn(latestConversationUpdate, currentTurnSnapshot(result));
+      } else {
+        const response = result.response || {};
+        await finishConversationTurn({
+          version: 1,
+          conversation_id: currentConversationId,
+          turn_id: activeTurnId,
+          created_at: new Date().toISOString(),
+          summary: "",
+          current_topic: null,
+          recent_course_codes: [],
+          evidence_ids: response.used_evidence_ids || [],
+          pending_clarification: null,
+          display_answer: response.answer_text || "답변을 확인하지 못했습니다.",
+          response_status: response.status || "SAFE_FAILURE",
+          citation_ids: [],
+        }, currentTurnSnapshot(result));
+      }
     } catch (error) {
-      showNotice(
-        el.progressError,
-        "답변을 화면에 그리지 못했습니다. 새로고침 후 다시 시도해 주세요.",
-        true
-      );
+      await saveFailedConversationTurn(question, "답변을 화면에 저장하지 못했습니다. 다시 시도해 주세요.");
     }
-    showScreen("answer");
+  } else if (failed) {
+    await saveFailedConversationTurn(question, "요청을 완료하지 못했습니다. 이 질문을 다시 시도할 수 있습니다.");
   }
+  liveAssistantNode = null;
+  activeAssistantMessageId = null;
+  scrollConversationToLatest(true);
+  el.question.focus();
 }
 
 function renderProgress(payload) {
@@ -581,14 +1050,25 @@ function renderProgress(payload) {
 }
 
 function renderTimelines() {
-  renderTimelineInto(el.progressSteps);
-  renderTimelineInto(el.answerProgressSteps);
-  el.timelineSection.hidden = timelineEvents.length === 0;
+  updateLiveAssistant();
 }
 
-function renderTimelineInto(container) {
+function asInspectionMap(updates = inspectionUpdates) {
+  if (updates instanceof Map) return updates;
+  const mapped = new Map();
+  (Array.isArray(updates) ? updates : []).forEach((item) => {
+    if (item && typeof item.stage === "string") {
+      mapped.set(inspectionKey(item.stage, item.attempt), item);
+    }
+  });
+  return mapped;
+}
+
+function renderTimelineInto(container, events = timelineEvents, updates = inspectionUpdates) {
+  if (!container.id) container.id = opaqueId("timeline").replace(/:/g, "-");
+  const updateMap = asInspectionMap(updates);
   container.replaceChildren();
-  timelineEvents.forEach((event) => {
+  events.forEach((event, eventIndex) => {
     const item = document.createElement("li");
     item.className = "step";
     item.dataset.phase = event.phase;
@@ -604,10 +1084,9 @@ function renderTimelineInto(container) {
     const labelText = event.error_code
       ? `${event.message} — ${event.error_code}`
       : event.message;
-    const key = `${event.phase}:${event.attempt}`;
-    const disclosureId = `${container.id}-${event.phase.toLowerCase()}-${event.attempt}`;
-    const hasDetails = stageHasDetails(event);
-    const expanded = hasDetails && expandedStages.has(key);
+    const disclosureId = `${container.id || "turn"}-${event.phase.toLowerCase()}-${event.attempt}-${eventIndex}`;
+    const hasDetails = stageHasDetails(event, updateMap);
+    const expanded = false;
     const row = document.createElement(hasDetails ? "button" : "div");
     if (hasDetails) row.type = "button";
     row.className = `step-toggle${hasDetails ? "" : " is-static"}`;
@@ -634,12 +1113,12 @@ function renderTimelineInto(container) {
       renderStageDetail(
         disclosure,
         event,
-        container === el.answerProgressSteps
+        false,
+        updateMap
       );
       row.addEventListener("click", () => {
-        if (expandedStages.has(key)) expandedStages.delete(key);
-        else expandedStages.add(key);
-        renderTimelines();
+        disclosure.hidden = !disclosure.hidden;
+        row.setAttribute("aria-expanded", String(!disclosure.hidden));
       });
       item.append(disclosure);
     }
@@ -651,19 +1130,21 @@ function inspectionKey(stage, attempt = 0) {
   return `${stage}:${Number.isInteger(attempt) ? attempt : 0}`;
 }
 
-function latestInspection(stage) {
-  return [...inspectionUpdates.values()].reverse().find((item) => item.stage === stage) || null;
+function latestInspection(stage, updates = inspectionUpdates) {
+  const updateMap = asInspectionMap(updates);
+  return [...updateMap.values()].reverse().find((item) => item.stage === stage) || null;
 }
 
-function stageInspection(event) {
+function stageInspection(event, updates = inspectionUpdates) {
+  const updateMap = asInspectionMap(updates);
   if (event.attempt > 0) {
-    return inspectionUpdates.get(inspectionKey(event.phase, event.attempt)) || null;
+    return updateMap.get(inspectionKey(event.phase, event.attempt)) || null;
   }
-  return inspectionUpdates.get(inspectionKey(event.phase, 0)) || null;
+  return updateMap.get(inspectionKey(event.phase, 0)) || null;
 }
 
-function stageHasDetails(event) {
-  const inspection = stageInspection(event);
+function stageHasDetails(event, updates = inspectionUpdates) {
+  const inspection = stageInspection(event, updates);
   if (!inspection || !inspection.summary || inspection.status === "FAILED") return false;
   const summary = inspection.summary;
   const allowed = {
@@ -695,8 +1176,8 @@ function addDetailFacts(container, values) {
   if (list.childElementCount) container.append(list);
 }
 
-function renderStageDetail(container, event, allowExplorationLinks) {
-  const inspection = stageInspection(event);
+function renderStageDetail(container, event, allowExplorationLinks, updates = inspectionUpdates) {
+  const inspection = stageInspection(event, updates);
   const summary = inspection ? inspection.summary : null;
   if (!summary) return;
 
@@ -754,7 +1235,7 @@ function renderStageDetail(container, event, allowExplorationLinks) {
       addExplorationLink(container, "승인 Cypher 보기", "cypher");
     }
   } else if (event.phase === "GRAPH_EXECUTION") {
-    const validation = latestInspection("RESULT_VALIDATION");
+    const validation = latestInspection("RESULT_VALIDATION", updates);
     addDetailFacts(container, {
       "반환 행": summary.row_count,
       "고유 Fact": validation ? validation.summary.fact_count : null,
@@ -786,9 +1267,9 @@ function renderStageDetail(container, event, allowExplorationLinks) {
     });
   } else if (event.phase === "ANSWER_RENDERING") {
     addDetailFacts(container, {
-      "결정론적 한국어 renderer": summary.deterministic_renderer,
+      "sealed canonical Claim renderer": summary.deterministic_renderer,
       "Citation 수": summary.citation_count,
-      "최종 답변 LLM 호출": summary.final_answer_llm_calls,
+      "sealed canonical 생성 LLM 호출": summary.final_answer_llm_calls,
     });
   } else if (event.phase === "COMPLETED") {
     addDetailFacts(container, {
@@ -798,9 +1279,6 @@ function renderStageDetail(container, event, allowExplorationLinks) {
         : null,
       "재시도 횟수": summary.retry_count,
       "Citation 수": summary.citation_count,
-      "request ID": queryDetailsEnabled && lastResult && lastResult.response
-        ? lastResult.response.request_id
-        : null,
     });
     addInspectionItem(container, "단계별 시간(ms)", summary.stage_timings_ms);
   }
@@ -860,17 +1338,18 @@ function addExplorationLink(container, label, tab) {
   button.className = "stage-jump";
   button.textContent = label;
   button.addEventListener("click", () => {
-    activeExplorationTab = tab;
-    renderExplorationPanel(el.answerExploration);
-    el.answerExploration.scrollIntoView({ behavior: "smooth", block: "start" });
+    const target = container.closest(".conversation-message")?.querySelector(".exploration");
+    if (!target) return;
+    target.dataset.activeTab = tab;
+    target.scrollIntoView({ behavior: "smooth", block: "nearest" });
   });
   container.append(button);
 }
 
-function explorationState() {
-  const schema = latestInspection("SCHEMA_SELECTION");
-  const explain = latestInspection("NEO4J_EXPLAIN");
-  const claims = latestInspection("CLAIM_BUILDING");
+function explorationState(updates = inspectionUpdates) {
+  const schema = latestInspection("SCHEMA_SELECTION", updates);
+  const explain = latestInspection("NEO4J_EXPLAIN", updates);
+  const claims = latestInspection("CLAIM_BUILDING", updates);
   return {
     schema: schema && schema.status === "COMPLETED" ? schema.summary : null,
     explain: explain && explain.status === "COMPLETED" ? explain.summary : null,
@@ -878,7 +1357,7 @@ function explorationState() {
   };
 }
 
-function renderExplorationPanel(container) {
+function renderExplorationPanel(container, updates = inspectionUpdates, result = lastResult) {
   if (graphResizeObserver) {
     container.querySelectorAll(".graph-viewport").forEach((viewport) => {
       graphResizeObserver.unobserve(viewport);
@@ -888,7 +1367,8 @@ function renderExplorationPanel(container) {
   container.hidden = !queryDetailsEnabled;
   if (!queryDetailsEnabled) return;
 
-  const state = explorationState();
+  if (!container.id) container.id = opaqueId("exploration").replace(/:/g, "-");
+  const state = explorationState(updates);
   const availability = {
     schema: Boolean(
       state.schema &&
@@ -904,8 +1384,10 @@ function renderExplorationPanel(container) {
     ),
   };
   const availableTabs = Object.keys(availability).filter((key) => availability[key]);
-  if (!availability[activeExplorationTab] && availableTabs.length) {
-    activeExplorationTab = availableTabs[0];
+  let selectedTab = container.dataset.activeTab || "schema";
+  if (!availability[selectedTab] && availableTabs.length) {
+    selectedTab = availableTabs[0];
+    container.dataset.activeTab = selectedTab;
   }
 
   const head = document.createElement("div");
@@ -931,7 +1413,7 @@ function renderExplorationPanel(container) {
     button.type = "button";
     button.id = `${container.id}-tab-${key}`;
     button.setAttribute("role", "tab");
-    button.setAttribute("aria-selected", String(activeExplorationTab === key));
+    button.setAttribute("aria-selected", String(selectedTab === key));
     button.setAttribute("aria-controls", `${container.id}-panel`);
     button.disabled = !availability[key];
     button.title = availability[key]
@@ -939,8 +1421,8 @@ function renderExplorationPanel(container) {
       : "아직 해당 단계가 완료되지 않았습니다";
     button.textContent = label;
     button.addEventListener("click", () => {
-      activeExplorationTab = key;
-      renderExplorationPanel(el.answerExploration);
+      container.dataset.activeTab = key;
+      renderExplorationPanel(container, updates, result);
     });
     tabs.append(button);
   });
@@ -959,15 +1441,15 @@ function renderExplorationPanel(container) {
   panel.id = `${container.id}-panel`;
   panel.className = "exploration-panel";
   panel.setAttribute("role", "tabpanel");
-  panel.setAttribute("aria-labelledby", `${container.id}-tab-${activeExplorationTab}`);
+  panel.setAttribute("aria-labelledby", `${container.id}-tab-${selectedTab}`);
   if (!availableTabs.length) {
     const empty = document.createElement("p");
     empty.className = "exploration-empty";
     empty.textContent = "안전하게 공개할 수 있는 승인 정보가 없습니다.";
     panel.append(empty);
-  } else if (activeExplorationTab === "schema") {
+  } else if (selectedTab === "schema") {
     renderSchemaTab(panel, state.schema);
-  } else if (activeExplorationTab === "cypher") {
+  } else if (selectedTab === "cypher") {
     renderCypherTab(panel, state.explain);
   } else {
     renderGraphTab(panel, state);
@@ -1445,72 +1927,14 @@ function renderGraphPanel(container, title, graph) {
   container.append(panel);
 }
 
-function renderAnswer(result) {
-  const response = result.response;
-  const presentation = result.presentation;
-  const outcomeLabels = {
-    ANSWERED: "근거 확인 답변",
-    NEEDS_USER_INFO: "사용자 정보 필요",
-    INSUFFICIENT_EVIDENCE: "근거 부족",
-    OUT_OF_SCOPE: "지원 범위 밖",
-    ADVISORY: "조건부 안내",
-  };
-  el.answerBadge.textContent = latestOutcome
-    ? (outcomeLabels[latestOutcome.status] || presentation.status_label)
-    : presentation.status_label;
-  el.answerBadge.dataset.state = latestOutcome ? latestOutcome.status : response.status;
-  el.answerTitle.textContent = latestOutcome && latestOutcome.message
-    ? latestOutcome.message
-    : response.answer_text;
-
-  el.clarification.hidden = !response.clarification;
-  el.clarification.textContent = response.clarification || "";
-  renderTrail();
-  renderChoices(response, clarificationPresentation);
-  el.scopeNotice.hidden = !presentation.scope_notice;
-  el.scopeNotice.textContent = presentation.scope_notice || "";
-  el.debugMeta.hidden = !presentation.debug;
-  el.debugMeta.textContent = presentation.debug
-    ? `request_id=${presentation.debug.request_id} · error_code=${presentation.debug.error_code || "없음"}`
-    : "";
-  renderEvidence(presentation);
-}
-
-// 어떤 질문에서 무엇을 골라 이 답에 닿았는지 그대로 남긴다. 선택지를 여러 번 타고
-// 들어가면 처음 물은 것이 무엇이었는지 잊게 되고, 그러면 답이 맞는지도 판단할 수 없다.
-// 화면 표시일 뿐이며 조회 조건은 `clarify.resolved` 가 그대로 들고 있다.
-function renderTrail() {
-  if (!el.trail) return;
-  const steps = clarify.trail || [];
-  el.trail.textContent = "";
-  el.trail.hidden = steps.length === 0;
-  if (!steps.length) return;
-  for (const step of steps) {
-    const item = document.createElement("li");
-    item.className = "trail-step";
-    const asked = document.createElement("span");
-    asked.className = "trail-asked";
-    asked.textContent = step.prompt || "되물음";
-    const picked = document.createElement("span");
-    picked.className = "trail-picked";
-    picked.textContent = step.label;
-    item.append(asked, picked);
-    el.trail.append(item);
-  }
-}
-
-function renderChoices(response, envelope) {
-  // 화면 문서가 오래됐을 수 있다. 요소가 없으면 선택지만 못 보여 줄 뿐,
-  // 답변과 근거는 그대로 나와야 한다.
-  if (!el.choices || !el.choiceList) return;
+function renderTurnChoices(container, sourceQuestion, response, envelope) {
   const options = envelope && envelope.version === 1 && Array.isArray(envelope.options)
     ? envelope.options
     : [];
-  el.choiceList.textContent = "";
-  el.choices.hidden = options.length === 0;
   if (!options.length) return;
-  // 지금 화면에 떠 있는 되묻기 문구. 고른 뒤에는 사라지므로 여기서 기록해 둔다.
-  const prompt = response.clarification || "";
+  const choices = document.createElement("div");
+  choices.className = "choices turn-choices";
+  const prompt = response && response.clarification ? response.clarification : "추가 조건을 선택해 주세요.";
   for (const option of options) {
     const button = document.createElement("button");
     button.type = "button";
@@ -1520,37 +1944,40 @@ function renderChoices(response, envelope) {
     if (option.detail && option.detail !== option.label) button.title = option.detail;
     button.addEventListener("click", () => {
       if (inFlight) return;
-      // 값은 서버가 준 것을 그대로 되돌려 보낸다. 화면이 값을 만들지 않는다.
       clarify = {
-        question: clarify.question,
+        question: sourceQuestion,
         resolved: { ...clarify.resolved, [option.filter]: option.value },
         trail: [...(clarify.trail || []), { prompt, label: option.label }],
+        conversation_id: currentConversationId,
       };
       saveClarify(clarify);
-      ask(clarify.question);
+      ask(sourceQuestion, option.label);
     });
-    el.choiceList.append(button);
+    choices.append(button);
   }
+  container.append(choices);
 }
 
-function renderEvidence(presentation) {
+function renderEvidenceInto(container, presentation) {
   const pages = presentation.evidence_pages || [];
   pdfPageCount = Number(presentation.pdf && presentation.pdf.page_count) || 0;
   const total = pages.reduce((sum, page) => sum + page.evidence.length, 0);
-  el.evidenceSection.hidden = total === 0;
-  el.evidenceSummary.textContent = pages.length
+  if (!total) return;
+  const section = document.createElement("section");
+  section.className = "evidence turn-evidence";
+  const heading = document.createElement("h4");
+  heading.textContent = pages.length
     ? `발췌 PDF ${pages.length}개 페이지 · 근거 ${total}건`
     : "표시할 VERIFIED 근거가 없습니다.";
-  el.pdfNotice.hidden = true;
+  section.append(heading);
   if (pages.length && presentation.pdf && !presentation.pdf.available) {
-    showNotice(
-      el.pdfNotice,
-      `${presentation.pdf.reason} 페이지 번호와 Evidence 원문은 계속 표시합니다.`,
-      false
-    );
+    const notice = document.createElement("p");
+    notice.className = "notice";
+    notice.textContent = `${presentation.pdf.reason} 페이지 번호와 Evidence 원문은 계속 표시합니다.`;
+    section.append(notice);
   }
-  el.evidencePages.replaceChildren();
-  pages.forEach((page) => el.evidencePages.append(pageCard(page, presentation.pdf, total)));
+  pages.forEach((page) => section.append(pageCard(page, presentation.pdf, total)));
+  container.append(section);
 }
 
 function pageLabel(value, fallback = "미표기") {
@@ -1659,7 +2086,12 @@ function pageCard(page, pdf, totalEvidence) {
 
 function openPdfModal(page, evidence) {
   if (!pdfAvailable) return;
-  modalState = { originPage: page, evidence, page: page.excerpt_page };
+  modalState = {
+    originPage: page,
+    evidence,
+    page: page.excerpt_page,
+    returnFocus: document.activeElement,
+  };
   modalZoom = 1;
   renderPdfModal();
   el.pdfModal.showModal();
@@ -1708,6 +2140,28 @@ function renderPdfModal() {
 }
 
 el.pdfModalClose.addEventListener("click", () => el.pdfModal.close());
+el.pdfModal.addEventListener("keydown", (event) => {
+  if (event.key !== "Tab") return;
+  const focusable = [...el.pdfModal.querySelectorAll(
+    'button:not(:disabled), [href], input:not(:disabled), [tabindex]:not([tabindex="-1"])'
+  )].filter((node) => !node.hidden);
+  if (!focusable.length) return;
+  const first = focusable[0];
+  const last = focusable[focusable.length - 1];
+  if (event.shiftKey && document.activeElement === first) {
+    event.preventDefault();
+    last.focus();
+  } else if (!event.shiftKey && document.activeElement === last) {
+    event.preventDefault();
+    first.focus();
+  }
+});
+el.pdfModal.addEventListener("close", () => {
+  const returnFocus = modalState && modalState.returnFocus;
+  if (returnFocus && typeof returnFocus.focus === "function" && returnFocus.isConnected) {
+    returnFocus.focus();
+  }
+});
 el.pdfPrev.addEventListener("click", () => {
   if (modalState && modalState.page > 1) {
     modalState.page -= 1;
@@ -1730,5 +2184,8 @@ el.pdfZoomOut.addEventListener("click", () => {
 });
 
 loadHealth();
+ensureConversation().catch(() => {
+  showNotice(el.askNotice, "브라우저 채팅 저장소를 사용할 수 없어 이번 화면에서만 질문할 수 있습니다.", false);
+});
 autoGrow();
 el.question.focus();

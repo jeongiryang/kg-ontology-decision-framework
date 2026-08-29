@@ -59,7 +59,7 @@ class ResultValidator:
             return ValidatedResult((), 0, 0)
         required = set(plan.requested_fields) | set(plan.filters) | {"fact_id", "fact_label"}
         if plan.selection_mode is SelectionMode.SINGLE_COURSE:
-            required.add("course_identity")
+            required.update({"course_identity", "name_ko"})
         if plan.evidence_required:
             required.update(self.EVIDENCE_FIELDS)
         seen_rows: set[str] = set()
@@ -90,6 +90,12 @@ class ResultValidator:
                         f"row {index} has invalid course_identity",
                     )
                 course_identities.add(identity)
+                name = row["name_ko"]
+                if not isinstance(name, str) or not name.strip():
+                    self._fail(
+                        "RESULT_COURSE_NAME_INVALID",
+                        f"row {index} has invalid name_ko",
+                    )
             if plan.evidence_required:
                 if row["fact_status"] != "VERIFIED":
                     self._fail("RESULT_FACT_NOT_VERIFIED", f"row {index} fact is not VERIFIED")

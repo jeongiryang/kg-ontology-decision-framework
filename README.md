@@ -31,6 +31,7 @@
 → Neo4j
 → 자연어 질문
 → 브라우저 프로필·현재 메시지의 검증된 사용자 진술 결합
+→ bounded 대화 문맥과 LLM 도구 계획
 → 데이터 기반 semantic slot 또는 LLM QueryPlan
 → 관련 스키마 선택
 → LLM Cypher 후보 생성
@@ -40,7 +41,7 @@
 → execute_read
 → ResultValidator
 → 구조화 Claim
-→ 결정론적 한국어 답변
+→ 결정론적 canonical 답변·검증된 자연어 표시 초안
 → VERIFIED Evidence Citation
 → Starlette/SSE 웹 UI
 ```
@@ -48,7 +49,7 @@
 - 명시적인 과목·규칙 semantic slot은 Verified bundle 기반 결정론적 planner가 처리하고,
   그 밖의 자연어 `QueryPlan`과 Cypher 후보는 LLM이 생성합니다.
 - 생성된 Cypher는 주석 제거, 제한 문법·스키마 검사와 Neo4j `EXPLAIN`을 모두 통과해야 읽기 트랜잭션으로 실행됩니다.
-- 최종 사실 문장은 LLM이 자유롭게 작성하지 않습니다. Python이 검증된 Claim의 값·단위·극성을 결정론적으로 렌더링합니다.
+- sealed 응답의 canonical 사실 문장은 Python이 검증된 Claim의 값·단위·극성으로 렌더링합니다. 작은 Claim 조합은 LLM이 자연스러운 표시 초안을 만들 수 있지만, Python이 subject·숫자 역할·enum·극성과 Citation 승인을 다시 대조한 경우에만 채택하며 나머지는 canonical 문장으로 되돌립니다.
 - Evidence가 없거나 `REVIEW_REQUIRED`인 사실은 확정 답변으로 승격하지 않습니다.
 - clarification 선택지는 sealed `ChatResponse`에 추가하지 않고 별도의 versioned SSE envelope로 전달합니다.
 - 개인화 결과의 다섯 상태와 프로필 갱신도 별도 versioned SSE envelope이며 sealed
@@ -68,11 +69,13 @@
 - `execute_read` 기반 읽기 경로와 결과 크기 제한
 - Fact·Evidence 상태 및 직접 provenance 검증
 - 구조화 Claim과 결정론적 한국어 답변
+- 제한된 LLM 도구 계획, 추가 KG 조회와 Claim 검증형 자연어 표시 답변
 - Evidence 원문 및 발췌 PDF·원본 PDF·인쇄 페이지 Citation
 - 19페이지 PDF 이미지와 PyMuPDF 실제 텍스트 검색 강조
 - Starlette/SSE 처리 타임라인과 상태별 UI
 - 상세 모드의 선택 스키마·승인 Cypher·정적 조회 그래프
 - `localStorage` 기반 versioned 사용자 프로필, 채팅 정보 추출·정정·후속 질문 재사용
+- `IndexedDB` 기반 versioned 채팅방·메시지 저장, 대명사·생략·주제 전환 지원
 - `ANSWERED`, `NEEDS_USER_INFO`, `INSUFFICIENT_EVIDENCE`, `OUT_OF_SCOPE`,
   `ADVISORY` 개인화 outcome
 
@@ -106,6 +109,7 @@ kg-ontology-decision-framework/
 │   ├── llm/                     # provider adapter, planner, Cypher generator
 │   ├── query/                   # QueryPlan, selector, SafetyPipeline, validator
 │   ├── answer/                  # Claim 검증, 한국어 renderer, 개인화 outcome
+│   ├── agent/                   # bounded 도구 오케스트레이터와 대화 문맥 계약
 │   ├── personalization.py       # 브라우저 프로필 검증·메시지 정보 추출
 │   └── neo4j_ingest.py          # Verified KG 검증·적재 CLI
 ├── src/evidence_chat/

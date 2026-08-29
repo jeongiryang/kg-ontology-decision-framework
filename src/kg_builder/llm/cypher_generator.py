@@ -156,7 +156,17 @@ def build_syntax_scaffold(plan: QueryPlan, schema_subset: Mapping[str, Any]) -> 
             )
         requested_returns.append(f"{owner}.{field} AS {field}")
 
-    returns = requested_returns + scope_returns + [
+    subject_returns: list[str] = []
+    if (
+        plan.selection_mode is SelectionMode.SINGLE_COURSE
+        and "name_ko" not in plan.requested_fields
+        and "name_ko" not in plan.filters
+    ):
+        # This is a Claim-subject support field, not another answer slot.  A stable
+        # course-code lookup still needs the display identity in the same verified
+        # row so ClaimBuilder never has to consult an ungrounded side channel.
+        subject_returns.append("c.name_ko AS name_ko")
+    returns = requested_returns + scope_returns + subject_returns + [
         item.format(fact=fact_alias, fact_id=fact_id) for item in PROVENANCE_RETURNS
     ]
     if plan.selection_mode is SelectionMode.SINGLE_COURSE:

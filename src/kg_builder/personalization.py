@@ -239,6 +239,25 @@ _TEST_PATTERNS = {
     "TOEIC_SPEAKING": re.compile(r"(?:TOEIC\s*SPEAKING|토익\s*스피킹)\s*(?:LEVEL\s*)?(\d{2,3})", re.IGNORECASE),
     "OPIC": re.compile(r"(?:OPIC|오픽)\s*([A-Z]{1,3}\d?)", re.IGNORECASE),
 }
+_KOREAN_DIGITS = {
+    "일": 1, "이": 2, "삼": 3, "사": 4, "오": 5,
+    "육": 6, "칠": 7, "팔": 8, "구": 9,
+}
+
+
+def _korean_number(text: str) -> int | None:
+    """Parse an unambiguous Korean integer from 1 through 99."""
+
+    if text == "십":
+        return 10
+    if "십" in text:
+        left, right = text.split("십", 1)
+        tens = 1 if left == "" else _KOREAN_DIGITS.get(left)
+        ones = 0 if right == "" else _KOREAN_DIGITS.get(right)
+        if tens is None or ones is None:
+            return None
+        return tens * 10 + ones
+    return _KOREAN_DIGITS.get(text)
 
 
 @dataclass(frozen=True, slots=True)
@@ -328,6 +347,16 @@ class ProfileExtractor:
                 continue
             credits[category] = next(iter(values))
             changed.add(f"credits.{category}")
+        for match in re.finditer(
+            r"(?<![가-힣])(총|전체|교양|전공|일반선택|자유선택|일선)(?:은|이|는|을)?[ \t]*"
+            r"([일이삼사오육칠팔구]?십[일이삼사오육칠팔구]?|[일이삼사오육칠팔구])[ \t]*학점",
+            question,
+        ):
+            category = _CREDIT_CATEGORIES[match.group(1)]
+            value = _korean_number(match.group(2))
+            if value is not None and category not in observations:
+                credits[category] = float(value)
+                changed.add(f"credits.{category}")
         if "total" not in observations:
             total_match = re.search(
                 r"(?:지금까지|현재까지)\s*(\d+(?:\.\d+)?)\s*학점(?:을|를)?\s*(?:이수|들)",
@@ -375,6 +404,20 @@ class ProfileExtractor:
                 value: int | str = int(raw) if raw.isdigit() else raw
                 credential_map[test] = {"test": test, "value": value}
                 changed.add("english_credentials")
+        generic_score_correction = re.search(
+            r"(?:아까|방금|앞서)?[ \t]*(?:말한[ \t]*)?(?:점수(?:는|를)?[ \t]*)?"
+            r"(\d{2,3})[ \t]*점(?:으로)?[ \t]*(?:정정|바꿀|수정)",
+            question,
+        )
+        if generic_score_correction and len(credential_map) == 1:
+            # A test name may be omitted only when the validated profile contains one
+            # unambiguous credential.  The value remains USER_ASSERTION provenance.
+            test = next(iter(credential_map))
+            credential_map[test] = {
+                "test": test,
+                "value": int(generic_score_correction.group(1)),
+            }
+            changed.add("english_credentials")
         data["english_credentials"] = list(credential_map.values())
 
         goal = re.search(r"([가-힣A-Za-z·\s]{2,24})(?:가|이)?\s*되고\s*싶", question)

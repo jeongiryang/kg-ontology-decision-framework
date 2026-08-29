@@ -15,47 +15,34 @@
         <p>2026학년도 Verified 지식그래프 · 규정 원문 근거 기반 응답</p>
       </div>
     </div>
-    <div class="status" id="status" role="status" aria-live="polite">
-      <span class="dot" data-state="unknown"></span>
-      <span class="status-text">상태 확인 중</span>
+    <div class="topbar-actions">
+      <button type="button" class="conversation-toggle" id="conversation-toggle" aria-expanded="false" aria-controls="conversation-panel">채팅방</button>
+      <div class="status" id="status" role="status" aria-live="polite">
+        <span class="dot" data-state="unknown"></span>
+        <span class="status-text">상태 확인 중</span>
+      </div>
     </div>
   </header>
 
-  <nav class="stages" aria-label="진행 단계">
-    <ol>
-      <li data-stage="ask" class="is-current"><span>1</span>질문 입력</li>
-      <li data-stage="progress"><span>2</span>답변 확인</li>
-      <li data-stage="answer"><span>3</span>답변과 근거</li>
-    </ol>
-  </nav>
+  <aside class="conversation-panel" id="conversation-panel" aria-label="채팅방 목록" hidden>
+    <div class="conversation-panel-head">
+      <h2>내 채팅</h2>
+      <button type="button" class="primary compact" id="conversation-new">새 채팅</button>
+    </div>
+    <p>채팅은 이 브라우저의 IndexedDB에만 저장됩니다.</p>
+    <ol id="conversation-list" class="conversation-list"></ol>
+    <button type="button" class="ghost compact" id="conversation-clear">전체 채팅 삭제</button>
+  </aside>
 
-  <main>
-    <section class="screen is-active" id="screen-ask" aria-labelledby="ask-title">
-      <div class="ask-wrap">
+  <main class="chat-main">
+    <section class="chat-shell" aria-labelledby="ask-title">
+      <div class="chat-intro">
         <h2 id="ask-title">무엇을 확인해 드릴까요?</h2>
         <p class="ask-sub">
           교양 이수요건, 과목 편성, 전공필수, 이수구분을 물어보세요.
           답변은 검증된 규정 원문 근거와 함께 표시됩니다.
         </p>
         <p class="scope-fixed">현재 지원 범위: 2026학년도 공통 교양 및 컴퓨터공학과 교육과정</p>
-        <form id="ask-form" autocomplete="off">
-          <div class="prompt">
-            <textarea
-              id="question"
-              name="question"
-              rows="1"
-              maxlength="2000"
-              placeholder="학사규정이나 교육과정에 대해 질문해 주세요"
-              aria-label="질문 입력"
-              required
-            ></textarea>
-            <button type="submit" id="submit" aria-label="질문 보내기">
-              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 12h13M13 6l6 6-6 6" /></svg>
-            </button>
-          </div>
-          <p class="hint"><kbd>Enter</kbd> 전송 · <kbd>Shift</kbd>+<kbd>Enter</kbd> 줄바꿈</p>
-        </form>
-        <div class="examples" id="examples" aria-label="예시 질문"></div>
         <details class="profile-panel" id="profile-panel">
           <summary>내 학적·이수 정보</summary>
           <p class="profile-storage-note">
@@ -92,77 +79,33 @@
         </details>
         <p class="notice" id="ask-notice" hidden></p>
       </div>
-    </section>
-
-    <section class="screen" id="screen-progress" aria-labelledby="progress-title">
-      <div class="progress-wrap">
-        <div class="progress-head">
-          <div class="spinner" id="spinner" aria-hidden="true"></div>
-          <div>
-            <h2 id="progress-title">답변을 확인하고 있습니다</h2>
-            <p class="progress-now" id="progress-now" aria-live="polite">질문 전송됨</p>
-          </div>
-          <p class="elapsed" id="elapsed">0초</p>
+      <section
+        class="conversation-transcript"
+        id="conversation-transcript"
+        aria-label="현재 채팅 내용"
+      ></section>
+      <button type="button" class="jump-latest" id="jump-latest" hidden>최신 메시지 보기</button>
+      <div class="examples" id="examples" aria-label="예시 질문"></div>
+      <form id="ask-form" class="chat-composer" autocomplete="off">
+        <div class="prompt">
+          <label class="sr-only" for="question">질문 입력</label>
+          <textarea
+            id="question"
+            name="question"
+            rows="1"
+            maxlength="2000"
+            placeholder="학사규정이나 교육과정에 대해 질문해 주세요"
+            required
+          ></textarea>
+          <button type="submit" id="submit" aria-label="질문 보내기">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 12h13M13 6l6 6-6 6" /></svg>
+          </button>
         </div>
-        <blockquote class="asked" id="asked"></blockquote>
-        <ol class="steps progress-steps" id="progress-steps" aria-label="실제 처리 단계"></ol>
-        <p class="notice error" id="progress-error" hidden></p>
-        <button class="ghost" id="progress-back" type="button">요청 취소</button>
-      </div>
-    </section>
-
-    <section class="screen" id="screen-answer" aria-labelledby="answer-title">
-      <div class="answer-wrap">
-        <blockquote class="asked" id="answer-question"></blockquote>
-
-        <!-- 되묻기를 여러 번 타고 들어가면 처음 무엇을 물었고 무엇을 골라 여기까지
-             왔는지 잊게 된다. 고른 순서를 그대로 남긴다. -->
-        <ol class="trail" id="answer-trail" hidden></ol>
-
-        <article class="answer-card" id="answer-card">
-          <div class="answer-meta">
-            <span class="badge" id="answer-badge"></span>
-          </div>
-          <h2 id="answer-title">답변</h2>
-          <p class="clarification" id="clarification" hidden></p>
-          <!-- 선택지는 서버가 적재 데이터에서 만든 것만 온다. 사용자가 직접 값을
-               적어 넣는 입력란을 두지 않는 이유가 이것이다. -->
-          <div class="choices" id="choices" hidden>
-            <div class="choice-list" id="choice-list"></div>
-            <p class="choice-hint">
-              고르시면 같은 질문에 이 조건을 더해 다시 확인합니다.
-              해당하는 것이 없으면 질문을 다시 입력해 주세요.
-            </p>
-          </div>
-          <p class="scope-notice" id="scope-notice" hidden></p>
-          <p class="debug-meta" id="debug-meta" hidden></p>
-        </article>
-
-        <section
-          class="exploration"
-          id="answer-exploration"
-          aria-label="승인된 질의와 지식그래프 탐색"
-          hidden
-        ></section>
-
-        <details class="debug" id="timeline-section" hidden open>
-          <summary>처리 과정 보기</summary>
-          <ol class="steps result-timeline" id="answer-progress-steps" aria-label="완료된 처리 단계"></ol>
-        </details>
-
-        <section class="evidence" id="evidence-section" aria-labelledby="evidence-title">
-          <div class="evidence-head">
-            <h3 id="evidence-title">근거 문서</h3>
-            <p id="evidence-summary"></p>
-          </div>
-          <div id="evidence-pages"></div>
-          <p class="notice" id="pdf-notice" hidden></p>
-        </section>
-
-        <div class="answer-actions">
-          <button class="primary" id="answer-again" type="button">새 질문하기</button>
+        <div class="composer-meta">
+          <p class="hint"><kbd>Enter</kbd> 전송 · <kbd>Shift</kbd>+<kbd>Enter</kbd> 줄바꿈</p>
+          <p class="composer-status" id="composer-status" role="status" aria-live="polite"></p>
         </div>
-      </div>
+      </form>
     </section>
   </main>
 
