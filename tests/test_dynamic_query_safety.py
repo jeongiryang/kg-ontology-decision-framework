@@ -519,6 +519,26 @@ class ResultValidatorTests(unittest.TestCase):
             ResultValidator(max_response_bytes=100).validate(self.plan, rows, provenance())
         self.assertEqual(raised.exception.code, "RESULT_TOTAL_BYTES_EXCEEDED")
 
+    def test_single_course_requires_nonempty_grounded_subject_name(self) -> None:
+        payload = plan_payload()
+        payload["selection_mode"] = "SINGLE_COURSE"
+        payload["filters"] = {
+            "academic_year": 2026,
+            "department_id": "department:cwnu:cse",
+            "course_code": "CDA0091",
+        }
+        payload["requested_fields"] = ["completion_type"]
+        plan = QueryPlan.from_dict(payload, SchemaCatalog.from_generated())
+        row = valid_row()
+        row["course_identity"] = "course:cwnu:CDA0091"
+        result = ResultValidator().validate(plan, [row], provenance())
+        self.assertEqual(result.row_count, 1)
+
+        row["name_ko"] = " "
+        with self.assertRaises(ResultValidationError) as raised:
+            ResultValidator().validate(plan, [row], provenance())
+        self.assertEqual(raised.exception.code, "RESULT_COURSE_NAME_INVALID")
+
 
 class FakeExplainer:
     def __init__(self) -> None:

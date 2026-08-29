@@ -242,7 +242,7 @@ uv run pytest
 KG_NEO4J_INTEGRATION=1 uv run pytest tests/test_dynamic_query_integration.py
 ```
 
-통합 테스트는 별도의 `NEO4J_QUERY_*` 읽기 전용 자격증명이 있을 때만 안전 쿼리의 EXPLAIN·실행·Evidence 검증을 수행한다. 실행 전후 노드 1,518개, 관계 3,260개, Evidence 511개가 동일해야 한다. GitHub Actions는 비밀값 없는 단위 테스트와 스키마 검사를 수행하며 로컬 Neo4j 통합 테스트를 통과한 것으로 가장하지 않는다.
+통합 테스트는 별도의 `NEO4J_QUERY_*` 읽기 전용 자격증명이 있을 때만 안전 쿼리의 EXPLAIN·실행·Evidence 검증을 수행한다. 실행 전후 노드 1,536개, 관계 3,287개, Evidence 520개가 동일해야 한다. GitHub Actions는 비밀값 없는 단위 테스트와 스키마 검사를 수행하며 로컬 Neo4j 통합 테스트를 통과한 것으로 가장하지 않는다.
 
 ## 11. 로컬 LLM 연결 상태
 

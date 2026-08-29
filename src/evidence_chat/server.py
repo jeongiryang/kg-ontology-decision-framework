@@ -33,6 +33,11 @@ from starlette.staticfiles import StaticFiles
 
 from kg_builder.answer.contracts import ChatResponse
 from kg_builder.answer.service import CurriculumChatService
+from kg_builder.answer.personalized_service import (
+    PersonalizedChatResult,
+    PersonalizedCurriculumChatService,
+)
+from kg_builder.agent import AgenticCurriculumChatService, AgentPolicy, ConversationContext
 from kg_builder.config import ConfigurationError, Neo4jQuerySettings
 from kg_builder.llm.client import LLMConfigurationError, LLMSettings, create_llm_client
 from kg_builder.llm.cypher_generator import LocalCypherGenerator
@@ -52,6 +57,7 @@ from kg_builder.query.query_trace import EMAIL_PATTERN, PHONE_PATTERN, STUDENT_I
 from kg_builder.query.safety_pipeline import SafetyPipeline
 from kg_builder.query.schema_catalog import SchemaCatalog
 from kg_builder.query.schema_selector import QuerySchemaSelector
+from kg_builder.personalization import ProfileValidationError, UserProfile
 
 from . import pdf_evidence
 from .chat_adapter import ChatResponseAdapter
@@ -68,16 +74,15 @@ DEFAULT_HOST = "127.0.0.1"
 DEFAULT_PORT = 8501
 DEFAULT_CLIENT_TIMEOUT_SECONDS = 180
 DEFAULT_MAX_CONCURRENT = 1
-MAX_BODY_BYTES = 16 * 1024
+MAX_BODY_BYTES = 64 * 1024
 # 되묻기로 채울 수 있는 항목 수 상한. 이 이상은 정상 흐름이 아니다.
 MAX_RESOLVED_ENTRIES = 8
 # 승인된 MATCH 경로의 최대 hop 수. 검증기가 허용하는 경로보다 넉넉하다.
 MAX_PATH_EDGES = 32
 _SAFE_TYPE_NAME = re.compile(r"[A-Za-z][A-Za-z0-9_]{0,79}\Z")
 
-# 추적 화면의 공개 수준. 기본은 full 이다. 이 프로젝트의 목적이 근거를 추적 가능하게
-# 보여 주는 것이고, 승인 Cypher 는 공개 온톨로지에서 생성된 것이라 비밀이 아니다.
-# 외부 시연에서는 실행 시 summary 로 낮춘다.
+# 추적 화면의 공개 수준. 기본은 off다. 승인 Cypher와 traversal projection도 서버
+# 환경에서 명시적으로 full을 선택한 로컬 개발·시연 환경에만 보낸다.
 DETAIL_FULL = "full"
 DETAIL_SUMMARY = "summary"
 DETAIL_OFF = "off"
@@ -94,14 +99,14 @@ def _env_detail_level(name: str) -> str:
 
     raw = os.getenv(name)
     if raw is None:
-        return DETAIL_FULL
+        return DETAIL_OFF
     value = raw.strip().lower()
     if value in DETAIL_LEVELS:
         return value
     if value in _LEGACY_DETAIL:
         return _LEGACY_DETAIL[value]
     if not value:
-        return DETAIL_FULL
+        return DETAIL_OFF
     raise ConfigurationError(
         f"{name} must be one of {', '.join(DETAIL_LEVELS)} (or legacy true/false)"
     )
@@ -139,7 +144,6 @@ PUBLISHED_FIELDS: dict[str, dict[str, str]] = {
         "query_plan": "검증을 통과한 QueryPlan. 값은 사용자 질문에서 왔고 온톨로지 필터로 한정된다",
         "missing": "부족한 항목의 통제 코드. 대문자 스네이크만 통과시킨다",
         "clarification_available": "되묻기 가능 여부. 불리언",
-        "question_text": "사용자가 입력한 원문. 이미 화면에 표시된 값이다",
     },
     "SCHEMA_SELECTION": {
         "labels": "온톨로지가 선언한 라벨 이름. 공개 명세에 있는 값이다",
@@ -147,14 +151,13 @@ PUBLISHED_FIELDS: dict[str, dict[str, str]] = {
         "node_label_count": "개수. 정수",
         "relationship_count": "개수. 정수",
         "label_names_ko": "라벨의 한국어 표기. ontology_spec.json 의 name_ko 이며 공개 명세에 있는 값이다",
+        "relationship_names_ko": "관계 타입의 한국어 표기. 공개 온톨로지 명세에서 가져온다",
     },
     "CYPHER_GENERATION": {
         "candidate_generated": "후보 생성 여부. 불리언",
         "candidate_attempt": "시도 회차. 1~10 정수",
         "retry": "재시도 여부. 불리언",
         "message": "고정 안내 문구. 모델 출력이 아니다",
-        "discarded_cypher": "버려진 후보 Cypher. 실행되지 않았음을 배지로 함께 표시한다",
-        "discard_reason": "버려진 사유 오류 코드. 통제된 대문자 코드",
     },
     "STATIC_VALIDATION": {
         "read_only_syntax_verified": "검사 통과 여부. 불리언",
@@ -214,11 +217,19 @@ PUBLISHED_FIELDS: dict[str, dict[str, str]] = {
 SUMMARY_HIDDEN_FIELDS = frozenset(
     {
         "approved_cypher",
-        "discarded_cypher",
         "parameters",
         "query_plan",
         "question_text",
         "path",
+        "operators",
+        "labels",
+        "relationships",
+        "label_names_ko",
+        "relationship_names_ko",
+        "query_graph",
+        "traversal_graph",
+        "provenance_graph",
+        "traversal_steps",
     }
 )
 
@@ -237,9 +248,19 @@ class InspectionCollector:
         }
     )
     _SECRET_KEY_MARKERS = ("password", "token", "secret", "api_key", "uri")
+    _SECRET_VALUE_MARKERS = (
+        "password",
+        "token",
+        "api key",
+        "api_key",
+        "secret",
+        "bolt://",
+        "neo4j://",
+        "/home/",
+    )
     _LIMIT = re.compile(r"\bLIMIT\s+(\d+)\s*\Z", re.IGNORECASE)
 
-    def __init__(self, detail_level: str = DETAIL_FULL) -> None:
+    def __init__(self, detail_level: str = DETAIL_OFF) -> None:
         self.detail_level = detail_level
         self.stage_timings_ms: dict[str, int] = {}
         self._active_attempt: int | None = None
@@ -340,6 +361,19 @@ class InspectionCollector:
             return {}
         return {label: catalog.label_ko(label) for label in labels}
 
+    @staticmethod
+    def _relationship_names_ko(relationships: list[str]) -> dict[str, str]:
+        """Map approved relationship types to public Korean display names."""
+
+        try:
+            catalog = SchemaCatalog.from_generated()
+        except Exception:
+            return {}
+        return {
+            relationship: catalog.relationship_ko(relationship)
+            for relationship in relationships
+        }
+
     def _annotate_steps_ko(self, steps: list[dict[str, Any]]) -> None:
         """Attach a Korean sentence saying what each engine step actually checked."""
 
@@ -386,11 +420,14 @@ class InspectionCollector:
             # 엔진이 적은 설명. 파라미터 자리표시는 값을 담고 있지 않지만 내부 표기라
             # 사람이 읽을 수 있게 다듬는다.
             raw_detail = item.get("detail")
-            detail = (
-                _AUTOSTRING.sub("<값>", raw_detail)[:160]
-                if isinstance(raw_detail, str)
-                else ""
-            )
+            detail = ""
+            if isinstance(raw_detail, str) and not any(
+                marker in raw_detail.lower()
+                for marker in InspectionCollector._SECRET_VALUE_MARKERS
+            ):
+                detail = InspectionCollector._mask_text(
+                    _AUTOSTRING.sub("<값>", raw_detail)
+                )[:160]
             relationship = item.get("relationship_type")
             steps.append(
                 {
@@ -509,16 +546,10 @@ class InspectionCollector:
                 ProgressPhase.NEO4J_EXPLAIN,
             }:
                 self._discard_candidate()
-            summary: dict[str, Any] = {"error_code": self._safe_error_code(event)}
-            # 버려진 후보 Cypher. 실행되지 않았다는 사실을 화면이 배지로 표시한다.
-            discarded = self._canonical_cypher(event.details.get("discarded_cypher"))
-            if discarded is None and isinstance(event.details.get("discarded_cypher"), str):
-                # 정규화에 실패한 후보(주석·백틱 등)도 무엇이 왔는지는 보여 준다.
-                discarded = self._mask_text(event.details["discarded_cypher"])[:2000]
-            if discarded:
-                summary["discarded_cypher"] = discarded[:2000]
-                summary["discard_reason"] = summary["error_code"]
-            return self._update(event, summary)
+            return self._update(
+                event,
+                {"error_code": self._safe_error_code(event)},
+            )
 
         if event.phase is ProgressPhase.STATIC_VALIDATION:
             if (
@@ -640,6 +671,7 @@ class InspectionCollector:
                 # 처리 중 화면이 후보 노드를 한국어로 그린다. 표기는 온톨로지 명세의
                 # name_ko 에서만 오고, 없으면 영문 원형이 그대로 남는다.
                 "label_names_ko": self._label_names_ko(labels),
+                "relationship_names_ko": self._relationship_names_ko(relationships),
             }
         elif event.phase is ProgressPhase.CYPHER_GENERATION:
             summary = {
@@ -784,7 +816,7 @@ class ChatState:
         self.error: str | None = None
         self.error_code: str | None = None
         self.debug = False
-        self.detail_level = DETAIL_FULL
+        self.detail_level = DETAIL_OFF
         self.max_concurrent = DEFAULT_MAX_CONCURRENT
         self.client_timeout_seconds = DEFAULT_CLIENT_TIMEOUT_SECONDS
         self.limiter: anyio.Semaphore | None = None
@@ -837,7 +869,14 @@ class ChatState:
                 model=llm_settings.model,
                 generator_retries=llm_settings.max_retries,
             )
-            self.service = CurriculumChatService(query_service)
+            self.service = PersonalizedCurriculumChatService(
+                CurriculumChatService(query_service)
+            )
+            self.service = AgenticCurriculumChatService(
+                self.service,
+                client,
+                policy=AgentPolicy.from_env(),
+            )
         except (ConfigurationError, LLMConfigurationError):
             self.error = "서비스 환경 설정을 확인해 주세요."
             self.error_code = "CHAT_CONFIGURATION_ERROR"
@@ -979,9 +1018,15 @@ async def ask(request: Request) -> Response:
         payload = json.loads(raw or b"{}")
     except json.JSONDecodeError:
         return JSONResponse({"error": "JSON 본문을 해석할 수 없습니다."}, status_code=400)
-    if not isinstance(payload, dict) or not set(payload) <= {"question", "resolved"}:
+    if not isinstance(payload, dict) or not set(payload) <= {
+        "question",
+        "resolved",
+        "profile",
+        "conversation",
+    }:
         return JSONResponse(
-            {"error": "question 과 resolved 필드만 전송할 수 있습니다."}, status_code=400
+            {"error": "question, resolved, profile, conversation 필드만 전송할 수 있습니다."},
+            status_code=400,
         )
     # 되묻기에서 사용자가 고른 값. 서버는 대화 상태를 들지 않으므로 매 요청에 함께
     # 온다. 값이 실제로 제시된 선택지였는지는 계획 계층이 다시 만들어 대조한다.
@@ -989,6 +1034,12 @@ async def ask(request: Request) -> Response:
     if not isinstance(resolved, dict) or len(resolved) > MAX_RESOLVED_ENTRIES:
         return JSONResponse(
             {"error": "resolved 는 항목 수가 제한된 객체여야 합니다."}, status_code=400
+        )
+    try:
+        profile = UserProfile.from_payload(payload.get("profile"))
+    except ProfileValidationError:
+        return JSONResponse(
+            {"error": "저장된 사용자 정보 형식을 확인해 주세요."}, status_code=422
         )
     question = payload.get("question")
     if not isinstance(question, str) or not question.strip():
@@ -998,6 +1049,12 @@ async def ask(request: Request) -> Response:
         return JSONResponse(
             {"error": f"질문은 {MAX_QUESTION_LENGTH}자를 넘을 수 없습니다."},
             status_code=422,
+        )
+    try:
+        conversation = ConversationContext.from_payload(payload.get("conversation"))
+    except ValueError:
+        return JSONResponse(
+            {"error": "저장된 대화 문맥 형식을 확인해 주세요."}, status_code=422
         )
     state = _state(request)
     if not state.ready or state.service is None or state.limiter is None:
@@ -1029,11 +1086,82 @@ async def ask(request: Request) -> Response:
 
             def worker() -> None:
                 try:
-                    response = service.ask(
-                        question,
-                        resolved=resolved or None,
-                        progress_callback=on_progress,
-                    )
+                    if isinstance(service, AgenticCurriculumChatService):
+                        def on_agent_trace(event: Any) -> None:
+                            loop.call_soon_threadsafe(
+                                queue.put_nowait,
+                                {
+                                    "type": "agent_trace",
+                                    "version": 1,
+                                    **event.to_public_dict(),
+                                },
+                            )
+
+                        agent_result = service.ask(
+                            question,
+                            profile=profile,
+                            resolved=resolved or None,
+                            conversation=conversation,
+                            progress_callback=on_progress,
+                            trace_callback=on_agent_trace,
+                        )
+                        personalized = agent_result.personalized
+                        response = personalized.response
+                        loop.call_soon_threadsafe(
+                            queue.put_nowait, agent_result.conversation_update()
+                        )
+                        loop.call_soon_threadsafe(
+                            queue.put_nowait,
+                            {
+                                "type": "profile_update",
+                                "version": 1,
+                                "profile": personalized.profile.to_dict(),
+                                "changed_fields": list(
+                                    personalized.changed_profile_fields
+                                ),
+                            },
+                        )
+                        loop.call_soon_threadsafe(
+                            queue.put_nowait,
+                            {
+                                "type": "outcome",
+                                "version": 1,
+                                **personalized.outcome.to_dict(),
+                            },
+                        )
+                    elif isinstance(service, PersonalizedCurriculumChatService):
+                        personalized = service.ask(
+                            question,
+                            profile=profile,
+                            resolved=resolved or None,
+                            progress_callback=on_progress,
+                        )
+                        response = personalized.response
+                        loop.call_soon_threadsafe(
+                            queue.put_nowait,
+                            {
+                                "type": "profile_update",
+                                "version": 1,
+                                "profile": personalized.profile.to_dict(),
+                                "changed_fields": list(
+                                    personalized.changed_profile_fields
+                                ),
+                            },
+                        )
+                        loop.call_soon_threadsafe(
+                            queue.put_nowait,
+                            {
+                                "type": "outcome",
+                                "version": 1,
+                                **personalized.outcome.to_dict(),
+                            },
+                        )
+                    else:
+                        response = service.ask(
+                            question,
+                            resolved=resolved or None,
+                            progress_callback=on_progress,
+                        )
                     result = adapter.adapt(response)
                     loop.call_soon_threadsafe(queue.put_nowait, result)
                 except Exception:

@@ -2,7 +2,9 @@
 
 2026학년도 공통 교양 이수요건과 컴퓨터공학과 교육과정을 온톨로지와 Neo4j 지식그래프로 구조화하고, 자연어 질문에 검증된 규정 원문과 페이지 근거를 제공하는 로컬 GraphRAG PoC입니다.
 
-이 프로젝트의 현재 중심 기능은 **Evidence 기반 학사규정 질의응답**입니다. 개인 CSV 수강내역을 받아 전체 졸업 가능 여부를 판정하는 시스템은 아직 구현하지 않았습니다.
+이 프로젝트의 현재 중심 기능은 **Evidence 기반 학사규정 질의응답**입니다. 브라우저에
+저장한 학적·이수 정보로 학점 진행률과 확인 가능한 요건을 개인화할 수 있지만, 성적표
+전체를 받아 졸업 가능 여부를 최종 판정하는 시스템은 아닙니다.
 
 ## 현재 PoC 범위
 
@@ -10,7 +12,7 @@
 |---|---|
 | 데이터 | 2026학년도 공통 교양 이수요건, 컴퓨터공학과 교육과정 |
 | 원문 | Git에서 제외된 19페이지 발췌 PDF |
-| Verified KG | 노드 1,518개 · 관계 3,260개 · Evidence 511개 |
+| Verified KG | 노드 1,536개 · 관계 3,287개 · Evidence 520개 |
 | 그래프 DB | 로컬 Neo4j |
 | 로컬 LLM | Ollama `qwen2.5-coder:14b`, context 8,192 |
 | 웹 UI | Starlette + SSE + vanilla HTML/CSS/JavaScript |
@@ -28,7 +30,9 @@
 → data/verified/2026 JSON bundle
 → Neo4j
 → 자연어 질문
-→ LLM QueryPlan
+→ 브라우저 프로필·현재 메시지의 검증된 사용자 진술 결합
+→ bounded 대화 문맥과 LLM 도구 계획
+→ 데이터 기반 semantic slot 또는 LLM QueryPlan
 → 관련 스키마 선택
 → LLM Cypher 후보 생성
 → comment-free canonicalization
@@ -37,16 +41,19 @@
 → execute_read
 → ResultValidator
 → 구조화 Claim
-→ 결정론적 한국어 답변
+→ 결정론적 canonical 답변·검증된 자연어 표시 초안
 → VERIFIED Evidence Citation
 → Starlette/SSE 웹 UI
 ```
 
-- LLM은 자연어 질문의 `QueryPlan`과 Cypher 후보를 생성합니다.
+- 명시적인 과목·규칙 semantic slot은 Verified bundle 기반 결정론적 planner가 처리하고,
+  그 밖의 자연어 `QueryPlan`과 Cypher 후보는 LLM이 생성합니다.
 - 생성된 Cypher는 주석 제거, 제한 문법·스키마 검사와 Neo4j `EXPLAIN`을 모두 통과해야 읽기 트랜잭션으로 실행됩니다.
-- 최종 사실 문장은 LLM이 자유롭게 작성하지 않습니다. Python이 검증된 Claim의 값·단위·극성을 결정론적으로 렌더링합니다.
+- sealed 응답의 canonical 사실 문장은 Python이 검증된 Claim의 값·단위·극성으로 렌더링합니다. 작은 Claim 조합은 LLM이 자연스러운 표시 초안을 만들 수 있지만, Python이 subject·숫자 역할·enum·극성과 Citation 승인을 다시 대조한 경우에만 채택하며 나머지는 canonical 문장으로 되돌립니다.
 - Evidence가 없거나 `REVIEW_REQUIRED`인 사실은 확정 답변으로 승격하지 않습니다.
 - clarification 선택지는 sealed `ChatResponse`에 추가하지 않고 별도의 versioned SSE envelope로 전달합니다.
+- 개인화 결과의 다섯 상태와 프로필 갱신도 별도 versioned SSE envelope이며 sealed
+  `ChatResponse`의 기존 8필드는 바꾸지 않습니다.
 - 선택 스키마, 승인된 canonical Cypher와 조회 provenance 그래프는 표시 전용 데이터이며 답변·Citation을 변경하지 않습니다.
 
 ## 현재 기능
@@ -62,14 +69,19 @@
 - `execute_read` 기반 읽기 경로와 결과 크기 제한
 - Fact·Evidence 상태 및 직접 provenance 검증
 - 구조화 Claim과 결정론적 한국어 답변
+- 제한된 LLM 도구 계획, 추가 KG 조회와 Claim 검증형 자연어 표시 답변
 - Evidence 원문 및 발췌 PDF·원본 PDF·인쇄 페이지 Citation
 - 19페이지 PDF 이미지와 PyMuPDF 실제 텍스트 검색 강조
 - Starlette/SSE 처리 타임라인과 상태별 UI
-- 상세 모드의 선택 스키마·승인 Cypher·정적 조회 그래프
+- 상세 모드의 선택 스키마·승인 Cypher·실제 승인 traversal 그래프
+- `localStorage` 기반 versioned 사용자 프로필, 채팅 정보 추출·정정·후속 질문 재사용
+- `IndexedDB` 기반 versioned 채팅방·메시지 저장, 대명사·생략·주제 전환 지원
+- `ANSWERED`, `NEEDS_USER_INFO`, `INSUFFICIENT_EVIDENCE`, `OUT_OF_SCOPE`,
+  `ADVISORY` 개인화 outcome
 
 ## 지원하지 않거나 제한된 범위
 
-- 개인별 수강과목·취득학점·성적표를 이용한 전체 졸업 가능 여부 판정
+- 성적표 전체, 성적·재수강·실시간 수강신청을 포함한 최종 졸업 가능 여부 판정
 - 모든 학년도와 모든 학과 데이터
 - Evidence가 `REVIEW_REQUIRED`인 규칙의 확정 답변
 - 아직 등록되지 않은 Claim 또는 fact family의 임의 설명
@@ -78,7 +90,9 @@
 - 인증, 다중 사용자 queue, 고가용성과 자동 복구를 갖춘 운영 서비스
 - 정식 클라우드 배포와 GitHub Actions 기반 CD
 
-현재 범위를 벗어나는 질문은 추측하지 않고 `OUT_OF_SCOPE`, `UNSUPPORTED`, `UNRESOLVED`, `NOT_FOUND` 또는 `SAFE_FAILURE`로 구분합니다.
+현재 범위를 벗어나거나 근거가 없는 질문은 추측하지 않습니다. sealed 응답의 안전 상태와
+별도로 UI outcome은 사용자 정보 부족, 근거 부족, 범위 밖, 조건부 추천을 명시적으로
+구분합니다.
 
 ## 프로젝트 구조
 
@@ -94,7 +108,9 @@ kg-ontology-decision-framework/
 ├── src/kg_builder/
 │   ├── llm/                     # provider adapter, planner, Cypher generator
 │   ├── query/                   # QueryPlan, selector, SafetyPipeline, validator
-│   ├── answer/                  # Claim 검증, 한국어 renderer, ChatResponse
+│   ├── answer/                  # Claim 검증, 한국어 renderer, 개인화 outcome
+│   ├── agent/                   # bounded 도구 오케스트레이터와 대화 문맥 계약
+│   ├── personalization.py       # 브라우저 프로필 검증·메시지 정보 추출
 │   └── neo4j_ingest.py          # Verified KG 검증·적재 CLI
 ├── src/evidence_chat/
 │   ├── server.py                # Starlette 앱과 /api/ask SSE 진입점
@@ -179,10 +195,10 @@ Neo4j query 설정과 Ollama가 준비된 WSL2 셸에서 실행합니다.
 uv run python -m evidence_chat.server
 ```
 
-브라우저에서 `http://127.0.0.1:8501`을 엽니다. 선택 스키마, 승인 Cypher와 정적 조회 그래프를 표시하려면 로컬 `.env`에서 다음 값을 선택적으로 사용합니다.
+브라우저에서 `http://127.0.0.1:8501`을 엽니다. 선택 스키마, 승인 Cypher와 실제 승인 traversal 그래프를 표시하려면 로컬 `.env`에서 다음 값을 선택적으로 사용합니다.
 
 ```dotenv
-KG_CHAT_SHOW_QUERY_DETAILS=true
+KG_CHAT_SHOW_QUERY_DETAILS=full
 ```
 
 상세 모드도 정적 검증과 동일 candidate의 Neo4j `EXPLAIN`을 통과한 comment-free canonical Cypher만 표시합니다. 실패·폐기 후보, prompt, 모델 원문, 접속정보와 로컬 경로는 표시하지 않습니다.
@@ -259,6 +275,8 @@ Neo4j·Ollama와 자격증명이 없는 기본 CI에서는 해당 통합 검사�
 | 로컬 LLM | [Ollama Text-to-Cypher PoC](docs/local-llm-query-pipeline.md) |
 | Claim·답변·Citation | [Evidence 기반 한국어 답변](docs/evidence-answer-renderer.md) |
 | 답변 범위 확장 | [확장 fact family](docs/extended-fact-families.md) |
+| 개인화·50문항 평가 | [질의 정확도와 개인화 계약](docs/query-personalization.md) |
+| 평가 결과표 | [질문셋 V1 50문항 결과](docs/evaluations/question-set-v1-2026-08-28.md) |
 | Starlette UI | [학사규정 근거 챗봇](docs/evidence-chat.md) |
 | 로컬 시연·배포 계획 | [배포 및 시연](docs/deployment.md) |
 | AI 작업 기록 | [AI 시뮬레이션 로그](docs/ai-simulation-logs/README.md) |

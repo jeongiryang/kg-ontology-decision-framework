@@ -13,7 +13,7 @@ from kg_builder.llm.client import (
     LLMSettings,
 )
 from kg_builder.llm.cypher_generator import LocalCypherGenerator, build_syntax_scaffold
-from kg_builder.query.cypher_validator import CypherValidator
+from kg_builder.query.cypher_validator import CypherValidationError, CypherValidator
 from kg_builder.llm.models import (
     GraduationQuestionClass,
     PlanningOutcome,
@@ -73,6 +73,123 @@ def ready_planner_payload() -> dict[str, Any]:
 
 
 class LocalLLMContractTests(unittest.TestCase):
+    def test_colloquial_when_requests_grade_and_semester(self):
+        # The course identity comes from the Verified bundle.  The model payload is
+        # unused because the deterministic course-slot path can safely normalize this
+        # general Korean wording without supplying an answer value.
+        outcome = LocalQueryPlanner(SequenceClient([])).plan("자료구조는 언제 들어?")
+        self.assertEqual(outcome.status, PlanningStatus.READY)
+        self.assertEqual(outcome.plan.selection_mode, SelectionMode.SINGLE_COURSE)
+        self.assertEqual(
+            set(outcome.plan.requested_fields),
+            {"grade_year", "semester"},
+        )
+
+    def test_single_course_aspect_keeps_only_requested_fact_fields(self):
+        outcome = LocalQueryPlanner(SequenceClient([])).plan(
+            "CDA0008을 안 들으면 졸업 못 해?"
+        )
+        self.assertEqual(outcome.status, PlanningStatus.READY)
+        self.assertNotIn("name_ko", outcome.plan.requested_fields)
+        self.assertIn("completion_type", outcome.plan.requested_fields)
+
+    def test_zero_credit_required_list_uses_general_filters(self):
+        outcome = LocalQueryPlanner(SequenceClient([])).plan(
+            "0학점인 전공필수도 빠짐없이 알려 줘."
+        )
+        self.assertEqual(outcome.status, PlanningStatus.READY)
+        self.assertEqual(outcome.plan.selection_mode, SelectionMode.COURSE_LIST)
+        self.assertEqual(outcome.plan.filters["completion_type"], "MAJOR_REQUIRED")
+        self.assertEqual(outcome.plan.filters["credits"], 0)
+
+    def test_topic_only_required_course_question_selects_required_list(self):
+        outcome = LocalQueryPlanner(SequenceClient([])).plan("전공필수는?")
+        self.assertEqual(outcome.status, PlanningStatus.READY)
+        self.assertEqual(outcome.plan.selection_mode, SelectionMode.COURSE_LIST)
+        self.assertEqual(outcome.plan.filters["completion_type"], "MAJOR_REQUIRED")
+
+    def test_required_course_list_with_requested_credits_is_deterministic(self):
+        outcome = LocalQueryPlanner(SequenceClient([])).plan(
+            "전공필수 목록과 각 과목의 학점을 한꺼번에 알려 줘."
+        )
+        self.assertEqual(outcome.status, PlanningStatus.READY)
+        self.assertEqual(outcome.plan.selection_mode, SelectionMode.COURSE_LIST)
+        self.assertEqual(outcome.plan.filters["completion_type"], "MAJOR_REQUIRED")
+        self.assertIn("credits", outcome.plan.requested_fields)
+
+    def test_general_graduation_and_major_credit_criteria_resolve_from_rule_index(self):
+        questions = (
+            "컴퓨터공학과 졸업학점 최소 기준을 확인해 줘.",
+            "전공 학점 합계 기준은 몇 학점 이상이야?",
+        )
+        for question in questions:
+            with self.subTest(question=question):
+                outcome = LocalQueryPlanner(SequenceClient([])).plan(question)
+                self.assertEqual(outcome.status, PlanningStatus.READY)
+                self.assertIn(
+                    outcome.plan.selection_mode,
+                    {SelectionMode.SINGLE_RULE, SelectionMode.MULTIPLE_RULES},
+                )
+
+    def test_all_english_exam_thresholds_select_verified_atomic_rule_family(self):
+        outcome = LocalQueryPlanner(SequenceClient([])).plan(
+            "대학영어 대체 공인시험별 최소 기준을 전부 확인해 줘."
+        )
+        self.assertEqual(outcome.status, PlanningStatus.READY)
+        self.assertEqual(outcome.plan.selection_mode, SelectionMode.MULTIPLE_RULES)
+        self.assertGreaterEqual(len(outcome.plan.filters["rule_ids"]), 2)
+        self.assertTrue(outcome.plan.evidence_required)
+
+    def test_course_advice_retrieves_verified_course_details_before_recommending(self):
+        outcome = LocalQueryPlanner(SequenceClient([])).plan(
+            "웹 개발 진로라면 웹프로그래밍 과목 정보를 바탕으로 조언해 줘."
+        )
+        self.assertEqual(outcome.status, PlanningStatus.READY)
+        self.assertEqual(outcome.plan.selection_mode, SelectionMode.SINGLE_COURSE)
+        self.assertTrue(
+            {"name_ko", "grade_year", "semester", "credits", "completion_type"}
+            .issubset(outcome.plan.requested_fields)
+        )
+
+    def test_open_ended_career_sequence_uses_verified_recommendation_family(self):
+        outcome = LocalQueryPlanner(SequenceClient([])).plan(
+            "AI 개발자가 목표인데 교육과정상 어떤 과목 순서로 살펴보면 좋을까?"
+        )
+        self.assertEqual(outcome.status, PlanningStatus.READY)
+        self.assertEqual(
+            outcome.plan.selection_mode,
+            SelectionMode.COURSE_RECOMMENDATION_LIST,
+        )
+
+    def test_open_career_choices_use_verified_career_field_family(self):
+        outcome = LocalQueryPlanner(SequenceClient([])).plan(
+            "진로 선택지와 진출 분야를 비교해 줘."
+        )
+        self.assertEqual(outcome.status, PlanningStatus.READY)
+        self.assertEqual(outcome.plan.selection_mode, SelectionMode.CAREER_FIELD_LIST)
+
+    def test_combined_requirement_and_timing_keeps_all_requested_fields(self):
+        outcome = LocalQueryPlanner(SequenceClient([])).plan(
+            "자료구조를 안 들으면 안 되는지, 그리고 언제 편성됐는지 같이 알려 줘."
+        )
+        self.assertEqual(outcome.status, PlanningStatus.READY)
+        self.assertTrue(
+            {"grade_year", "semester", "completion_type"}
+            .issubset(outcome.plan.requested_fields)
+        )
+
+    def test_multi_course_bare_credit_noun_is_a_requested_field(self):
+        outcome = LocalQueryPlanner(SequenceClient([])).plan(
+            "알고리즘하고 운영체제의 학점과 이수구분을 같이 보고 싶어."
+        )
+        self.assertEqual(outcome.status, PlanningStatus.READY)
+        self.assertEqual(outcome.plan.selection_mode, SelectionMode.COURSE_LIST)
+        self.assertTrue(
+            {"credits", "completion_type", "name_ko"}.issubset(
+                outcome.plan.requested_fields
+            )
+        )
+
     def test_numeric_rule_plan_is_enriched_with_semantic_claim_fields(self) -> None:
         payload = {
             "status": "READY",
@@ -276,7 +393,7 @@ class LocalLLMContractTests(unittest.TestCase):
         )
         self.assertFalse(client.prompts)
 
-    def test_general_graduation_rule_with_pronouns_is_not_personal_history(self):
+    def test_general_graduation_rule_with_pronouns_uses_verified_atomic_rule(self):
         question = (
             "컴공과 학생인데 내가 졸업하고 싶은데 졸업하기 위해서 영어 대체로 "
             "토익 점수를 얼마나 받아야 할까? 최소 기준점이 있어?"
@@ -287,34 +404,30 @@ class LocalLLMContractTests(unittest.TestCase):
             classify_graduation_question(question),
             GraduationQuestionClass.GENERAL_RULE,
         )
-        self.assertEqual(outcome.status, PlanningStatus.UNRESOLVED)
+        self.assertEqual(outcome.status, PlanningStatus.READY)
+        self.assertIsNotNone(outcome.plan)
+        self.assertTrue(outcome.plan.evidence_required)
+        self.assertEqual(outcome.plan.selection_mode.value, "SINGLE_RULE")
+        self.assertEqual(len(outcome.plan.filters["rule_ids"]), 1)
         self.assertFalse(client.prompts)
         context = LocalQueryPlanner(SequenceClient([])).context
         serialized_review = str(context["review_required_rule_identifiers"])
-        self.assertIn("TOEIC.score", serialized_review)
+        self.assertNotIn("TOEIC.score", serialized_review)
         self.assertNotIn("700", serialized_review)
 
-    def test_single_condition_comparison_has_distinct_unsupported_reason(self):
+    def test_single_condition_comparison_uses_the_same_verified_rule_path(self):
         question = "토익 700점이면 영어 대체 기준을 충족해?"
-        payload = {
-            "status": "UNSUPPORTED",
-            "intent": None,
-            "filters": {},
-            "requested_fields": [],
-            "evidence_required": True,
-            "message": None,
-            "selection_mode": "SINGLE_RULE",
-        }
-        outcome = LocalQueryPlanner(SequenceClient([payload])).plan(question)
+        client = SequenceClient([])
+        outcome = LocalQueryPlanner(client).plan(question)
         self.assertEqual(
             classify_graduation_question(question),
             GraduationQuestionClass.SINGLE_CONDITION_COMPARISON,
         )
-        self.assertEqual(outcome.status, PlanningStatus.UNSUPPORTED)
-        self.assertEqual(
-            outcome.unsupported_reason,
-            UnsupportedReason.SINGLE_CONDITION_COMPARISON,
-        )
+        self.assertEqual(outcome.status, PlanningStatus.READY)
+        self.assertIsNotNone(outcome.plan)
+        self.assertTrue(outcome.plan.evidence_required)
+        self.assertEqual(len(outcome.plan.filters["rule_ids"]), 1)
+        self.assertFalse(client.prompts)
 
     def test_full_personal_history_remains_unsupported_without_llm(self):
         question = "내가 지금까지 들은 과목과 학점으로 졸업할 수 있어?"
@@ -354,6 +467,113 @@ class LocalLLMContractTests(unittest.TestCase):
         validated = CypherValidator(SchemaCatalog.from_generated()).validate(plan, scaffold)
         self.assertEqual(validated.provenance.fact_label, "CourseOffering")
         self.assertIn("c.course_id AS course_identity", scaffold)
+
+    def test_single_course_code_lookup_adds_grounded_subject_without_answer_slot(self) -> None:
+        payload = plan_payload()
+        payload["selection_mode"] = "SINGLE_COURSE"
+        payload["filters"] = {
+            "academic_year": 2026,
+            "department_id": "department:cwnu:cse",
+            "course_code": "CDA0008",
+        }
+        payload["requested_fields"] = ["completion_type"]
+        plan = QueryPlan.from_dict(payload, SchemaCatalog.from_generated())
+
+        self.assertEqual(plan.requested_fields, ("completion_type",))
+        scaffold = build_syntax_scaffold(plan, QuerySchemaSelector().select(plan))
+        validated = CypherValidator(SchemaCatalog.from_generated()).validate(
+            plan, scaffold
+        )
+
+        self.assertIn("c.name_ko AS name_ko", scaffold)
+        self.assertIn("c.course_id AS course_identity", scaffold)
+        self.assertEqual(validated.provenance.fact_label, "CourseOffering")
+
+        missing_subject = scaffold.replace(",\n       c.name_ko AS name_ko", "")
+        with self.assertRaises(CypherValidationError) as raised:
+            CypherValidator(SchemaCatalog.from_generated()).validate(
+                plan, missing_subject
+            )
+        self.assertEqual(raised.exception.code, "CYPHER_RETURN_FIELD_MISMATCH")
+
+    def test_unique_common_course_identity_uses_common_curriculum_path(self) -> None:
+        client = SequenceClient([])
+        outcome = LocalQueryPlanner(client).plan(
+            "컴퓨터프로그래밍의 이수구분을 알려줘"
+        )
+        self.assertEqual(outcome.status, PlanningStatus.READY)
+        self.assertNotIn("department_id", outcome.plan.filters)
+        subset = QuerySchemaSelector().select(outcome.plan)
+        scaffold = build_syntax_scaffold(outcome.plan, subset)
+        validated = CypherValidator(SchemaCatalog.from_generated()).validate(
+            outcome.plan, scaffold
+        )
+        self.assertEqual(validated.provenance.fact_label, "CourseOffering")
+        self.assertNotIn("FOR_DEPARTMENT", scaffold)
+        self.assertIn("MATCH (cv:CurriculumVersion)", scaffold)
+        self.assertFalse(client.prompts)
+
+    def test_multiple_data_derived_spelling_variants_resolve_to_stable_codes(self) -> None:
+        outcome = LocalQueryPlanner(SequenceClient([])).plan(
+            "운영체제와 데이터통신의 이수구분을 비교해줘"
+        )
+        self.assertEqual(outcome.status, PlanningStatus.READY)
+        self.assertEqual(outcome.plan.selection_mode, SelectionMode.COURSE_LIST)
+        self.assertEqual(len(outcome.plan.filters["course_codes"]), 2)
+
+    def test_multi_course_code_request_keeps_the_requested_identity_field(self) -> None:
+        outcome = LocalQueryPlanner(SequenceClient([])).plan(
+            "자료구조하고 이산수학 학수번호를 각각 알려줘"
+        )
+        self.assertEqual(outcome.status, PlanningStatus.READY)
+        self.assertEqual(outcome.plan.selection_mode, SelectionMode.COURSE_LIST)
+        self.assertEqual(len(outcome.plan.filters["course_codes"]), 2)
+        self.assertIn("course_code", outcome.plan.requested_fields)
+
+    def test_major_required_list_preserves_explicit_grade_and_semester_scope(self) -> None:
+        outcome = LocalQueryPlanner(SequenceClient([])).plan(
+            "3학년 1학기 전공필수 과목 중 우선순위를 알려줘"
+        )
+        self.assertEqual(outcome.status, PlanningStatus.READY)
+        self.assertEqual(outcome.plan.filters["completion_type"], "MAJOR_REQUIRED")
+        self.assertEqual(outcome.plan.filters["grade_year"], 3)
+        self.assertEqual(outcome.plan.filters["semester"], "FIRST")
+
+    def test_major_required_list_accepts_reversed_controlled_term_order(self) -> None:
+        outcome = LocalQueryPlanner(SequenceClient([])).plan(
+            "컴퓨터공학과 필수 전공은 총 몇 과목이고 몇 학점이야?"
+        )
+        self.assertEqual(outcome.status, PlanningStatus.READY)
+        self.assertEqual(outcome.plan.selection_mode, SelectionMode.COURSE_LIST)
+        self.assertEqual(outcome.plan.filters["completion_type"], "MAJOR_REQUIRED")
+
+    def test_minimum_credit_rule_accepts_natural_lower_bound_synonym(self) -> None:
+        outcome = LocalQueryPlanner(SequenceClient([])).plan(
+            "컴공 2026 교양은 적어도 몇 학점이어야 하나요?"
+        )
+        self.assertEqual(outcome.status, PlanningStatus.READY)
+        self.assertTrue(any(
+            "min-total-default" in value
+            for value in outcome.plan.filters["rule_ids"]
+        ))
+
+    def test_balanced_general_rule_does_not_need_a_model_for_same_area_question(self) -> None:
+        client = SequenceClient([])
+        outcome = LocalQueryPlanner(client).plan(
+            "균형교양을 같은 영역에서만 12학점 들으면 되는 거지?"
+        )
+        self.assertEqual(outcome.status, PlanningStatus.READY)
+        self.assertGreaterEqual(len(outcome.plan.filters["rule_ids"]), 2)
+        self.assertFalse(client.prompts)
+
+    def test_compact_credit_deficit_question_selects_general_and_major_rules(self) -> None:
+        outcome = LocalQueryPlanner(SequenceClient([])).plan(
+            "전공 51, 교양 29, 일선 14인데 영역별로 얼마나 부족해?"
+        )
+        self.assertEqual(outcome.status, PlanningStatus.READY)
+        rule_ids = set(outcome.plan.filters["rule_ids"])
+        self.assertTrue(any("min-total-default" in item for item in rule_ids))
+        self.assertTrue(any("major-total" in item for item in rule_ids))
 
     def test_generated_multi_rule_scaffold_passes_the_existing_validator(self) -> None:
         payload = {

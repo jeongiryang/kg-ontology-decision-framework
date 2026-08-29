@@ -173,6 +173,51 @@ class ProviderAdapterTests(unittest.TestCase):
         self.assertEqual(body["options"]["num_predict"], 512)
         self.assertEqual(result.payload, {"value": 7})
 
+    def test_ollama_grammar_projection_omits_only_unsupported_string_lengths(self) -> None:
+        requests = []
+
+        def fake_open(request, timeout):
+            del timeout
+            requests.append(request)
+            return FakeResponse({"message": {"content": '{"value": "safe"}'}})
+
+        client = OllamaClient(settings(LLMProvider.OLLAMA))
+        schema = {
+            "type": "object",
+            "properties": {
+                "value": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 80,
+                    "pattern": "^[a-z]+$",
+                },
+                "items": {
+                    "type": "array",
+                    "items": {"type": "string", "maxLength": 20},
+                    "maxItems": 3,
+                    "uniqueItems": True,
+                },
+            },
+            "required": ["value"],
+            "additionalProperties": False,
+        }
+        with patch.object(client._opener, "open", side_effect=fake_open):
+            result = client.generate_json(
+                system_prompt="system",
+                user_prompt="user",
+                response_schema=schema,
+            )
+
+        body = json.loads(requests[0].data)
+        projected = body["format"]
+        self.assertNotIn("minLength", projected["properties"]["value"])
+        self.assertNotIn("maxLength", projected["properties"]["value"])
+        self.assertNotIn("maxLength", projected["properties"]["items"]["items"])
+        self.assertEqual(projected["properties"]["value"]["pattern"], "^[a-z]+$")
+        self.assertEqual(projected["properties"]["items"]["maxItems"], 3)
+        self.assertTrue(projected["properties"]["items"]["uniqueItems"])
+        self.assertEqual(result.payload, {"value": "safe"})
+
     def test_openai_request_optional_token_and_response_contract(self) -> None:
         requests = []
 
@@ -214,6 +259,45 @@ class ProviderAdapterTests(unittest.TestCase):
         )
         self.assertEqual(body["max_tokens"], 512)
         self.assertEqual(result.payload, {"value": 7})
+
+    def test_openai_grammar_projection_omits_only_provider_unsupported_uniqueness(self) -> None:
+        requests = []
+
+        def fake_open(request, timeout):
+            del timeout
+            requests.append(request)
+            return FakeResponse(
+                {"choices": [{"message": {"content": '{"values": [1]}'}}]}
+            )
+
+        client = OpenAICompatibleClient(settings(LLMProvider.OPENAI_COMPATIBLE))
+        schema = {
+            "type": "object",
+            "properties": {
+                "values": {
+                    "type": "array",
+                    "items": {"type": "integer"},
+                    "minItems": 1,
+                    "maxItems": 3,
+                    "uniqueItems": True,
+                }
+            },
+            "required": ["values"],
+            "additionalProperties": False,
+        }
+        with patch.object(client._opener, "open", side_effect=fake_open):
+            result = client.generate_json(
+                system_prompt="system",
+                user_prompt="user",
+                response_schema=schema,
+            )
+
+        body = json.loads(requests[0].data)
+        projected = body["response_format"]["json_schema"]["schema"]
+        self.assertNotIn("uniqueItems", projected["properties"]["values"])
+        self.assertEqual(projected["properties"]["values"]["minItems"], 1)
+        self.assertEqual(projected["properties"]["values"]["maxItems"], 3)
+        self.assertEqual(result.payload, {"values": [1]})
 
     def test_both_adapters_return_the_same_generation_contract(self) -> None:
         responses = [

@@ -17,6 +17,7 @@ from evidence_chat.chat_adapter import CHAT_RESPONSE_FIELDS, ChatResponseAdapter
 from evidence_chat.graph_projection import (
     build_provenance_projection,
     build_query_structure_projection,
+    build_traversal_projection,
 )
 from evidence_chat.server import (
     DETAIL_FULL,
@@ -30,6 +31,7 @@ from evidence_chat.server import (
 )
 from kg_builder.config import ConfigurationError
 from kg_builder.answer.contracts import ChatErrorCode, ChatResponse, ChatStatus
+from kg_builder.answer.personalized_service import PersonalizedCurriculumChatService
 from kg_builder.answer.service import CurriculumChatService
 from kg_builder.query.natural_language_service import NaturalLanguageResult
 from kg_builder.query.query_plan import MAX_QUESTION_LENGTH
@@ -750,6 +752,50 @@ class StarletteRouteTests(unittest.IsolatedAsyncioTestCase):
             {"department_id": "department:cwnu:cse"},
         )
 
+    async def test_profile_and_five_state_outcome_use_separate_versioned_envelopes(self):
+        base = _ChatStub(_answerable_response())
+        personalized = PersonalizedCurriculumChatService(base)
+        app = create_app(lambda: ChatState(personalized))
+        async with app.router.lifespan_context(app):
+            async with httpx2.AsyncClient(
+                transport=httpx2.ASGITransport(app=app),
+                base_url="http://testserver",
+            ) as client:
+                events = _events(
+                    (
+                        await client.post(
+                            "/api/ask",
+                            json={
+                                "question": "2026학번 컴퓨터공학과이고 자료구조를 들었어.",
+                                "profile": {"version": 1},
+                            },
+                        )
+                    ).text
+                )
+        profile = next(item for item in events if item["type"] == "profile_update")
+        outcome = next(item for item in events if item["type"] == "outcome")
+        result = next(item for item in events if item["type"] == "result")
+        self.assertEqual(profile["version"], 1)
+        self.assertEqual(profile["profile"]["admission_year"], 2026)
+        self.assertEqual(profile["profile"]["department_id"], "CSE")
+        self.assertEqual(len(profile["profile"]["completed_courses"]), 1)
+        self.assertEqual(outcome["version"], 1)
+        self.assertEqual(outcome["status"], "ANSWERED")
+        self.assertEqual(set(result["response"]), set(CHAT_RESPONSE_FIELDS))
+        self.assertNotIn("profile", result["response"])
+        self.assertNotIn("outcome", result["response"])
+
+    async def test_invalid_profile_fails_closed_without_exposing_input(self):
+        response = await self.client.post(
+            "/api/ask",
+            json={
+                "question": "질문",
+                "profile": {"version": 99, "note": "synthetic-private-marker"},
+            },
+        )
+        self.assertEqual(response.status_code, 422)
+        self.assertNotIn("synthetic-private-marker", response.text)
+
     async def test_inspection_updates_stream_before_result_and_only_approved_cypher(self):
         with mock.patch.dict("os.environ", {"KG_CHAT_SHOW_QUERY_DETAILS": "true"}):
             app = create_app(lambda: ChatState(self.chat))
@@ -800,7 +846,6 @@ class StarletteRouteTests(unittest.IsolatedAsyncioTestCase):
                 "query_plan",
                 "missing",
                 "clarification_available",
-            
             },
             "SCHEMA_SELECTION": {
                 "labels",
@@ -808,6 +853,7 @@ class StarletteRouteTests(unittest.IsolatedAsyncioTestCase):
                 "node_label_count",
                 "relationship_count",
                 "label_names_ko",
+                "relationship_names_ko",
             },
             "CYPHER_GENERATION": {
                 "candidate_generated",
@@ -940,7 +986,8 @@ class StarletteRouteTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("openPdfModal", script)
         self.assertIn("renderInspectionUpdate", script)
         self.assertIn("navigator.clipboard.writeText", script)
-        self.assertIn("answerProgressSteps", script)
+        self.assertIn("presentation_snapshot", script)
+        self.assertIn("renderTimelineInto", script)
         self.assertIn("markTimelineCancelled", script)
         self.assertIn("markTimelineFailed", script)
         self.assertIn("timelineEvents = [];", script)
@@ -951,25 +998,25 @@ class StarletteRouteTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("Number.isFinite(event.elapsed_ms)", script)
         self.assertIn('setAttribute("aria-expanded"', script)
         self.assertIn('setAttribute("aria-controls"', script)
-        # 2026-08-29 담당자 지시로 탐색 패널의 탭(선택 스키마·승인 Cypher·조회 그래프)을
-        # 없애고 조회 그래프 하나만 보여 준다. 스키마와 Cypher 는 `처리 과정 보기` 의
-        # 해당 단계 상세에 그대로 남아 있다.
-        self.assertNotIn('setAttribute("role", "tablist"', script)
-        self.assertIn("renderGraphTab", script)
-        # 2026-08-18 에는 처리 중 화면에 그래프를 두지 않기로 하고 그 부재를 여기서
-        # 고정했다. 2026-08-28 담당자 지시로 "탐색 중에도 뜨고 결과창에도 같은 것이
-        # 보여야 한다"로 바뀌어, 이제는 컨테이너가 **있어야** 한다.
-        self.assertIn('id="progress-exploration"', markup)
-        self.assertIn("renderExplorationPanels", script)
-        self.assertIn("answer-exploration", markup)
+        self.assertNotIn("progress-exploration", markup)
+        self.assertNotIn("answer-exploration", markup)
+        self.assertNotIn("screen-progress", markup)
+        self.assertNotIn("screen-answer", markup)
+        self.assertNotIn("answer-again", markup)
+        self.assertIn('id="composer-status"', markup)
+        self.assertIn('id="jump-latest"', markup)
+        self.assertIn("finishConversationTurn", script)
+        self.assertIn("renderAssistantDetails", script)
+        self.assertIn("event.isComposing", script)
+        self.assertIn('turnDisclosure("그래프 탐색"', script)
+        self.assertIn('turnDisclosure("Cypher 보기"', script)
+        self.assertIn("addFiveWOneH", script)
+        self.assertIn("addTraversalControls", script)
+        self.assertIn("prefers-reduced-motion: reduce", script)
         self.assertIn("ResizeObserver", script)
-        self.assertNotIn("graph-path-traverse", style)
-        self.assertNotIn("is-query-pulse", script)
-        self.assertNotIn("animatedGraphs", script)
-        # 종전에는 그래프 뷰포트가 overflow-x:hidden 이라 폭을 넘어선 노드가 그대로
-        # 잘려 나갔다(2026-08-29 담당자 보고). 뷰포트에 억지로 맞춰 축소하면 한국어가
-        # 뭉개지므로, 원래 크기를 보존하고 가로 스크롤로 보여 주는 쪽으로 바꿨다.
-        self.assertIn("overflow-x: auto", style)
+        self.assertIn("shows-traversal", script)
+        self.assertIn("graph-traversal-flow", style)
+        self.assertIn("overflow-x: hidden", style)
         self.assertIn("graphLabelLines", script)
         self.assertIn("renderGraphFallback", script)
         self.assertIn("createElementNS", script)
@@ -977,6 +1024,14 @@ class StarletteRouteTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn("Cypher 및 지식그래프 탐색 정보 보기", markup)
         self.assertIn("resize: none", style)
         self.assertIn("overflow-y: hidden", style)
+        self.assertIn('const PROFILE_KEY = "evidence-chat-profile-v1"', script)
+        self.assertIn("localStorage.getItem(PROFILE_KEY)", script)
+        self.assertIn("localStorage.setItem(PROFILE_KEY", script)
+        self.assertIn("localStorage.removeItem(PROFILE_KEY)", script)
+        self.assertIn("validProfileShape", script)
+        self.assertIn('payload.type === "profile_update"', script)
+        self.assertIn('payload.type === "outcome"', script)
+        self.assertIn("이 브라우저의 localStorage에만", markup)
 
     def test_frontend_does_not_construct_backend_contracts(self):
         root = Path(__file__).parents[1] / "src/evidence_chat"
@@ -1030,6 +1085,20 @@ class InspectionGraphProjectionTests(unittest.TestCase):
             ["CourseOffering", "Course", "Evidence"],
             ["OF_COURSE", "SUPPORTED_BY", "NOT_A_RELATION"],
             opaque_key=b"query-test-key",
+            path_edges=[
+                {
+                    "order": 1,
+                    "start_label": "CourseOffering",
+                    "relationship_type": "OF_COURSE",
+                    "end_label": "Course",
+                },
+                {
+                    "order": 2,
+                    "start_label": "CourseOffering",
+                    "relationship_type": "SUPPORTED_BY",
+                    "end_label": "Evidence",
+                },
+            ],
         )
         self.assertIsNotNone(graph)
         self.assertEqual(graph["version"], 1)
@@ -1040,6 +1109,16 @@ class InspectionGraphProjectionTests(unittest.TestCase):
         )
         serialized = json.dumps(graph, ensure_ascii=False)
         self.assertNotIn("NOT_A_RELATION", serialized)
+
+    def test_query_projection_never_invents_edges_without_an_approved_path(self):
+        graph = build_query_structure_projection(
+            ["CourseOffering", "Course", "Evidence"],
+            ["OF_COURSE", "SUPPORTED_BY"],
+            opaque_key=b"query-test-key",
+        )
+        self.assertIsNotNone(graph)
+        self.assertEqual(graph["edges"], [])
+        self.assertFalse(graph["ordered"])
 
     def test_provenance_projection_requires_exact_verified_pairs(self):
         row = _offering_row()
@@ -1067,6 +1146,72 @@ class InspectionGraphProjectionTests(unittest.TestCase):
             )
         )
 
+    def test_traversal_projection_uses_only_approved_rows_and_pairs(self):
+        row = _offering_row()
+        pair = (row["fact_id"], row["evidence_id"])
+        graph = build_traversal_projection(
+            [
+                {
+                    "order": 1,
+                    "start_label": "CourseOffering",
+                    "relationship_type": "SUPPORTED_BY",
+                    "end_label": "Evidence",
+                }
+            ],
+            {"academic_year": 2026},
+            [row],
+            [pair],
+            opaque_key=b"traversal-test-key",
+            traversal_steps=[
+                {
+                    "order": 1,
+                    "operator": "Expand(All)",
+                    "relationship_type": "SUPPORTED_BY",
+                    "rows": 1,
+                    "db_hits": 2,
+                    "share_ms": 3.5,
+                }
+            ],
+        )
+        self.assertIsNotNone(graph)
+        self.assertTrue(graph["ordered"])
+        self.assertEqual(
+            {edge["relationship"] for edge in graph["edges"]},
+            {"SUPPORTED_BY"},
+        )
+        self.assertTrue(all(node["id"].startswith("ui:") for node in graph["nodes"]))
+        serialized = json.dumps(graph, ensure_ascii=False)
+        self.assertNotIn(row["fact_id"], serialized)
+        self.assertNotIn(row["evidence_id"], serialized)
+        self.assertIn("relationship_ko", serialized)
+
+    def test_profile_details_with_sensitive_markers_are_removed(self):
+        collector = InspectionCollector(DETAIL_FULL)
+        update = collector.record(
+            ProgressEvent(
+                ProgressPhase.GRAPH_EXECUTION,
+                ProgressState.COMPLETED,
+                4,
+                {
+                    "row_count": 1,
+                    "traversal_steps": [
+                        {
+                            "order": 1,
+                            "operator": "NodeIndexSeek",
+                            "rows": 1,
+                            "db_hits": 1,
+                            "share_ms": 4,
+                            "detail": "password=synthetic-password-marker /home/private",
+                        }
+                    ],
+                },
+            )
+        )
+        self.assertEqual(update["summary"]["traversal_steps"][0]["detail"], "")
+        serialized = json.dumps(update, ensure_ascii=False)
+        self.assertNotIn("synthetic-password-marker", serialized)
+        self.assertNotIn("/home/", serialized)
+
 
 if __name__ == "__main__":
     unittest.main()
@@ -1087,9 +1232,9 @@ class DetailLevelTests(unittest.TestCase):
                 with mock.patch.dict("os.environ", {"KG_CHAT_SHOW_QUERY_DETAILS": raw}):
                     self.assertEqual(_env_detail_level("KG_CHAT_SHOW_QUERY_DETAILS"), expected)
 
-    def test_unset_defaults_to_full(self) -> None:
+    def test_unset_defaults_to_off(self) -> None:
         with mock.patch.dict("os.environ", {}, clear=True):
-            self.assertEqual(_env_detail_level("KG_CHAT_SHOW_QUERY_DETAILS"), DETAIL_FULL)
+            self.assertEqual(_env_detail_level("KG_CHAT_SHOW_QUERY_DETAILS"), DETAIL_OFF)
 
     def test_invalid_value_is_rejected(self) -> None:
         with mock.patch.dict("os.environ", {"KG_CHAT_SHOW_QUERY_DETAILS": "verbose"}):
@@ -1142,6 +1287,5 @@ class DetailLevelTests(unittest.TestCase):
         for field in SUMMARY_HIDDEN_FIELDS:
             with self.subTest(field=field):
                 self.assertNotIn(field, summary_explain["summary"])
-        # 가려지지 않는 값은 그대로 남는다.
-        self.assertIn("operators", summary_explain["summary"])
+        self.assertNotIn("operators", summary_explain["summary"])
         self.assertNotIn("MATCH", json.dumps(summary_explain, ensure_ascii=False))

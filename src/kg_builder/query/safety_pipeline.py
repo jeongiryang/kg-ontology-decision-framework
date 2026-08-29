@@ -180,10 +180,6 @@ class SafetyPipeline:
                 ProgressState.FAILED,
                 (perf_counter() - started) * 1000,
                 error_code=getattr(exc, "code", exc.__class__.__name__),
-                # 버려진 후보를 화면이 보여 줄 수 있게 원문을 함께 보낸다. 이 질의는
-                # 실행되지 않았다. 화면은 그 사실을 배지로 표시한다. 어떤 질의가 왜
-                # 버려졌는지가 추적의 핵심이라 감추지 않는다.
-                discarded_cypher=cypher if isinstance(cypher, str) else "",
                 candidate_attempt=candidate_attempt,
             )
             self._raise(trace, TraceStage.CYPHER_VALIDATION, started, exc)

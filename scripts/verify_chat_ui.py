@@ -22,12 +22,14 @@ from pathlib import Path
 from playwright.sync_api import sync_playwright
 
 DEFAULT_BASE = "http://127.0.0.1:8501/"
-ANSWER = "#screen-answer.is-active"
+ANSWER = ".conversation-message.is-assistant:not(.is-pending)"
 
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("question")
+    parser.add_argument("--follow-up", action="append", default=[],
+                        help="같은 conversation에서 이어서 보낼 후속 질문(여러 번 지정 가능)")
     parser.add_argument("--choice", type=int, default=None,
                         help="되묻기 선택지 인덱스(0부터). 없으면 첫 응답에서 멈춘다")
     parser.add_argument("--tag", default="run", help="스크린샷 파일 접두어")
@@ -35,6 +37,8 @@ def main() -> int:
     parser.add_argument("--base", default=DEFAULT_BASE)
     parser.add_argument("--dark", action="store_true", help="다크 모드로 렌더")
     parser.add_argument("--reduced-motion", action="store_true")
+    parser.add_argument("--width", type=int, default=1500, help="브라우저 viewport 너비")
+    parser.add_argument("--height", type=int, default=1200, help="브라우저 viewport 높이")
     parser.add_argument("--timeout", type=int, default=240_000)
     args = parser.parse_args()
 
@@ -45,7 +49,7 @@ def main() -> int:
     with sync_playwright() as pw:
         browser = pw.chromium.launch()
         page = browser.new_page(
-            viewport={"width": 1500, "height": 1200},
+            viewport={"width": args.width, "height": args.height},
             color_scheme="dark" if args.dark else "light",
             reduced_motion="reduce" if args.reduced_motion else "no-preference",
         )
@@ -58,39 +62,82 @@ def main() -> int:
         page.click("#submit")
         page.wait_for_timeout(6000)
         page.screenshot(path=str(out / f"{args.tag}-progress.png"), full_page=True)
-        page.wait_for_selector(ANSWER, timeout=args.timeout)
+        page.locator(ANSWER).last.wait_for(timeout=args.timeout)
         page.wait_for_timeout(1500)
         page.screenshot(path=str(out / f"{args.tag}-answer.png"), full_page=True)
 
+        for index, follow_up in enumerate(args.follow_up, start=1):
+            before = page.locator(ANSWER).count()
+            page.fill("#question", follow_up)
+            page.press("#question", "Enter")
+            page.wait_for_function(
+                "count => document.querySelectorAll('.conversation-message.is-assistant:not(.is-pending)').length > count",
+                arg=before,
+                timeout=args.timeout,
+            )
+            page.wait_for_timeout(1200)
+            page.screenshot(
+                path=str(out / f"{args.tag}-follow-up-{index}.png"), full_page=True
+            )
+
         if args.choice is not None:
-            page.locator("#choice-list button").nth(args.choice).click()
+            before = page.locator(ANSWER).count()
+            page.locator(".turn-choices button").last.locator("xpath=..").locator("button").nth(args.choice).click()
             page.wait_for_timeout(6000)
             page.screenshot(path=str(out / f"{args.tag}-progress2.png"), full_page=True)
-            page.wait_for_selector(ANSWER, timeout=args.timeout)
+            page.wait_for_function(
+                "count => document.querySelectorAll('.conversation-message.is-assistant:not(.is-pending)').length > count",
+                arg=before,
+                timeout=args.timeout,
+            )
             page.wait_for_timeout(2000)
             page.screenshot(path=str(out / f"{args.tag}-final.png"), full_page=True)
 
         # 모든 접힘 영역과 단계 카드를 펼친 화면
         page.evaluate("""() => {
-          document.querySelectorAll('details').forEach(d => { d.open = true; });
-          document.querySelectorAll('#answer-progress-steps button.step-toggle')
+          const turn = [...document.querySelectorAll('.conversation-message.is-assistant')].at(-1);
+          turn?.querySelectorAll('details').forEach(d => { d.open = true; });
+          turn?.querySelectorAll('button.step-toggle[aria-expanded="false"]')
             .forEach(b => b.click());
         }""")
         page.wait_for_timeout(1200)
         page.screenshot(path=str(out / f"{args.tag}-expanded.png"), full_page=True)
 
-        report = page.evaluate("""() => ({
-          screen: document.querySelector('.screen.is-active')?.id,
-          stageCards: document.querySelectorAll('#answer-progress-steps .step').length,
-          disclosures: document.querySelectorAll('#answer-progress-steps .step-disclosure').length,
-          fiveWOneH: document.querySelectorAll('.stage-5w1h').length,
-          graphNodes: document.querySelectorAll('#answer-exploration .graph-node').length,
-          graphEdges: document.querySelectorAll('#answer-exploration .graph-edge-group').length,
-          operatorSteps: document.querySelectorAll('.operator-step').length,
-          playButton: !!document.querySelector('.graph-simulate'),
-          truncatedLabels: [...document.querySelectorAll('.graph-node-name')]
+        report = page.evaluate("""() => {
+          const turn = [...document.querySelectorAll('.conversation-message.is-assistant')].at(-1);
+          return ({
+          conversationId: localStorage.getItem('evidence-chat-current-conversation-v1'),
+          stageCards: turn?.querySelectorAll('.step').length || 0,
+          disclosures: turn?.querySelectorAll('.step-disclosure').length || 0,
+          fiveWOneH: turn?.querySelectorAll('.stage-fivewoneh').length || 0,
+          graphNodes: turn?.querySelectorAll('.graph-node').length || 0,
+          graphEdges: turn?.querySelectorAll('.graph-edge-group').length || 0,
+          koreanGraphLabels: [...(turn?.querySelectorAll('.graph-node-type, .graph-edge-label') || [])]
+            .map(n => n.textContent).filter(Boolean).slice(0, 12),
+          operatorSteps: turn?.querySelectorAll('.operator-list li').length || 0,
+          playButton: !!turn?.querySelector('.traversal-status'),
+          horizontalOverflow: document.documentElement.scrollWidth > document.documentElement.clientWidth,
+          truncatedLabels: [...(turn?.querySelectorAll('.graph-node-name') || [])]
             .map(n => n.textContent).filter(t => t.includes('…')),
-        })""")
+          assistantTurns: [...document.querySelectorAll('.conversation-message.is-assistant:not(.is-pending)')]
+            .map(node => ({
+              status: node.querySelector('.turn-status')?.dataset.state || null,
+              content: node.querySelector('.message-content')?.textContent || '',
+              evidence: !![...node.querySelectorAll('summary')].find(s => s.textContent.includes('근거')),
+              process: !![...node.querySelectorAll('summary')].find(s => s.textContent.includes('처리 과정')),
+              graph: !![...node.querySelectorAll('summary')].find(s => s.textContent.includes('그래프 탐색')),
+              cypher: !![...node.querySelectorAll('summary')].find(s => s.textContent.includes('Cypher 보기')),
+            })),
+          });
+        }""")
+        before_reload = page.locator(".conversation-message").count()
+        page.reload(wait_until="networkidle")
+        page.wait_for_timeout(800)
+        report["messagesBeforeReload"] = before_reload
+        report["messagesAfterReload"] = page.locator(".conversation-message").count()
+        report["restoredConversationId"] = page.evaluate(
+            "localStorage.getItem('evidence-chat-current-conversation-v1')"
+        )
         report["consoleErrors"] = errors
         browser.close()
 
