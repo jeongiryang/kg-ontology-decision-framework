@@ -73,9 +73,8 @@ PR #32~#35 병합 뒤 최종 `main`의 PR #10 50문항을 다시 실행하던 �
   relationships / 520 Evidence
 - Neo4j opt-in: 3건·6 subtests 통과
 - 실제 Ollama·Neo4j·Starlette opt-in: 3건·18 subtests 통과, 185.96초
+- GitHub Actions `Query safety checks / unit-tests`: 최신 코드 Head 성공
 - `git diff --check`: 통과
-
-GitHub Actions 결과는 완료 뒤 이 로그에 갱신한다.
 
 ## 제한사항
 
