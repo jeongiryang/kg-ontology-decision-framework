@@ -697,16 +697,6 @@ class AgenticCurriculumChatService:
         plan = self._plan(question, conversation)
         if conversation is not None:
             plan = self._inherit_dialogue_scope(question, conversation, plan)
-        area_queries = self._area_course_list_queries(question)
-        if area_queries:
-            plan = _Plan(
-                area_queries[0],
-                plan.course_codes,
-                plan.tools,
-                plan.topic,
-                plan.followup_question,
-                tuple(dict.fromkeys((*area_queries[1:], *plan.subquestions))),
-            )
         if plan.course_codes and re.search(
             r"(?:그중|그[ \t]*가운데|이[ \t]*중).{0,16}(?:빼|누락|제외)",
             question,
@@ -1317,43 +1307,6 @@ class AgenticCurriculumChatService:
             if current is None:
                 return None
         return getattr(current, "planner", None)
-
-    def _area_course_list_queries(self, question: str) -> tuple[str, ...]:
-        """Split a parent-area list into bounded child queries declared by the KG."""
-
-        if not _LIST_REQUEST.search(question):
-            return ()
-        planner = self._query_planner()
-        context = getattr(planner, "context", None)
-        areas = context.get("course_education_areas") if isinstance(context, Mapping) else None
-        if not isinstance(areas, list):
-            return ()
-        by_id = {
-            item.get("area_id"): item
-            for item in areas
-            if isinstance(item, Mapping) and isinstance(item.get("area_id"), str)
-        }
-        parents = [
-            item
-            for item in areas
-            if isinstance(item, Mapping)
-            and isinstance(item.get("name_ko"), str)
-            and item["name_ko"] in question
-            and isinstance(item.get("offering_area_ids"), list)
-            and len(item["offering_area_ids"]) > 1
-        ]
-        if not parents:
-            return ()
-        parent = max(parents, key=lambda item: len(item["name_ko"]))
-        year = self._default_scope().get("academic_year")
-        prefix = f"{year}학년도 " if isinstance(year, int) else ""
-        queries = [
-            f"{prefix}{child['name_ko']} 영역의 모든 과목명을 보여 주세요"
-            for area_id in parent["offering_area_ids"]
-            if isinstance((child := by_id.get(area_id)), Mapping)
-            and isinstance(child.get("name_ko"), str)
-        ]
-        return tuple(queries[: self.policy.max_kg_queries])
 
     def _restore_pending_question(
         self, question: str, conversation: ConversationContext | None
@@ -2505,6 +2458,69 @@ class AgenticCurriculumChatService:
                 "rewritten_sections": 0,
                 "canonical_fallback_sections": 0,
                 "repair_attempts": 0,
+            }
+        large_course_lists = [
+            claim
+            for source in approved
+            for claim in source.response.grounded_claims
+            if claim.claim_type is ClaimType.COURSE_LIST
+            and isinstance(claim.value, tuple)
+            and len(claim.value) > 20
+        ]
+        if large_course_lists:
+            # The complete, Evidence-backed list is already rendered
+            # deterministically.  Sending hundreds of row-shaped Claim items back
+            # through the model adds no grounding and can exhaust the context or
+            # browser timeout.  The model receives only bounded aggregate context
+            # for optional discourse around the untouched verified list.
+            intro = closing = ""
+            unique_courses = len(
+                {
+                    item.entity_id
+                    for claim in large_course_lists
+                    for item in claim.value
+                }
+            )
+            area_count = len(
+                {
+                    item.area_name
+                    for claim in large_course_lists
+                    for item in claim.value
+                    if item.area_name
+                }
+            )
+            try:
+                payload = self.client.generate_json(
+                    system_prompt=(
+                        "검증된 전체 목록은 Python이 그대로 표시한다. 목록을 다시 쓰거나 "
+                        "과목명·숫자·학교 규정을 만들지 말고, 사실이 없는 짧은 한국어 "
+                        "intro와 closing만 반환한다. sections는 빈 배열로 반환한다."
+                    ),
+                    user_prompt=json.dumps(
+                        {
+                            "request_kind": "verified_complete_course_list",
+                            "verified_group_count": area_count,
+                            "verified_unique_course_count": unique_courses,
+                        },
+                        ensure_ascii=False,
+                    ),
+                    response_schema=_FACT_PACKET_NARRATIVE_SCHEMA,
+                ).payload
+                intro = self._safe_discourse(
+                    payload.get("intro"), canonical, max_length=120
+                )
+                closing = self._safe_discourse(
+                    payload.get("closing"), canonical, max_length=160
+                )
+            except (LLMResponseError, ValueError, TypeError):
+                pass
+            return " ".join(item for item in (intro, canonical, closing) if item).strip(), {
+                "packet_count": len(approved),
+                "rewritten_sections": 0,
+                "canonical_fallback_sections": len(approved),
+                "repair_attempts": 0,
+                "large_list_compacted": True,
+                "large_list_unique_courses": unique_courses,
             }
         packets = [
             {

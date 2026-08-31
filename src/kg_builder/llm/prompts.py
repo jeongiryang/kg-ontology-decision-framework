@@ -98,7 +98,7 @@ fact.status = 'VERIFIED'와 evidence.verification_status = 'VERIFIED'를 정확�
 Course는 과목 정체성이며 편성 fact가 아니다. 학년·학기·학점·이수구분은 CourseOffering을 fact로 사용한다.
 RETURN은 요청 필드, 모든 filter scope, fact/Evidence 계약 필드만 정확히 alias로 반환한다.
 함수, 집계, map, list, 서브쿼리, UNION, UNWIND, 쓰기/DDL/프로시저를 사용하지 않는다.
-LIMIT은 리터럴 100을 사용한다."""
+LIMIT은 required_syntax_scaffold에 제시된 리터럴을 그대로 사용한다."""
 
 
 def planner_prompt(

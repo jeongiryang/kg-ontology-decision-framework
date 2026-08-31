@@ -316,6 +316,12 @@ class ProfileExtractor:
             credits[category] = float(correction.group(3))
             changed.add(f"credits.{category}")
         observations: dict[str, set[float]] = {}
+        observation_positions: dict[str, list[tuple[int, float]]] = {}
+
+        def observe(category: str, value: float, position: int) -> None:
+            observations.setdefault(category, set()).add(value)
+            observation_positions.setdefault(category, []).append((position, value))
+
         for match in re.finditer(
             r"(?<![가-힣])(총|전체|교양|전공|일반선택|자유선택|일선)\s*(?:을|은|이)?\s*"
             r"(\d+(?:\.\d+)?)\s*학점",
@@ -326,7 +332,7 @@ class ProfileExtractor:
             if corrected_span and corrected_span[0] <= match.start() < corrected_span[1]:
                 continue
             category = _CREDIT_CATEGORIES[match.group(1)]
-            observations.setdefault(category, set()).add(float(match.group(2)))
+            observe(category, float(match.group(2)), match.start())
         # Students often give a compact list such as "전공 51, 교양 29, 일선 14"
         # and put the unit only in the surrounding sentence.  Accept unitless
         # category-number pairs only when at least two distinct categories appear;
@@ -341,12 +347,74 @@ class ProfileExtractor:
         if len({_CREDIT_CATEGORIES[item.group(1)] for item in compact}) >= 2:
             for match in compact:
                 category = _CREDIT_CATEGORIES[match.group(1)]
-                observations.setdefault(category, set()).add(float(match.group(2)))
+                observe(category, float(match.group(2)), match.start())
+
+        # A correction may omit the category on the replacement value:
+        # ``전공 42학점이야. 아니, 45학점으로 계산해줘.``  Attribute that value
+        # only when an explicit correction cue is present and the nearest earlier
+        # credit category is unambiguous.  Ordinary duplicate values remain a
+        # clarification instead of silently applying last-write-wins.
+        correction_cues = list(
+            re.finditer(
+                r"(?:아니라|정정(?:할게|해|합니다)?|다시\s*계산|실제로는?|"
+                r"잘못\s*말(?:했어|했어요|했습니다)?|바꿀게|아니\s*[,，])",
+                question,
+            )
+        )
+        for cue in correction_cues:
+            replacement = re.search(
+                r"(?<!\d)(\d+(?:\.\d+)?)\s*학점(?:으로)?(?:\s*계산)?",
+                question[cue.end() :],
+            )
+            if replacement is None:
+                continue
+            category_mentions = [
+                (item.start(), _CREDIT_CATEGORIES[item.group(1)])
+                for item in re.finditer(
+                    r"(총|전체|교양|전공|일반선택|자유선택|일선)",
+                    question[: cue.start()],
+                )
+            ]
+            previous = category_mentions or [
+                (position, category)
+                for category, entries in observation_positions.items()
+                for position, _ in entries
+                if position < cue.start()
+            ]
+            if not previous:
+                continue
+            nearest_position = max(position for position, _ in previous)
+            nearest_categories = {
+                category for position, category in previous if position == nearest_position
+            }
+            if len(nearest_categories) != 1:
+                continue
+            category = next(iter(nearest_categories))
+            position = cue.end() + replacement.start()
+            observe(category, float(replacement.group(1)), position)
+
         for category, values in observations.items():
             if len(values) > 1:
-                conflicts.add(f"credits.{category}")
-                continue
-            credits[category] = next(iter(values))
+                entries = sorted(set(observation_positions.get(category, ())))
+                latest_position, latest_value = entries[-1]
+                prior_position = entries[-2][0]
+                correction_window = question[prior_position:]
+                latest_tail = question[latest_position:]
+                explicit_correction = bool(
+                    re.search(
+                        r"(?:아니라|정정(?:할게|해|합니다)?|실제로는?|"
+                        r"잘못\s*말(?:했어|했어요|했습니다)?|바꿀게|"
+                        r"아니\s*[,，])",
+                        correction_window[: max(0, latest_position - prior_position) + 1],
+                    )
+                    or re.search(r"(?:다시\s*계산|로\s*계산해)", latest_tail)
+                )
+                if not explicit_correction:
+                    conflicts.add(f"credits.{category}")
+                    continue
+                credits[category] = latest_value
+            else:
+                credits[category] = next(iter(values))
             changed.add(f"credits.{category}")
         for match in re.finditer(
             r"(?<![가-힣])(총|전체|교양|전공|일반선택|자유선택|일선)(?:은|이|는|을)?[ \t]*"

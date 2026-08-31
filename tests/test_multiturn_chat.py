@@ -209,8 +209,8 @@ class IndexedDbPresentationTests(unittest.TestCase):
         self.assertIn('id="ask-form" class="chat-composer"', markup)
         self.assertNotIn('id="answer-again"', markup)
         self.assertNotIn('id="screen-progress"', markup)
+        self.assertNotIn('id="examples"', markup)
         self.assertIn("white-space: pre-wrap", styles)
-        self.assertIn("scrollbar-width: none", styles)
 
 
 if __name__ == "__main__":

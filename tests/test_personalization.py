@@ -99,6 +99,33 @@ class UserProfileTests(unittest.TestCase):
         )
         self.assertEqual(corrected.conflicts, ())
 
+    def test_same_message_explicit_credit_corrections_use_the_latest_value(self):
+        questions = (
+            "전공 42학점이 아니라 45학점이야.",
+            "전공은 42학점이라고 했는데 정정할게. 45학점이야.",
+            "전공 42학점이야. 아니, 45학점으로 계산해줘.",
+            "교양 30, 전공 42, 일반선택 12야. 전공은 실제로 45학점이야.",
+        )
+        for question in questions:
+            with self.subTest(question=question):
+                extracted = self.extractor.extract(question, UserProfile())
+                self.assertEqual(extracted.profile.credits_by_category["major"], 45)
+                self.assertEqual(extracted.conflicts, ())
+
+    def test_same_message_duplicate_credit_without_correction_remains_a_conflict(self):
+        extracted = self.extractor.extract(
+            "전공 42학점이고 전공 45학점이야.", UserProfile()
+        )
+        self.assertEqual(extracted.conflicts, ("credits.major",))
+
+    def test_explicit_correction_replaces_the_stored_value_without_repeating_it(self):
+        current = self.extractor.extract("전공 42학점이야.", UserProfile()).profile
+        extracted = self.extractor.extract(
+            "아까 잘못 말했어. 전공은 45학점이야.", current
+        )
+        self.assertEqual(extracted.profile.credits_by_category["major"], 45)
+        self.assertEqual(extracted.conflicts, ())
+
     def test_toeic_speaking_is_not_also_extracted_as_toeic(self):
         extracted = self.extractor.extract(
             "TOEIC Speaking 130점과 일반 TOEIC 700점이 있어.", UserProfile()

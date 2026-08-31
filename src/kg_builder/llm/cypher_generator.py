@@ -7,6 +7,7 @@ from typing import Any, Mapping
 from kg_builder.query.query_plan import QueryPlan, SelectionMode
 from kg_builder.query.query_plan import resolve_filter_bindings
 from kg_builder.query.fact_families import family_for_result
+from kg_builder.query.result_limits import maximum_rows_for, ABSOLUTE_MAX_RESULT_ROWS
 
 from .client import LLMResponseError, StructuredLLMClient
 from .prompts import CYPHER_SYSTEM_PROMPT, cypher_prompt
@@ -176,20 +177,26 @@ def build_syntax_scaffold(plan: QueryPlan, schema_subset: Mapping[str, Any]) -> 
     # 부를 수 있게 한다. 검증기가 선택 별칭으로 허용한다.
     if aliases.get("CurriculumVersion") == "cv":
         returns.append("cv.version_name AS scope_identity")
-    if plan.selection_mode is SelectionMode.SINGLE_COURSE:
+    if (
+        plan.selection_mode is SelectionMode.COURSE_LIST
+        and {"area_id", "area_ids"}.intersection(plan.filters)
+    ):
+        returns.append("a.name_ko AS area_name")
+    if plan.selection_mode in {SelectionMode.SINGLE_COURSE, SelectionMode.COURSE_LIST}:
         if family != "CourseOffering":
             raise LLMResponseError(
                 "LLM_COURSE_IDENTITY_UNSUPPORTED",
                 "SINGLE_COURSE requires the CourseOffering fact family",
             )
         returns.append("c.course_id AS course_identity")
+    row_limit = maximum_rows_for(plan, ABSOLUTE_MAX_RESULT_ROWS)
     return (
         "\n".join(matches)
         + "\nWHERE "
         + "\n  AND ".join(predicates)
         + "\nRETURN "
         + ",\n       ".join(returns)
-        + "\nLIMIT 100"
+        + f"\nLIMIT {row_limit}"
     )
 
 

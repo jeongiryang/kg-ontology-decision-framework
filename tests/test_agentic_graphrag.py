@@ -1366,6 +1366,44 @@ class AgentOrchestratorTests(unittest.TestCase):
         self.assertEqual(result.response.status.value, "ANSWERABLE")
         self.assertIn("CDA0008", result.recent_course_codes)
 
+    def test_large_course_list_keeps_full_canonical_body_out_of_llm_prompt(self):
+        from tests.test_evidence_chat import _answerable_response
+
+        class LargeListService(FakePersonalizedService):
+            def ask(self, question, *, profile=None, resolved=None, progress_callback=None):
+                del question, resolved, progress_callback
+                response = _answerable_response(count=25)
+                return PersonalizedChatResult(
+                    response,
+                    DecisionOutcome(OutcomeStatus.ANSWERED, response.answer_text),
+                    profile or UserProfile(),
+                )
+
+        llm = FakeLLM(
+            [
+                {
+                    "resolved_question": "과목 목록은?",
+                    "referenced_course_codes": [],
+                    "tools": ["query_curriculum"],
+                    "topic": "과목 목록",
+                    "followup_question": None,
+                },
+                {"sections": [], "intro": "정리해 드릴게요.", "closing": ""},
+            ]
+        )
+        result = AgenticCurriculumChatService(
+            LargeListService(), llm, policy=AgentPolicy(mode=AgentMode.AGENTIC)
+        ).ask(
+            "과목 목록은?", conversation=context(codes=())
+        )
+        narrative_prompt = llm.calls[-1]["user_prompt"]
+        self.assertNotIn("전공과목25", narrative_prompt)
+        self.assertNotIn("approved_fact_text", narrative_prompt)
+        self.assertIn("verified_unique_course_count", narrative_prompt)
+        self.assertIn("총 25과목", result.display_answer)
+        trace = next(item for item in result.trace if item.tool is ToolName.GROUNDED_NARRATIVE)
+        self.assertTrue(trace.metadata["large_list_compacted"])
+
     def test_profile_department_and_list_request_remain_separate_turn_tasks(self):
         service = AgenticCurriculumChatService(FakePersonalizedService(), FakeLLM([]))
         items = service._requested_items(

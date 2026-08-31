@@ -162,6 +162,7 @@ class CourseClaimItem:
     grade_year: int | tuple[int, ...] | None = None
     semester: str | None = None
     completion_type: str | None = None
+    area_name: str | None = None
 
 
 @dataclass(frozen=True, slots=True)

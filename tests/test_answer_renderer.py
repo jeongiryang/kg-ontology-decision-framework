@@ -202,6 +202,31 @@ class StructuredClaimGroundingTests(unittest.TestCase):
         self.assertIn("2학년", answer.answer_text)
         self.assertNotIn("[2]학년", answer.answer_text)
 
+    def test_course_list_groups_verified_rows_by_returned_education_area(self):
+        second = offering_row(
+            fact_id="offering:cwnu:2026:general:GEC0002:first",
+            course_code="GEC0002",
+            name_ko="두번째과목",
+            course_identity="course:cwnu:GEC0002",
+            evidence_id="evidence:curriculum:2:GEC0002",
+            area_ids="area:two",
+            area_name="두번째영역",
+        )
+        first = offering_row(
+            area_ids="area:one",
+            area_name="첫번째영역",
+        )
+        plan = course_plan(
+            "name_ko",
+            selection="COURSE_LIST",
+            area_ids=["area:one", "area:two"],
+        )
+        _, answer = build_validate_render([first, second], plan)
+        self.assertIn("첫번째영역 (1과목)", answer.answer_text)
+        self.assertIn("두번째영역 (1과목)", answer.answer_text)
+        self.assertIn("총 2과목", answer.answer_text)
+        self.assertNotIn("이수구분별", answer.answer_text)
+
     def test_course_list_omits_empty_grade_and_renders_multiple_semesters(self):
         rows = [offering_row(grade_year=[], semester=["FIRST", "SECOND"])]
         plan = course_plan(

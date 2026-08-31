@@ -8,6 +8,7 @@ from typing import Any
 
 from .cypher_validator import ProvenanceContract
 from .query_plan import QueryPlan, SelectionMode, resolve_filter_bindings
+from .result_limits import ABSOLUTE_MAX_RESULT_ROWS, maximum_rows_for
 
 
 class ResultValidationError(ValueError):
@@ -39,7 +40,7 @@ class ResultValidator:
     def __init__(
         self,
         *,
-        max_rows: int = 100,
+        max_rows: int = ABSOLUTE_MAX_RESULT_ROWS,
         max_row_bytes: int = 65_536,
         max_response_bytes: int = 1_048_576,
     ):
@@ -53,12 +54,13 @@ class ResultValidator:
         rows: list[dict[str, Any]],
         provenance: ProvenanceContract,
     ) -> ValidatedResult:
-        if len(rows) > self.max_rows:
-            self._fail("RESULT_LIMIT_EXCEEDED", f"result exceeds {self.max_rows} rows")
+        plan_max_rows = maximum_rows_for(plan, self.max_rows)
+        if len(rows) > plan_max_rows:
+            self._fail("RESULT_LIMIT_EXCEEDED", f"result exceeds {plan_max_rows} rows")
         if not rows:
             return ValidatedResult((), 0, 0)
         required = set(plan.requested_fields) | set(plan.filters) | {"fact_id", "fact_label"}
-        if plan.selection_mode is SelectionMode.SINGLE_COURSE:
+        if plan.selection_mode in {SelectionMode.SINGLE_COURSE, SelectionMode.COURSE_LIST}:
             required.update({"course_identity", "name_ko"})
         if plan.evidence_required:
             required.update(self.EVIDENCE_FIELDS)
@@ -90,7 +92,7 @@ class ResultValidator:
                 )
             self._validate_scope(index, plan, row)
             self._validate_fact(index, row, provenance)
-            if plan.selection_mode is SelectionMode.SINGLE_COURSE:
+            if plan.selection_mode in {SelectionMode.SINGLE_COURSE, SelectionMode.COURSE_LIST}:
                 identity = row["course_identity"]
                 if not isinstance(identity, str) or not identity.strip():
                     self._fail(

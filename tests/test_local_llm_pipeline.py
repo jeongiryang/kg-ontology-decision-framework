@@ -525,6 +525,31 @@ class LocalLLMContractTests(unittest.TestCase):
         self.assertEqual(validated.provenance.fact_label, "CourseOffering")
         self.assertIn("c.course_id AS course_identity", scaffold)
 
+    def test_course_list_scaffold_uses_bounded_complete_catalog_limit(self) -> None:
+        payload = plan_payload()
+        payload["selection_mode"] = "COURSE_LIST"
+        payload["filters"] = {
+            "academic_year": 2026,
+            "area_ids": [
+                "area:general:balanced:digital-communication",
+                "area:general:balanced:humanities-arts",
+            ],
+        }
+        payload["requested_fields"] = ["name_ko", "completion_type"]
+        plan = QueryPlan.from_dict(payload, SchemaCatalog.from_generated())
+        scaffold = build_syntax_scaffold(plan, QuerySchemaSelector().select(plan))
+
+        validated = CypherValidator(SchemaCatalog.from_generated()).validate(plan, scaffold)
+        self.assertEqual(validated.limit, 250)
+        self.assertIn("c.course_id AS course_identity", scaffold)
+        self.assertIn("a.name_ko AS area_name", scaffold)
+
+        with self.assertRaises(CypherValidationError) as raised:
+            CypherValidator(SchemaCatalog.from_generated()).validate(
+                plan, scaffold.replace("LIMIT 250", "LIMIT 100")
+            )
+        self.assertEqual(raised.exception.code, "CYPHER_LIST_LIMIT_INCOMPLETE")
+
     def test_single_course_code_lookup_adds_grounded_subject_without_answer_slot(self) -> None:
         payload = plan_payload()
         payload["selection_mode"] = "SINGLE_COURSE"

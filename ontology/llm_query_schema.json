@@ -2002,9 +2002,10 @@
     "cypher_generation_constraints": {
       "all_user_filters_must_use_parameters": true,
       "direct_verified_fact_evidence_path_required": true,
-      "literal_limit_maximum": 100,
+      "literal_limit_maximum": 250,
       "where_predicates_must_not_be_parenthesized": true
     },
+    "default_maximum_result_rows": 100,
     "evidence_relationship": "SUPPORTED_BY",
     "filter_bindings": {
       "academic_year": {
@@ -2148,7 +2149,7 @@
         "property": "source_was_blank"
       }
     },
-    "maximum_result_rows": 100,
+    "maximum_result_rows": 250,
     "provenance": {
       "course_identity_is_not_a_fact": true,
       "course_schedule_fact_label": "CourseOffering",

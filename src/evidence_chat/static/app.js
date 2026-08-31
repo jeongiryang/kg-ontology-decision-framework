@@ -16,7 +16,6 @@ const el = {
   question: $("question"),
   submit: $("submit"),
   composerStatus: $("composer-status"),
-  examples: $("examples"),
   askNotice: $("ask-notice"),
   profileForm: $("profile-form"),
   profileAdmissionYear: $("profile-admission-year"),
@@ -265,12 +264,14 @@ function renderConversationMessage(message) {
   block.dataset.turnId = message.turn_id || "";
   const role = document.createElement("strong");
   role.className = "message-role";
-  role.textContent = message.role === "user" ? "나" : "답변";
+  role.textContent = message.role === "user" ? "나" : "학사 챗봇 답변";
+  if (message.role === "assistant") role.classList.add("sr-only");
   const content = document.createElement("p");
   content.className = "message-content";
   content.textContent = message.content;
   block.append(role, content);
   if (message.role === "assistant" && message.content.length > 1800) {
+    block.classList.add("is-long");
     const contentId = opaqueId("answer-content");
     content.id = contentId;
     content.classList.add("is-collapsible", "is-collapsed");
@@ -783,7 +784,9 @@ function scrollConversationToLatest(force = false) {
 
 function updateJumpLatest() {
   shouldFollowLatest = isNearConversationBottom();
-  el.jumpLatest.hidden = shouldFollowLatest;
+  const remaining = el.conversationTranscript.scrollHeight -
+    el.conversationTranscript.scrollTop - el.conversationTranscript.clientHeight;
+  el.jumpLatest.hidden = shouldFollowLatest || remaining < 240;
 }
 
 el.conversationTranscript.addEventListener("scroll", updateJumpLatest, { passive: true });
@@ -819,28 +822,11 @@ async function loadHealth() {
       dot.dataset.state = "ok";
       text.textContent = "질의 서비스 준비됨 · PDF 탑재됨";
     }
-    renderExamples(data.examples || []);
     await renderConversationUi();
   } catch (_) {
     el.status.querySelector(".dot").dataset.state = "error";
     el.status.querySelector(".status-text").textContent = "서버 상태 확인 실패";
   }
-}
-
-function renderExamples(examples) {
-  el.examples.replaceChildren();
-  examples.forEach((text) => {
-    const button = document.createElement("button");
-    button.type = "button";
-    button.textContent = text;
-    button.addEventListener("click", () => {
-      if (inFlight) return;
-      el.question.value = text;
-      autoGrow();
-      el.form.requestSubmit();
-    });
-    el.examples.append(button);
-  });
 }
 
 function autoGrow() {
@@ -1685,12 +1671,17 @@ function renderGraphTab(container, state, autoplay = false) {
     "현재 질문에 대해 실제 승인된 구조와 VERIFIED provenance만 표시한 projection입니다.";
   container.append(note);
   if (state.claims && state.claims.traversal_graph) {
-    renderGraphPanel(
-      container,
-      "실제 질의 traversal과 VERIFIED 근거",
-      state.claims.traversal_graph,
-      { autoplay }
-    );
+    const graph = state.claims.traversal_graph;
+    if ((graph.nodes || []).length > 100) {
+      renderLargeGraphSummary(container, graph, { autoplay });
+    } else {
+      renderGraphPanel(
+        container,
+        "실제 질의 traversal과 VERIFIED 근거",
+        graph,
+        { autoplay }
+      );
+    }
   } else if (state.explain && state.explain.query_graph) {
     renderGraphPanel(container, "승인된 질의 구조", state.explain.query_graph);
   }
@@ -1705,6 +1696,40 @@ function renderGraphTab(container, state, autoplay = false) {
       state.claims.provenance_graph
     );
   }
+}
+
+function renderLargeGraphSummary(container, graph, options = {}) {
+  const panel = document.createElement("section");
+  panel.className = "graph-panel graph-summary-panel";
+  const heading = document.createElement("h4");
+  heading.textContent = "조회 결과 요약";
+  const groups = new Map();
+  graph.nodes
+    .filter((node) => node.node_type !== "Evidence" && node.group_name)
+    .forEach((node) => groups.set(node.group_name, (groups.get(node.group_name) || 0) + 1));
+  const description = document.createElement("p");
+  description.textContent =
+    `검증된 결과 ${[...groups.values()].reduce((sum, count) => sum + count, 0)}개를 ` +
+    `${groups.size}개 영역으로 요약했습니다. 전체 노드와 근거는 필요할 때만 그립니다.`;
+  const list = document.createElement("ul");
+  list.className = "graph-group-summary";
+  groups.forEach((count, name) => {
+    const item = document.createElement("li");
+    item.textContent = `${name} · ${count}과목`;
+    list.append(item);
+  });
+  const show = document.createElement("button");
+  show.type = "button";
+  show.className = "ghost compact";
+  show.textContent = "전체 노드 표시";
+  const target = document.createElement("div");
+  show.addEventListener("click", () => {
+    show.disabled = true;
+    show.textContent = "전체 노드를 표시했습니다";
+    renderGraphPanel(target, "실제 질의 traversal과 VERIFIED 근거", graph, options);
+  }, { once: true });
+  panel.append(heading, description, list, show, target);
+  container.append(panel);
 }
 
 function addInspectionItem(container, label, value, options = {}) {
@@ -1789,8 +1814,8 @@ function graphProjectionIsSafe(graph) {
     ].includes(graph.kind) ||
     !Array.isArray(graph.nodes) ||
     !Array.isArray(graph.edges) ||
-    graph.nodes.length > 200 ||
-    graph.edges.length > 300
+    graph.nodes.length > 650 ||
+    graph.edges.length > 800
   ) return false;
   const ids = new Set();
   for (const node of graph.nodes) {
@@ -1801,6 +1826,11 @@ function graphProjectionIsSafe(graph) {
       ids.has(node.id) ||
       typeof node.display_name !== "string" ||
       typeof node.node_type !== "string" ||
+      !(
+        node.group_name === undefined ||
+        node.group_name === null ||
+        typeof node.group_name === "string"
+      ) ||
       !["SCHEMA_APPROVED", "VERIFIED"].includes(
         node.verification_status
       )

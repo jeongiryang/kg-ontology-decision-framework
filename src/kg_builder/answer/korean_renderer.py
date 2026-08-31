@@ -319,11 +319,21 @@ class KoreanAnswerRenderer:
                 else item.display_name
             )
 
+        unique_items = list({item.entity_id: item for item in items}.values())
+        group_by_area = any(item.area_name for item in unique_items)
         groups: dict[str, list] = {}
-        for item in items:
-            group = ENUM_KO.get(item.completion_type, item.completion_type or label)
+        for item in unique_items:
+            group = (
+                item.area_name
+                if group_by_area and item.area_name
+                else ENUM_KO.get(item.completion_type, item.completion_type or label)
+            )
             groups.setdefault(group, []).append(item)
-        lines = ["조회한 과목을 이수구분별로 정리했습니다."]
+        lines = [
+            "조회한 과목을 영역별로 정리했습니다."
+            if group_by_area
+            else "조회한 과목을 이수구분별로 정리했습니다."
+        ]
         for group, group_items in groups.items():
             lines.extend(("", f"{group} ({len(group_items)}과목)"))
             lines.extend(f"- {item_text(item)}" for item in group_items)

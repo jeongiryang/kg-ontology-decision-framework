@@ -8,11 +8,12 @@ from pathlib import Path
 from typing import Any, Sequence
 
 from .query_plan import FILTER_BINDINGS
+from .result_limits import ABSOLUTE_MAX_RESULT_ROWS, DEFAULT_MAX_RESULT_ROWS
 from .schema_catalog import DEFAULT_QUERY_SCHEMA_PATH, DEFAULT_SPEC_PATH, sha256_file
 
 
 SCHEMA_FORMAT_VERSION = "1.0.0"
-MAX_RESULT_ROWS = 100
+MAX_RESULT_ROWS = ABSOLUTE_MAX_RESULT_ROWS
 
 
 def build_query_schema(spec_path: Path = DEFAULT_SPEC_PATH) -> dict[str, Any]:
@@ -141,6 +142,7 @@ def build_query_schema(spec_path: Path = DEFAULT_SPEC_PATH) -> dict[str, Any]:
         "query_policy": {
             "read_only": True,
             "maximum_result_rows": MAX_RESULT_ROWS,
+            "default_maximum_result_rows": DEFAULT_MAX_RESULT_ROWS,
             "verified_fact_status": "VERIFIED",
             "verified_evidence_status": "VERIFIED",
             "evidence_relationship": "SUPPORTED_BY",

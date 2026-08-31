@@ -279,6 +279,20 @@ UI는 질문 입력·진행·결과의 별도 3단계 화면과 `새 질문하�
 이동하지 않고 최신 메시지 이동 버튼을 표시한다. 채팅방 생성·최근순 선택·개별/전체 삭제,
 새로고침 복원과 모바일 레이아웃을 제공하며 프로필 초기화는 채팅 삭제와 분리한다.
 
+입력창 위에 고정된 추천 질문이나 카테고리 chip은 만들지 않는다. desktop에서는 앱 셸이
+가용 폭을 최대 1,440px까지 사용하되 일반 답변 문장은 약 78ch로 제한한다. 전체 과목
+목록·그래프·Cypher 같은 넓은 내용만 assistant turn 전체 폭을 사용한다. transcript를 주
+스크롤 영역으로 삼고 composer는 항상 그 아래에 고정해 페이지와 채팅의 이중 스크롤을
+피한다.
+
+`COURSE_LIST`는 일반 질의의 100행 제한과 분리된 250행 hard limit을 사용한다. 이 예외는
+전체 목록 요청에만 적용하며 정적 검증·EXPLAIN·ResultValidator를 우회하지 않는다. 긴
+목록은 stable Course identity로 중복을 제거하고 Python이 VERIFIED 결과 전체를 영역별로
+렌더링한다. LLM에는 영역·고유 과목 개수 같은 bounded 요약만 보내므로 원시 189행을 다시
+생성하거나 생략할 권한이 없다. Citation은 응답 계약에 모두 보존하되 사용자가 disclosure를
+열 때 렌더링한다. 100개가 넘는 traversal은 먼저 실제 영역별 요약만 그리고, 사용자가
+요청할 때 승인된 전체 node·edge를 그린다. 추가 Neo4j 조회나 가짜 경로는 만들지 않는다.
+
 ## 테스트
 
 실제 Neo4j/Ollama 없이 fake `CurriculumChatService`를 lifespan에 주입한다.
