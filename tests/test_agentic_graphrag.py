@@ -12,6 +12,13 @@ from kg_builder.agent import (
     validate_tool_input,
 )
 from kg_builder.agent.contracts import MAX_KG_QUERIES_PER_TURN
+from kg_builder.agent.contracts import (
+    PendingRequest,
+    RequestAction,
+    RequestedItem,
+    RequestedItemStatus,
+    TurnFulfillmentStatus,
+)
 from kg_builder.agent.orchestrator import _Plan
 from kg_builder.answer.contracts import ChatResponse, ChatStatus
 from kg_builder.answer.personalized_service import PersonalizedChatResult
@@ -99,7 +106,7 @@ class ConversationContractTests(unittest.TestCase):
         expanded = AgentPolicy.from_env({"KG_AGENT_MODE": "expanded"})
         self.assertEqual(agentic.mode, AgentMode.AGENTIC)
         self.assertEqual(agentic.max_kg_queries, 6)
-        self.assertEqual(agentic.max_iterations, 3)
+        self.assertEqual(agentic.max_iterations, 4)
         self.assertEqual(agentic.max_narrative_repairs, 1)
         self.assertEqual(conservative.mode, AgentMode.CONSERVATIVE)
         self.assertEqual(conservative.max_kg_queries, 4)
@@ -171,6 +178,29 @@ class ConversationContractTests(unittest.TestCase):
             parsed.prompt_context()["recent_messages"][0]["content"],
             "이전 답변은 근거가 아닙니다.",
         )
+
+    def test_pending_request_round_trip_is_versioned_and_bounded(self):
+        pending = PendingRequest(
+            (
+                RequestedItem(
+                    "item:1",
+                    RequestAction.LIST_COURSES,
+                    {"academic_year": 2026, "department_id": "CSE"},
+                    "ALL",
+                    ("completion_type",),
+                    ("course_name",),
+                    RequestedItemStatus.INSUFFICIENT_EVIDENCE,
+                    "INCOMPLETE_RESULT",
+                ),
+            )
+        )
+        self.assertEqual(PendingRequest.from_payload(pending.to_public_dict()), pending)
+        with self.assertRaises(ValueError):
+            RequestedItem(
+                "item:1",
+                RequestAction.LIST_COURSES,
+                {"area_ids": ["x"] * 33},
+            )
 
 
 class AgentOrchestratorTests(unittest.TestCase):
@@ -951,7 +981,7 @@ class AgentOrchestratorTests(unittest.TestCase):
             ]
         )
         result = AgenticCurriculumChatService(FakePersonalizedService(), llm).ask(
-            "질문", conversation=context(codes=())
+            "교육과정 기준을 확인해 줘", conversation=context(codes=())
         )
         self.assertEqual(result.display_answer, "현재 검증된 근거에서 확인하지 못했습니다.")
         self.assertNotIn("99", result.display_answer)
@@ -1262,7 +1292,7 @@ class AgentOrchestratorTests(unittest.TestCase):
             "전공 42학점이야.", conversation=context(codes=())
         )
         self.assertEqual(result.personalized.outcome.status, OutcomeStatus.ADVISORY)
-        self.assertIn("브라우저 프로필", result.display_answer)
+        self.assertIn("이어지는 학사 질문에 반영", result.display_answer)
         self.assertEqual(result.response.status.value, "UNRESOLVED")
 
     def test_personal_remaining_course_request_keeps_missing_profile_gate(self):
@@ -1335,6 +1365,288 @@ class AgentOrchestratorTests(unittest.TestCase):
         )
         self.assertEqual(result.response.status.value, "ANSWERABLE")
         self.assertIn("CDA0008", result.recent_course_codes)
+
+    def test_large_course_list_keeps_full_canonical_body_out_of_llm_prompt(self):
+        from tests.test_evidence_chat import _answerable_response
+
+        class LargeListService(FakePersonalizedService):
+            def ask(self, question, *, profile=None, resolved=None, progress_callback=None):
+                del question, resolved, progress_callback
+                response = _answerable_response(count=25)
+                return PersonalizedChatResult(
+                    response,
+                    DecisionOutcome(OutcomeStatus.ANSWERED, response.answer_text),
+                    profile or UserProfile(),
+                )
+
+        llm = FakeLLM(
+            [
+                {
+                    "resolved_question": "과목 목록은?",
+                    "referenced_course_codes": [],
+                    "tools": ["query_curriculum"],
+                    "topic": "과목 목록",
+                    "followup_question": None,
+                },
+                {"sections": [], "intro": "정리해 드릴게요.", "closing": ""},
+            ]
+        )
+        result = AgenticCurriculumChatService(
+            LargeListService(), llm, policy=AgentPolicy(mode=AgentMode.AGENTIC)
+        ).ask(
+            "과목 목록은?", conversation=context(codes=())
+        )
+        narrative_prompt = llm.calls[-1]["user_prompt"]
+        self.assertNotIn("전공과목25", narrative_prompt)
+        self.assertNotIn("approved_fact_text", narrative_prompt)
+        self.assertIn("verified_unique_course_count", narrative_prompt)
+        self.assertIn("총 25과목", result.display_answer)
+        trace = next(item for item in result.trace if item.tool is ToolName.GROUNDED_NARRATIVE)
+        self.assertTrue(trace.metadata["large_list_compacted"])
+
+    def test_profile_department_and_list_request_remain_separate_turn_tasks(self):
+        service = AgenticCurriculumChatService(FakePersonalizedService(), FakeLLM([]))
+        items = service._requested_items(
+            "컴공과 과목의 모든 과목명을 다 출력해 줘.",
+            UserProfile(department_id="CSE"),
+            None,
+        )
+        self.assertEqual(len(items), 1)
+        self.assertEqual(items[0].action, RequestAction.LIST_COURSES)
+        self.assertEqual(items[0].scope, "ALL")
+        self.assertEqual(items[0].filters["department_id"], "CSE")
+
+    def test_general_list_language_maps_to_one_course_list_action(self):
+        service = AgenticCurriculumChatService(FakePersonalizedService(), FakeLLM([]))
+        questions = (
+            "나는 컴공 학생이야. 3학년 2학기 전공필수 과목을 모두 알려줘.",
+            "2026 컴공 3학년 과목을 한 번에 정리해 줘.",
+            "전공선택 과목을 빠짐없이 알려 주세요.",
+            "컴공 수업 뭐 있는지 이름만 몽땅 보여 줘.",
+        )
+        for question in questions:
+            with self.subTest(question=question):
+                items = service._requested_items(question, UserProfile(), None)
+                self.assertEqual(len(items), 1)
+                self.assertEqual(items[0].action, RequestAction.LIST_COURSES)
+
+    def test_next_semester_advice_is_a_recommendation_task(self):
+        service = AgenticCurriculumChatService(FakePersonalizedService(), FakeLLM([]))
+        items = service._requested_items(
+            "컴공과인데 자료구조를 들었어. 다음 학기에 무엇을 듣는 게 좋아?",
+            UserProfile(department_id="CSE"),
+            None,
+        )
+        self.assertIn(
+            RequestAction.RECOMMEND_COURSES,
+            tuple(item.action for item in items),
+        )
+
+    def test_request_actions_separate_calculation_eligibility_and_requirements(self):
+        agent = AgenticCurriculumChatService(FakePersonalizedService(), FakeLLM([]))
+        cases = (
+            (
+                "현재 총 60학점을 들었어. 졸업까지 절반 정도 끝난 거야?",
+                (RequestAction.CALCULATE_REMAINING,),
+            ),
+            (
+                "총 130학점을 채웠는데 전공필수를 빠뜨렸어. 졸업할 수 있지?",
+                (RequestAction.CHECK_ELIGIBILITY,),
+            ),
+            (
+                "편입생은 교양 34학점을 모두 들어야 해?",
+                (RequestAction.CHECK_ELIGIBILITY,),
+            ),
+            (
+                "졸업요건 확인과 3학년 2학기 과목 목록을 보여줘.",
+                (RequestAction.LIST_COURSES, RequestAction.LOOKUP_REQUIREMENT),
+            ),
+            (
+                "진로별 과목을 비교해서 추천해줘.",
+                (RequestAction.RECOMMEND_COURSES,),
+            ),
+            (
+                "운영체제를 안 들었지만 다른 과목은 많이 들었어. 졸업에 문제야?",
+                (RequestAction.CHECK_ELIGIBILITY,),
+            ),
+            (
+                "다시 그 과목으로 돌아가서 학기를 알려 줘.",
+                (RequestAction.LOOKUP_COURSE,),
+            ),
+        )
+        for question, expected in cases:
+            with self.subTest(question=question):
+                items = agent._requested_items(question, UserProfile(), None)
+                self.assertEqual(tuple(item.action for item in items), expected)
+
+    def test_incomplete_all_list_stays_pending_and_retry_restores_scope(self):
+        from tests.test_evidence_chat import _answerable_response
+
+        class IncompleteListService(FakePersonalizedService):
+            def expected_unique_course_count(self, filters):
+                return 37 if filters.get("department_id") == "CSE" else 0
+
+        service = IncompleteListService()
+        agent = AgenticCurriculumChatService(service, FakeLLM([]))
+        item = RequestedItem(
+            "item:1",
+            RequestAction.LIST_COURSES,
+            {"academic_year": 2026, "department_id": "CSE"},
+            "ALL",
+            ("completion_type",),
+            ("course_name",),
+        )
+        result = PersonalizedChatResult(
+            _answerable_response(count=2),
+            DecisionOutcome(OutcomeStatus.ANSWERED, "두 과목을 확인했습니다."),
+            UserProfile(department_id="CSE"),
+        )
+        fulfilled, status, pending = agent._fulfillment((item,), result)
+        self.assertEqual(status, TurnFulfillmentStatus.UNRESOLVED)
+        self.assertEqual(
+            fulfilled[0].status, RequestedItemStatus.INSUFFICIENT_EVIDENCE
+        )
+        self.assertEqual(fulfilled[0].reason_code, "INCOMPLETE_RESULT")
+        self.assertIsNotNone(pending)
+        restored = agent._restore_pending_question(
+            "다 출력해달라고.",
+            ConversationContext.from_payload(
+                {
+                    "version": 1,
+                    "conversation_id": "conversation:test-pending",
+                    "turn_id": "turn:test-pending",
+                    "recent_messages": [],
+                    "pending_request": pending.to_public_dict(),
+                }
+            ),
+        )
+        self.assertIn("2026학년도", restored)
+        self.assertIn("모든 과목명", restored)
+
+    def test_repeated_list_emphasis_reuses_prior_user_request_only(self):
+        agent = AgenticCurriculumChatService(
+            FakePersonalizedService(), FakeLLM([])
+        )
+        dialogue = ConversationContext.from_payload(
+            {
+                "version": 1,
+                "conversation_id": "conversation:test-repeat",
+                "turn_id": "turn:test-repeat",
+                "recent_messages": [
+                    {
+                        "turn_id": "turn:first",
+                        "role": "user",
+                        "content": "컴퓨터공학과 과목의 모든 과목명을 보여 줘.",
+                        "created_at": "2026-08-29T00:00:00Z",
+                        "citation_ids": [],
+                        "evidence_ids": [],
+                    },
+                    {
+                        "turn_id": "turn:first",
+                        "role": "assistant",
+                        "content": "이 문장은 다음 요청을 위한 사실 근거가 아닙니다.",
+                        "created_at": "2026-08-29T00:00:01Z",
+                        "citation_ids": [],
+                        "evidence_ids": [],
+                    },
+                ],
+            }
+        )
+        restored = agent._restore_pending_question("다 출력해달라고.", dialogue)
+        self.assertEqual(
+            restored, "컴퓨터공학과 과목의 모든 과목명을 보여 줘."
+        )
+        self.assertNotIn("사실 근거", restored)
+
+    def test_compound_turn_does_not_mark_an_unanswered_item_complete(self):
+        from tests.test_evidence_chat import _answerable_response
+
+        agent = AgenticCurriculumChatService(
+            FakePersonalizedService(), FakeLLM([])
+        )
+        result = PersonalizedChatResult(
+            _answerable_response(count=2),
+            DecisionOutcome(OutcomeStatus.ANSWERED, "과목 목록을 확인했습니다."),
+            UserProfile(),
+        )
+        items = (
+            RequestedItem("item:1", RequestAction.LIST_COURSES),
+            RequestedItem("item:2", RequestAction.LOOKUP_REQUIREMENT),
+        )
+        fulfilled, status, pending = agent._fulfillment(items, result)
+        self.assertEqual(fulfilled[0].status, RequestedItemStatus.ANSWERED)
+        self.assertEqual(
+            fulfilled[1].status, RequestedItemStatus.INSUFFICIENT_EVIDENCE
+        )
+        self.assertEqual(status, TurnFulfillmentStatus.PARTIAL)
+        self.assertEqual(len(pending.items), 1)
+
+    def test_partial_claim_does_not_promote_insufficient_outcome(self):
+        from tests.test_evidence_chat import _answerable_response
+
+        agent = AgenticCurriculumChatService(FakePersonalizedService(), FakeLLM([]))
+        result = PersonalizedChatResult(
+            _answerable_response(count=2),
+            DecisionOutcome(
+                OutcomeStatus.INSUFFICIENT_EVIDENCE,
+                "확인된 과목 정보는 있지만 적용 여부의 직접 근거는 없습니다.",
+            ),
+            UserProfile(),
+        )
+        item = RequestedItem("item:1", RequestAction.LIST_COURSES)
+        fulfilled, status, pending = agent._fulfillment((item,), result)
+        self.assertEqual(
+            fulfilled[0].status, RequestedItemStatus.INSUFFICIENT_EVIDENCE
+        )
+        self.assertEqual(status, TurnFulfillmentStatus.UNRESOLVED)
+        self.assertIsNotNone(pending)
+
+    def test_fully_grounded_registered_fact_families_ignore_scaffold_miss(self):
+        from tests.test_evidence_chat import _answerable_response
+
+        agent = AgenticCurriculumChatService(FakePersonalizedService(), FakeLLM([]))
+        unresolved = PersonalizedChatResult(
+            ChatResponse.unresolved("request:scaffold"),
+            DecisionOutcome(
+                OutcomeStatus.INSUFFICIENT_EVIDENCE,
+                "복합 표현 자체에는 단일 조회가 없습니다.",
+            ),
+            UserProfile(),
+        )
+        first = PersonalizedChatResult(
+            _answerable_response(count=2),
+            DecisionOutcome(OutcomeStatus.ANSWERED, "인재상을 확인했습니다."),
+            UserProfile(),
+        )
+        second = PersonalizedChatResult(
+            _answerable_response(count=1),
+            DecisionOutcome(OutcomeStatus.ANSWERED, "진로 분야를 확인했습니다."),
+            UserProfile(),
+        )
+        combined = agent._combine_grounded(
+            [unresolved, first, second],
+            unresolved,
+            question="학과 인재상과 진로 분야를 알려 줘.",
+        )
+        self.assertEqual(combined.outcome.status, OutcomeStatus.ANSWERED)
+        self.assertEqual(combined.response.status, ChatStatus.ANSWERABLE)
+
+    def test_short_ambiguous_turn_asks_for_detail_instead_of_scope_error(self):
+        result = AgenticCurriculumChatService(
+            FakePersonalizedService(), FakeLLM([])
+        ).ask("TQ", conversation=context(codes=()))
+        self.assertEqual(result.personalized.outcome.status, OutcomeStatus.NEEDS_USER_INFO)
+        self.assertEqual(result.response.status, ChatStatus.CLARIFICATION_REQUIRED)
+        self.assertIn("어떤 내용을 확인", result.display_answer)
+        self.assertEqual(result.fulfillment_status, TurnFulfillmentStatus.UNRESOLVED)
+
+    def test_social_guidance_is_natural_advisory(self):
+        result = AgenticCurriculumChatService(
+            FakePersonalizedService(), FakeLLM([])
+        ).ask("그럼 다음에는 뭘 물어보면 돼?", conversation=context(codes=()))
+        self.assertEqual(result.personalized.outcome.status, OutcomeStatus.ADVISORY)
+        self.assertIn("학수번호", result.display_answer)
+        self.assertEqual(result.fulfillment_status, TurnFulfillmentStatus.COMPLETE)
 
 
 if __name__ == "__main__":

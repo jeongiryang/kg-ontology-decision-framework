@@ -20,8 +20,8 @@ from kg_builder.query.query_trace import EMAIL_PATTERN, PHONE_PATTERN, STUDENT_I
 
 
 GRAPH_ENVELOPE_VERSION = 1
-MAX_GRAPH_NODES = 200
-MAX_GRAPH_EDGES = 300
+MAX_GRAPH_NODES = 650
+MAX_GRAPH_EDGES = 800
 _SAFE_TYPE = re.compile(r"[A-Za-z][A-Za-z0-9_]{0,79}\Z")
 _DISPLAY_FIELDS = (
     "name_ko",
@@ -124,6 +124,14 @@ def build_query_structure_projection(
         catalog = SchemaCatalog.from_generated()
     except (OSError, ValueError, SchemaCatalogError):
         return None
+    safe_labels = [label for label in safe_labels if label in catalog.nodes]
+    safe_relationships = [
+        relationship
+        for relationship in safe_relationships
+        if relationship in catalog.relationships
+    ]
+    if not safe_labels:
+        return None
 
     steps = _approved_path_steps(
         path_edges,
@@ -134,6 +142,8 @@ def build_query_structure_projection(
     # labels without those hops would turn a schema candidate set into a made-up
     # query graph.  A single label is the one safe zero-hop query shape.
     if path_edges and not steps:
+        return None
+    if not _path_matches_catalog(steps, catalog):
         return None
     if not steps and len(safe_labels) != 1:
         return None
@@ -229,11 +239,13 @@ def build_traversal_projection(
         catalog = SchemaCatalog.from_generated()
     except (OSError, ValueError, SchemaCatalogError):
         return None
-
-    steps = sorted(
-        (step for step in path_edges if isinstance(step, Mapping)),
-        key=lambda step: step.get("order", 0),
+    steps = _approved_path_steps(
+        path_edges,
+        set(catalog.nodes),
+        set(catalog.relationships),
     )
+    if not steps or not _path_matches_catalog(steps, catalog):
+        return None
     # 엔진이 실제로 밟은 단계를 관계 타입으로 묶는다. 같은 관계를 여러 번 타면
     # 실행 순서대로 소진한다.
     measured: dict[str, list[Mapping[str, Any]]] = {}
@@ -372,6 +384,7 @@ def build_traversal_projection(
             "node_type_ko": _node_type_ko(catalog, fact_label),
             "verification_status": "VERIFIED",
             "visit_order": order,
+            "group_name": _safe_display(row.get("area_name"), "") or None,
         })
         if parent_id and into_fact:
             hop += 1
@@ -399,8 +412,10 @@ def build_traversal_projection(
         if not isinstance(target_label, str) or target_label == "Evidence":
             continue
         target_props = catalog.properties_for_labels({target_label})
-        display_field = next(
-            (f for f in _DISPLAY_FIELDS if f in target_props), None
+        display_field = (
+            "area_name"
+            if target_label == "EducationArea"
+            else next((f for f in _DISPLAY_FIELDS if f in target_props), None)
         )
         if display_field is None:
             continue
@@ -472,7 +487,7 @@ def build_traversal_projection(
         return None
     return {
         "version": GRAPH_ENVELOPE_VERSION,
-        "kind": "QUERY_STRUCTURE",
+        "kind": "RESULT_TRAVERSAL",
         "ordered": True,
         "nodes": nodes,
         "edges": edges,
@@ -647,6 +662,23 @@ def _approved_path_steps(
         )
     steps.sort(key=lambda step: step["order"])
     return steps
+
+
+def _path_matches_catalog(
+    steps: Sequence[Mapping[str, Any]], catalog: SchemaCatalog
+) -> bool:
+    """Require every approved hop to follow an ontology-declared direction."""
+
+    for step in steps:
+        relationship = catalog.relationships.get(str(step.get("relationship_type") or ""))
+        if relationship is None:
+            return False
+        if (
+            step.get("start_label") not in relationship.from_labels
+            or step.get("end_label") not in relationship.to_labels
+        ):
+            return False
+    return True
 
 
 def _assign_visit_order(

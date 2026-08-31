@@ -460,6 +460,7 @@ class ClaimValidator:
                 or item.grade_year != _freeze(row.get("grade_year"))
                 or item.semester != _freeze(row.get("semester"))
                 or item.completion_type != row.get("completion_type")
+                or item.area_name != row.get("area_name")
             ):
                 self._invalid("course list item differs from its fact")
 
@@ -522,6 +523,16 @@ class ClaimValidator:
             self._invalid("aggregate must cover every result fact")
         if claim.field == "fact_count":
             expected, unit = len(by_fact), "COURSE"
+        elif claim.field == "unique_course_count":
+            expected = len(
+                {
+                    rows[0].get("course_identity")
+                    or rows[0].get("course_code")
+                    or fact_id
+                    for fact_id, rows in by_fact.items()
+                }
+            )
+            unit = "COURSE"
         elif claim.field == "credits_sum":
             credits = [rows[0].get("credits") for rows in by_fact.values()]
             if any(isinstance(v, bool) or not isinstance(v, (int, float)) for v in credits):

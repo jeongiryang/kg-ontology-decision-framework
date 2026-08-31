@@ -326,6 +326,7 @@ class ClaimBuilder:
                     _freeze(row.get("grade_year")),
                     _freeze(row.get("semester")),
                     row.get("completion_type"),
+                    row.get("area_name"),
                 )
             )
             all_links.extend(self._provenance(rows))
@@ -354,15 +355,28 @@ class ClaimBuilder:
                 len(items),
                 unit="COURSE",
             ),
+            GroundedClaim(
+                _claim_id("aggregate", "unique_course_count", fact_ids),
+                ClaimType.AGGREGATE,
+                provenance,
+                "unique_course_count",
+                len({item.entity_id for item in items}),
+                unit="COURSE",
+            ),
         ]
-        if all(item.credits is not None for item in items):
+        unique_items = {item.entity_id: item for item in items}
+        if all(item.credits is not None for item in unique_items.values()):
             claims.append(
                 GroundedClaim(
                     _claim_id("aggregate", "credits_sum", fact_ids),
                     ClaimType.AGGREGATE,
                     provenance,
                     "credits_sum",
-                    sum(item.credits for item in items if item.credits is not None),
+                    sum(
+                        item.credits
+                        for item in unique_items.values()
+                        if item.credits is not None
+                    ),
                     unit="CREDIT",
                 )
             )

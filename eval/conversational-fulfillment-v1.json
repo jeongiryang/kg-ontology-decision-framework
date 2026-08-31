@@ -1,0 +1,63 @@
+{
+  "version": 1,
+  "single_turn_variants": [
+    {"id": "F01", "category": "profile_and_list", "question": "컴공과 전공필수와 전공선택 과목 이름을 전부 보여줘."},
+    {"id": "F02", "category": "profile_and_list", "question": "컴퓨터공학과 과목의 모든 과목명 다 출력해줘."},
+    {"id": "F03", "category": "filtered_list", "question": "나는 컴공 학생이야. 3학년 2학기 전공필수 과목을 모두 알려줘."},
+    {"id": "F04", "category": "personal_requirement", "question": "컴퓨터공학과로 전과했어. 앞으로 들어야 할 전공필수 과목이 뭐야?"},
+    {"id": "F05", "category": "mixed_advisory", "question": "컴공과인데 자료구조를 들었어. 다음 학기에 무엇을 듣는 게 좋아?"},
+    {"id": "F06", "category": "area_list", "question": "균형교양 과목의 과목명을 전부 출력해줘."},
+    {"id": "F07", "category": "area_list", "question": "PDF 30페이지에서 영역 균형교양의 과목명을 다 출력해줘."},
+    {"id": "F08", "category": "compound", "question": "졸업요건 확인과 3학년 2학기에 개설된 강의들이 뭐야?"},
+    {"id": "F09", "category": "eligibility", "question": "자료구조를 들은 다음 학기에 고급자료구조를 들을 수 있어?"},
+    {"id": "F10", "category": "personal_compound", "question": "2026학번 컴퓨터공학과이고 자료구조를 들었어. 내 졸업요건에서 무엇이 남았고 다음에는 뭘 듣는 게 좋아?"},
+    {"id": "F11", "category": "credit_calculation", "question": "나는 2026학번 컴퓨터공학과이고 교양 30학점, 전공 42학점, 일반선택 12학점을 들었어. 졸업까지 영역별로 얼마나 부족해?"},
+    {"id": "F12", "category": "correction", "question": "전공은 42학점이 아니라 45학점이야. 다시 계산해줘."},
+    {"id": "F13", "category": "social", "question": "안녕하세요!"},
+    {"id": "F14", "category": "social", "question": "고마워."},
+    {"id": "F15", "category": "social_guidance", "question": "그럼 다음에는 뭘 물어보면 돼?"},
+    {"id": "F16", "category": "ambiguous", "question": "TQ"},
+    {"id": "F17", "category": "ambiguous", "question": "자료"},
+    {"id": "F18", "category": "ambiguous", "question": "다음 거"},
+    {"id": "F19", "category": "alias", "question": "데이터베이스개론이랑 데이타베이스개론을 둘 다 신청해야 하나요?"},
+    {"id": "F20", "category": "filtered_list", "question": "2026 컴공 3학년 과목을 한 번에 정리해 줘."},
+    {"id": "F21", "category": "filtered_list", "question": "전공선택 과목을 빠짐없이 알려 주세요."},
+    {"id": "F22", "category": "list_fields", "question": "컴공 전체 과목의 이름과 학수번호를 목록으로 보여 줘."},
+    {"id": "F23", "category": "comparison", "question": "자료구조와 고급자료구조의 학년, 학기, 이수구분을 비교해 줘."},
+    {"id": "F24", "category": "live_information", "question": "다음 학기 알고리즘 잔여석이 몇 개인지 알려줘."},
+    {"id": "F25", "category": "out_of_scope", "question": "2025학년도 기계공학과 필수 과목을 전부 보여 줘."},
+    {"id": "F26", "category": "evidence_gap", "question": "운영체제를 재수강하면 이전 성적이 졸업학점에서 빠져?"},
+    {"id": "F27", "category": "course_lookup", "question": "데이터베이스개론 표기로 학수번호와 개설 학기를 찾아 줘."},
+    {"id": "F28", "category": "general_rule", "question": "편입생에게도 공통 교양 이수 의무가 있는지 근거로 설명해 줘."},
+    {"id": "F29", "category": "general_rule", "question": "컴퓨터공학과 학생이 졸업하려면 필요한 영어 기준을 알려 줘."},
+    {"id": "F30", "category": "colloquial_list", "question": "컴공 수업 뭐 있는지 이름만 몽땅 보여 줘."}
+  ],
+  "multi_turn_scenarios": [
+    {
+      "id": "P01",
+      "category": "pending_request",
+      "turns": [
+        "컴퓨터공학과 과목의 모든 과목명 다 출력해줘.",
+        "다 출력해달라고.",
+        "과목명 전부 보여줘."
+      ]
+    },
+    {
+      "id": "P02",
+      "category": "credit_correction",
+      "turns": [
+        "나는 2026학번 컴퓨터공학과이고 교양 30학점, 전공 42학점, 일반선택 12학점을 들었어. 졸업까지 영역별로 얼마나 부족해?",
+        "전공은 42학점이 아니라 45학점이야. 다시 계산해줘."
+      ]
+    },
+    {
+      "id": "P03",
+      "category": "course_reference",
+      "turns": [
+        "자료구조는 몇 학년 몇 학기에 들어?",
+        "그 과목을 안 들으면 졸업 못 해?",
+        "고급자료구조로 대신하면 인정돼?"
+      ]
+    }
+  ]
+}

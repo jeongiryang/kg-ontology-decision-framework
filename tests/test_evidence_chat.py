@@ -133,8 +133,11 @@ def _answerable_response(*, count: int = 1, same_page: bool = False) -> ChatResp
 
 
 class _ChatStub:
-    def __init__(self, response: ChatResponse):
+    def __init__(
+        self, response: ChatResponse, *, rows: list[dict[str, Any]] | None = None
+    ):
         self.response = response
+        self.rows = rows or [_offering_row()]
         self.questions: list[str] = []
 
     def ask(
@@ -146,7 +149,8 @@ class _ChatStub:
     ) -> ChatResponse:
         self.questions.append(question)
         self.resolved = resolved
-        row = _offering_row()
+        row = self.rows[0]
+        row_count = len(self.rows)
         details = {
             ProgressPhase.QUESTION_ANALYSIS: {
                 "planning_status": "READY",
@@ -179,32 +183,34 @@ class _ChatStub:
                 "direct_evidence_path_verified": True,
             },
             ProgressPhase.NEO4J_EXPLAIN: {"operators": ["NodeIndexSeek"]},
-            ProgressPhase.GRAPH_EXECUTION: {"row_count": 1},
+            ProgressPhase.GRAPH_EXECUTION: {"row_count": row_count},
             ProgressPhase.RESULT_VALIDATION: {
-                "row_count": 1,
-                "fact_count": 1,
-                "evidence_count": 1,
+                "row_count": row_count,
+                "fact_count": row_count,
+                "evidence_count": row_count,
                 "fact_status_verified": True,
                 "evidence_status_verified": True,
                 "direct_provenance_verified": True,
                 "rejected_row_count": 0,
             },
             ProgressPhase.CLAIM_BUILDING: {
-                "claim_count": 1,
+                "claim_count": row_count,
                 "claim_types": ["FIELD_VALUE"],
-                "aggregate": False,
-                "citation_target_count": 1,
-                "validated_rows": [row],
-                "approved_provenance": [(row["fact_id"], row["evidence_id"])],
+                "aggregate": row_count > 1,
+                "citation_target_count": row_count,
+                "validated_rows": self.rows,
+                "approved_provenance": [
+                    (item["fact_id"], item["evidence_id"]) for item in self.rows
+                ],
             },
             ProgressPhase.ANSWER_RENDERING: {
-                "citation_count": 1,
+                "citation_count": row_count,
                 "deterministic_renderer": True,
                 "final_answer_llm_calls": 0,
             },
             ProgressPhase.COMPLETED: {
                 "final_status": "ANSWERABLE",
-                "citation_count": 1,
+                "citation_count": row_count,
             },
         }
         if progress_callback:
@@ -709,6 +715,43 @@ class StarletteRouteTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(any(item["type"] == "clarification_options" for item in events))
         self.assertEqual(self.chat.questions, ["자료구조 이수구분"])
 
+    async def test_large_verified_list_keeps_all_citations_under_sse_limit(self):
+        rows = [_offering_row(index, page=17 + (index % 4)) for index in range(189)]
+        chat = _ChatStub(
+            _answerable_response(count=189, same_page=True),
+            rows=rows,
+        )
+        with mock.patch.dict(
+            "os.environ",
+            {"KG_CHAT_SHOW_QUERY_DETAILS": "true", "KG_CHAT_DEBUG": "false"},
+        ):
+            app = create_app(lambda: ChatState(chat))
+            async with app.router.lifespan_context(app):
+                async with httpx2.AsyncClient(
+                    transport=httpx2.ASGITransport(app=app),
+                    base_url="http://testserver",
+                ) as client:
+                    response = await client.post(
+                        "/api/ask", json={"question": "전체 목록 요청"}
+                    )
+        self.assertEqual(response.status_code, 200)
+        self.assertLess(len(response.content), 1024 * 1024)
+        events = _events(response.text)
+        result = next(item for item in events if item["type"] == "result")
+        self.assertEqual(len(result["response"]["citations"]), 189)
+        claims = next(
+            item
+            for item in events
+            if item.get("type") == "inspection_update"
+            and item.get("stage") == "CLAIM_BUILDING"
+        )
+        graph = claims["summary"]["traversal_graph"]
+        self.assertEqual(graph["kind"], "RESULT_TRAVERSAL")
+        self.assertEqual(
+            sum(edge["relationship"] == "SUPPORTED_BY" for edge in graph["edges"]),
+            189,
+        )
+
     async def test_clarification_choices_use_separate_versioned_envelope(self):
         chat = _ClarificationChatStub(
             ChatResponse.clarification_required("request-clarify", "어느 학과를 말씀하시나요?")
@@ -1013,6 +1056,13 @@ class StarletteRouteTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn("answer-again", markup)
         self.assertIn('id="composer-status"', markup)
         self.assertIn('id="jump-latest"', markup)
+        self.assertNotIn('id="examples"', markup)
+        self.assertNotIn("renderExamples", script)
+        server_text = (
+            Path(__file__).parents[1] / "src/evidence_chat/server.py"
+        ).read_text()
+        self.assertNotIn("EXAMPLE_QUESTIONS", server_text)
+        self.assertIn("remaining < 240", script)
         self.assertIn("finishConversationTurn", script)
         self.assertIn("renderAssistantDetails", script)
         self.assertIn("event.isComposing", script)
@@ -1027,6 +1077,9 @@ class StarletteRouteTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("graphStage", script)
         self.assertIn("이 답변에 사용된 VERIFIED 근거", script)
         self.assertIn("evidence-card", script)
+        self.assertIn('turnDisclosure(`근거 ${evidenceCount}개`', script)
+        self.assertNotIn("답변 문장별 연결 정보는 없다", script)
+        self.assertIn('"RESULT_TRAVERSAL"', script)
         self.assertNotIn("share_ms", script)
         self.assertNotIn("현재 Neo4j가", script)
         self.assertIn("graph-traversal-flow", style)
@@ -1041,6 +1094,10 @@ class StarletteRouteTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn("Cypher 및 지식그래프 탐색 정보 보기", markup)
         self.assertIn("resize: none", style)
         self.assertIn("overflow-y: hidden", style)
+        self.assertIn("width: min(1440px, 100%)", style)
+        self.assertIn("max-width: 75%", style)
+        self.assertIn("max-width: 62%", style)
+        self.assertIn("overflow: hidden", style)
         self.assertIn('const PROFILE_KEY = "evidence-chat-profile-v1"', script)
         self.assertIn("localStorage.getItem(PROFILE_KEY)", script)
         self.assertIn("localStorage.setItem(PROFILE_KEY", script)
@@ -1152,6 +1209,36 @@ class InspectionGraphProjectionTests(unittest.TestCase):
         self.assertEqual(graph["edges"], [])
         self.assertFalse(graph["ordered"])
 
+    def test_query_projection_rejects_unknown_or_wrong_direction_paths(self):
+        unknown = build_query_structure_projection(
+            ["CourseOffering", "Evidence"],
+            ["NOT_A_RELATION"],
+            opaque_key=b"query-test-key",
+            path_edges=[
+                {
+                    "order": 1,
+                    "start_label": "CourseOffering",
+                    "relationship_type": "NOT_A_RELATION",
+                    "end_label": "Evidence",
+                }
+            ],
+        )
+        reversed_path = build_query_structure_projection(
+            ["CourseOffering", "Evidence"],
+            ["SUPPORTED_BY"],
+            opaque_key=b"query-test-key",
+            path_edges=[
+                {
+                    "order": 1,
+                    "start_label": "Evidence",
+                    "relationship_type": "SUPPORTED_BY",
+                    "end_label": "CourseOffering",
+                }
+            ],
+        )
+        self.assertIsNone(unknown)
+        self.assertIsNone(reversed_path)
+
     def test_provenance_projection_requires_exact_verified_pairs(self):
         row = _offering_row()
         pair = (row["fact_id"], row["evidence_id"])
@@ -1206,6 +1293,7 @@ class InspectionGraphProjectionTests(unittest.TestCase):
             ],
         )
         self.assertIsNotNone(graph)
+        self.assertEqual(graph["kind"], "RESULT_TRAVERSAL")
         self.assertTrue(graph["ordered"])
         self.assertEqual(
             {edge["relationship"] for edge in graph["edges"]},
@@ -1242,6 +1330,40 @@ class InspectionGraphProjectionTests(unittest.TestCase):
             )
         )
 
+    def test_large_traversal_projection_retains_all_verified_rows_for_lazy_ui(self):
+        rows = []
+        pairs = []
+        for index in range(189):
+            row = _offering_row(index, page=17 + (index % 4))
+            row["area_name"] = f"영역 {(index % 4) + 1}"
+            rows.append(row)
+            pairs.append((row["fact_id"], row["evidence_id"]))
+        graph = build_traversal_projection(
+            [
+                {"order": 1, "start_label": "CurriculumVersion", "relationship_type": "HAS_OFFERING", "end_label": "CourseOffering"},
+                {"order": 2, "start_label": "CourseOffering", "relationship_type": "OF_COURSE", "end_label": "Course"},
+                {"order": 3, "start_label": "CourseOffering", "relationship_type": "IN_AREA", "end_label": "EducationArea"},
+                {"order": 4, "start_label": "CourseOffering", "relationship_type": "SUPPORTED_BY", "end_label": "Evidence"},
+            ],
+            {"academic_year": 2026},
+            rows,
+            pairs,
+            opaque_key=b"large-traversal-test-key",
+        )
+        self.assertIsNotNone(graph)
+        self.assertEqual(
+            len([node for node in graph["nodes"] if node["node_type"] == "CourseOffering"]),
+            189,
+        )
+        self.assertEqual(
+            {node.get("group_name") for node in graph["nodes"] if node["node_type"] == "CourseOffering"},
+            {"영역 1", "영역 2", "영역 3", "영역 4"},
+        )
+        self.assertEqual(
+            len([edge for edge in graph["edges"] if edge["relationship"] == "SUPPORTED_BY"]),
+            189,
+        )
+
     def test_profile_details_with_sensitive_markers_are_removed(self):
         collector = InspectionCollector(DETAIL_FULL)
         update = collector.record(
@@ -1269,6 +1391,20 @@ class InspectionGraphProjectionTests(unittest.TestCase):
         serialized = json.dumps(update, ensure_ascii=False)
         self.assertNotIn("synthetic-password-marker", serialized)
         self.assertNotIn("/home/", serialized)
+
+    def test_profile_counts_reject_boolean_and_negative_values(self):
+        steps = InspectionCollector._safe_traversal_steps(
+            [
+                {
+                    "order": 1,
+                    "operator": "NodeIndexSeek",
+                    "rows": True,
+                    "db_hits": -4,
+                }
+            ]
+        )
+        self.assertEqual(steps[0]["rows"], 0)
+        self.assertEqual(steps[0]["db_hits"], 0)
 
     def test_traversal_projection_renders_each_exact_fact_evidence_pair_once(self):
         rows = [_offering_row(), _offering_row(1)]

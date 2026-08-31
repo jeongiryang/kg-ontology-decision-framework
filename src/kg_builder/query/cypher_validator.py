@@ -7,6 +7,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from .query_plan import QueryPlan, SelectionMode, resolve_filter_bindings
+from .result_limits import ABSOLUTE_MAX_RESULT_ROWS, maximum_rows_for
 from .schema_catalog import SchemaCatalog
 
 
@@ -347,7 +348,7 @@ class RelationshipEdge:
 
 
 class CypherValidator:
-    def __init__(self, catalog: SchemaCatalog, *, max_rows: int = 100):
+    def __init__(self, catalog: SchemaCatalog, *, max_rows: int = ABSOLUTE_MAX_RESULT_ROWS):
         self.catalog = catalog
         self.max_rows = max_rows
 
@@ -493,8 +494,17 @@ class CypherValidator:
             sanitized[clause_by_name["LIMIT"].body_start : clause_by_name["LIMIT"].body_end],
             "CYPHER_LIMIT_REQUIRED",
         )
-        if not 1 <= limit <= self.max_rows:
-            self._fail("CYPHER_LIMIT_EXCEEDED", f"LIMIT must be between 1 and {self.max_rows}")
+        plan_max_rows = maximum_rows_for(plan, self.max_rows)
+        if not 1 <= limit <= plan_max_rows:
+            self._fail(
+                "CYPHER_LIMIT_EXCEEDED",
+                f"LIMIT must be between 1 and {plan_max_rows}",
+            )
+        if plan.selection_mode is SelectionMode.COURSE_LIST and limit != plan_max_rows:
+            self._fail(
+                "CYPHER_LIST_LIMIT_INCOMPLETE",
+                f"COURSE_LIST LIMIT must be {plan_max_rows} so an all-items request is not truncated",
+            )
 
         return ValidatedCypher._issue(
             text=lexed.canonical,
@@ -720,12 +730,12 @@ class CypherValidator:
             "source_text",
             "evidence_verification_status",
         }
-        if plan.selection_mode is SelectionMode.SINGLE_COURSE:
+        if plan.selection_mode in {SelectionMode.SINGLE_COURSE, SelectionMode.COURSE_LIST}:
             required.update({"course_identity", "name_ko"})
         # 탐색 화면이 뿌리 노드를 실제 이름으로 부르려면 그 이름을 돌려받아야 한다.
         # 계약을 넓히지 않기 위해 **이 별칭 하나만** 선택적으로 허용하고, 값이
         # 온톨로지가 선언한 속성인지까지 아래에서 다시 확인한다.
-        optional = {"scope_identity"} & set(sources)
+        optional = {"scope_identity", "area_name"} & set(sources)
         if set(sources) - optional != required:
             self._fail(
                 "CYPHER_RETURN_FIELD_MISMATCH",
@@ -767,7 +777,7 @@ class CypherValidator:
                 "verification_status",
             ),
         }
-        if plan.selection_mode is SelectionMode.SINGLE_COURSE:
+        if plan.selection_mode in {SelectionMode.SINGLE_COURSE, SelectionMode.COURSE_LIST}:
             course_variables = [
                 variable
                 for variable, labels in variable_labels.items()
@@ -776,7 +786,7 @@ class CypherValidator:
             if len(course_variables) != 1:
                 self._fail(
                     "CYPHER_COURSE_IDENTITY_REQUIRED",
-                    "SINGLE_COURSE must return one explicitly labeled Course identity",
+                    "course queries must return one explicitly labeled Course identity",
                 )
             expected["course_identity"] = (course_variables[0], "course_id")
             expected["name_ko"] = (course_variables[0], "name_ko")
@@ -787,6 +797,19 @@ class CypherValidator:
                 self._fail(
                     "CYPHER_SCOPE_IDENTITY_INVALID",
                     "scope_identity must return CurriculumVersion.version_name",
+                )
+        if "area_name" in sources:
+            variable, prop = sources["area_name"]
+            labels = variable_labels.get(variable, set())
+            if (
+                plan.selection_mode is not SelectionMode.COURSE_LIST
+                or not {"area_id", "area_ids"}.intersection(plan.filters)
+                or "EducationArea" not in labels
+                or prop != "name_ko"
+            ):
+                self._fail(
+                    "CYPHER_AREA_NAME_INVALID",
+                    "area_name must return EducationArea.name_ko for a scoped course list",
                 )
         for alias, source in expected.items():
             if sources[alias] != source:

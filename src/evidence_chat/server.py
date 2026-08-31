@@ -113,16 +113,6 @@ def _env_detail_level(name: str) -> str:
 
 _AUTOSTRING = re.compile(r"\$autostring_\d+|\$autoint_\d+")
 
-EXAMPLE_QUESTIONS = (
-    "2026학년도 교양 최소 이수학점은?",
-    "균형교양 이수요건은?",
-    "편입생도 교양을 이수해야 하나?",
-    "자료구조는 몇 학년 몇 학기에 개설되나?",
-    "컴퓨터공학과 전공필수 과목은?",
-    "자료구조의 이수구분은?",
-)
-
-
 class ChatService(Protocol):
     def ask(
         self,
@@ -438,10 +428,8 @@ class InspectionCollector:
                     if isinstance(relationship, str)
                     and _SAFE_TYPE_NAME.fullmatch(relationship)
                     else None,
-                    "rows": item.get("rows") if isinstance(item.get("rows"), int) else 0,
-                    "db_hits": item.get("db_hits")
-                    if isinstance(item.get("db_hits"), int)
-                    else 0,
+                    "rows": InspectionCollector._safe_count(item.get("rows")),
+                    "db_hits": InspectionCollector._safe_count(item.get("db_hits")),
                     "detail": detail,
                 }
             )
@@ -455,6 +443,10 @@ class InspectionCollector:
         """
 
         if not isinstance(value, (list, tuple)):
+            return []
+        try:
+            catalog = SchemaCatalog.from_generated()
+        except Exception:
             return []
         steps: list[dict[str, Any]] = []
         for item in list(value)[:MAX_PATH_EDGES]:
@@ -472,6 +464,15 @@ class InspectionCollector:
                     isinstance(name, str) and _SAFE_TYPE_NAME.fullmatch(name)
                     for name in (start, relationship, end)
                 )
+            ):
+                continue
+            definition = catalog.relationships.get(relationship)
+            if (
+                start not in catalog.nodes
+                or end not in catalog.nodes
+                or definition is None
+                or start not in definition.from_labels
+                or end not in definition.to_labels
             ):
                 continue
             steps.append(
@@ -928,7 +929,6 @@ async def health(request: Request) -> Response:
         "service_ready": state.ready,
         "error": state.error,
         "pdf_mounted": source.available,
-        "examples": list(EXAMPLE_QUESTIONS),
         "max_question_length": MAX_QUESTION_LENGTH,
         "client_timeout_seconds": state.client_timeout_seconds,
         "debug": state.debug,
@@ -1104,6 +1104,10 @@ async def ask(request: Request) -> Response:
                         )
                         personalized = agent_result.personalized
                         response = personalized.response
+                        loop.call_soon_threadsafe(
+                            queue.put_nowait,
+                            agent_result.request_fulfillment_update(),
+                        )
                         loop.call_soon_threadsafe(
                             queue.put_nowait, agent_result.conversation_update()
                         )

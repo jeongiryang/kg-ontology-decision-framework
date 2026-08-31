@@ -48,6 +48,20 @@ KG_AGENT_MODE=agentic
 예산이 끝나면 이미 승인된 근거만 사용한다. 독립 요구가 해결되지 않았으면 부분 사실을
 보여 줄 수 있어도 최종 outcome은 `INSUFFICIENT_EVIDENCE`로 유지한다.
 
+프로필 갱신과 답변 작업은 서로 다른 계약이다. 한 턴에서 학과·학년·이수과목을
+`USER_ASSERTION`으로 갱신했더라도 조회·계산·추천 같은 요청 항목이 남아 있으면 Agent는
+종료할 수 없다. 각 요청 항목은 `list_courses`, `lookup_course`, `lookup_requirement`,
+`calculate_remaining`, `check_eligibility`, `recommend_courses` 같은 일반 action과 검증된
+filter로 표현되고, 항목별로 `ANSWERED`, `NEEDS_USER_INFO`,
+`INSUFFICIENT_EVIDENCE`, `OUT_OF_SCOPE`를 기록한다. 전체 턴은 모든 항목 처리 여부에 따라
+`COMPLETE`, `PARTIAL`, `UNRESOLVED`가 된다.
+
+전체 목록의 `모든·전부·모두·다·빠짐없이·몽땅` 범위는 Verified Evidence가 직접 연결된
+고유 Course identity 수와 실제 반환 수를 대조한다. 동일 Course의 복수 offering을 과목명
+중복으로 세지 않는다. 답하지 못한 목록·계산 항목은 `pending_request`로 유지하며, 다음
+사용자의 재요청은 직전 사용자 발화와 이 구조를 함께 사용해 범위와 동작을 복원한다.
+이전 assistant 답변은 복원 근거나 Evidence로 사용하지 않는다.
+
 추가 조회가 성공해도 원질문의 의미 경계를 다시 검사한다. 예를 들어 과목 대체 인정의
 직접 근거가 없을 때 일반 졸업학점 규칙을 대신 답으로 채택하지 않는다. 후속 조회는 원래
 요구의 대체·인정 의미를 유지해야 하며, 그렇지 않으면 근거 부족 상태로 종료한다.
@@ -147,14 +161,15 @@ PDF modal을 닫으면 열었던 근거 버튼으로 focus가 돌아간다.
 ## 브라우저 저장 계약
 
 - 프로필: versioned `localStorage`
-- 채팅방·메시지: IndexedDB `conversations`, `messages`, schema version 2
+- 채팅방·메시지: IndexedDB `conversations`, `messages`, schema version 3
 - 현재 채팅 ID: `localStorage`의 opaque ID
 - 서버 DB 저장: 없음
 
-version 2 message row의 `presentation_snapshot version=1`은 해당 turn의 result, outcome,
-clarification, timeline, inspection update 원본 envelope, agent trace와 안전 오류만 저장한다.
-version 1 row는 읽을 수 있고, 다시 저장할 때 version 2로 올린다. 잘못된 row는 사용하지
-않는다. 프로필 초기화와 채팅 삭제는 별개다.
+version 3 message row의 `presentation_snapshot version=1`은 해당 turn의 result, outcome,
+clarification, timeline, inspection update 원본 envelope, agent trace,
+`request_fulfillment`와 안전 오류만 저장한다. conversation row에는 미완료
+`pending_request`가 들어간다. version 1·2 row는 읽을 수 있고, 다시 저장할 때 version 3으로
+올린다. 잘못된 row는 사용하지 않는다. 프로필 초기화와 채팅 삭제는 별개다.
 
 채팅방은 생성·최근 업데이트 순 선택·개별 삭제·전체 삭제를 지원한다. 첫 번째 의미 있는
 질문으로 제목을 만들고, 새 채팅은 이전 주제를 넘기지 않는다. 프로필만 채팅방 사이에서
@@ -172,6 +187,7 @@ conversation_id, turn_id
 현재 주제
 최근 승인 course code·Evidence ID
 미해결 clarification
+미완료 requested item
 ```
 
 sealed `ChatResponse` wire 필드는 정확히 다음 8개를 유지한다.
@@ -186,6 +202,7 @@ used_fact_ids, used_evidence_ids, clarification, error_code
 - 기존 `progress`, `inspection_update`, `clarification_options`, `profile_update`, `outcome`
 - `agent_trace version=1`: 실제 도구 이름·순서·상태·시간과 allowlist metadata
 - `conversation_update version=1`: conversation/turn ID, 표시 답변, bounded summary와 주제
+- `request_fulfillment version=1`: 항목별 처리 상태, 전체 충족도와 미완료 요청
 
 브라우저는 `inspection_update` 전체 envelope를 turn snapshot에 유지하므로 팀원 presentation
 확장이 추가 필드를 사용해도 별도 전역 결과 상태를 만들 필요가 없다. `agent_trace`는 실제
@@ -199,7 +216,8 @@ used_fact_ids, used_evidence_ids, clarification, error_code
 - 실제 브라우저: 연속 질문, 새로고침 복원, 채팅 전환·삭제, PDF, 390px, 키보드·IME
 
 결과는 [PR #10 평가](evaluations/question-set-v1-agentic-final.md)와
-[일반화·다중 턴 평가](evaluations/agentic-graphrag-v1.md)에 기록한다. 상태 일치만으로 의미
+[일반화·다중 턴 평가](evaluations/agentic-graphrag-v1.md),
+[자연어 요청 충족도 평가](evaluations/conversational-fulfillment-v1.md)에 기록한다. 상태 일치만으로 의미
 정확성을 대신하지 않으며, 모든 `ANSWERED`는 Citation을 가져야 한다.
 
 ## 현재 제한

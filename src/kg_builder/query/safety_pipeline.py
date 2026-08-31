@@ -18,6 +18,7 @@ from .schema_catalog import (
     SchemaCatalog,
 )
 from .progress import ProgressCallback, ProgressPhase, ProgressState, emit_progress
+from .result_limits import ABSOLUTE_MAX_RESULT_ROWS
 
 
 class Explainer(Protocol):
@@ -56,7 +57,7 @@ class SafetyPipeline:
         spec_path: Path = DEFAULT_SPEC_PATH,
         generated_schema_path: Path = DEFAULT_QUERY_SCHEMA_PATH,
         trace_dir: Path = DEFAULT_TRACE_DIR,
-        max_rows: int = 100,
+        max_rows: int = ABSOLUTE_MAX_RESULT_ROWS,
         store_raw_question: bool | None = None,
         trace_retention_days: int | None = None,
     ):
