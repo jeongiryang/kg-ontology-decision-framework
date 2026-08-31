@@ -73,8 +73,12 @@ PR #37의 연속 채팅, IndexedDB v3, 189과목 긴 목록, 1,440px 레이아�
   modal을 확인했다. 189 Evidence card는 disclosure 전 0개, 연 뒤 189개였고,
   572-node result graph도 명시적인 `전체 노드 표시` 전에는 만들지 않았다.
 
-GitHub Actions와 병합 후 `main` 핵심 재검증 결과는 push 이후 추가한다. 실행하지 않은
-검증은 성공으로 기록하지 않는다.
+- 통합 Head `5b736218`의 GitHub Actions `unit-tests`: PASS
+- 이슈 #39의 165개 총합 표기와 SSE payload 상한 회귀를 처리하고 결과를 남긴 뒤
+  이슈를 닫았다.
+
+병합 후 `main` 핵심 재검증 결과는 최종 보고에 기록한다. 실행하지 않은 검증은 성공으로
+기록하지 않는다.
 
 ## 보호 대상
 
