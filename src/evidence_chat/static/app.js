@@ -297,22 +297,19 @@ function renderAssistantDetails(block, message) {
   }
   renderTurnChoices(block, message.source_question || "", response, snapshot.clarification);
 
+  if (presentation && Array.isArray(presentation.evidence_pages) && presentation.evidence_pages.length) {
+    renderEvidenceInto(block, presentation);
+  }
+
   const tools = document.createElement("div");
   tools.className = "message-tools";
-  if (presentation && Array.isArray(presentation.evidence_pages) && presentation.evidence_pages.length) {
-    const evidenceCount = presentation.evidence_pages.reduce(
-      (total, page) => total + (Array.isArray(page.evidence) ? page.evidence.length : 0), 0
-    );
-    tools.append(turnDisclosure(`근거 ${evidenceCount}개`, (body) =>
-      renderEvidenceInto(body, presentation)));
-  }
   if (Array.isArray(snapshot.timeline_events) && snapshot.timeline_events.length) {
     tools.append(turnDisclosure("처리 과정", (body) =>
       renderTimelineInto(body, snapshot.timeline_events, snapshot.inspection_updates || [])));
   }
   if (queryDetailsEnabled && Array.isArray(snapshot.inspection_updates) && snapshot.inspection_updates.length) {
     const state = explorationState(snapshot.inspection_updates);
-    if (state.claims && state.claims.traversal_graph) {
+    if (graphStage(state)) {
       tools.append(turnDisclosure("그래프 탐색", (body) =>
         renderTurnGraph(body, state)));
     }
@@ -857,7 +854,11 @@ function mountLiveAssistant() {
   const timeline = document.createElement("ol");
   timeline.className = "steps live-turn-timeline";
   timeline.setAttribute("aria-label", "현재 응답 처리 단계");
-  block.append(role, content, timeline);
+  const graph = document.createElement("section");
+  graph.className = "live-graph-region";
+  graph.hidden = true;
+  graph.setAttribute("aria-label", "현재 질의의 그래프 탐색 상태");
+  block.append(role, content, timeline, graph);
   el.conversationTranscript.append(block);
   liveAssistantNode = block;
   scrollConversationToLatest(true);
@@ -869,6 +870,8 @@ function updateLiveAssistant(message = null) {
   if (content && message) content.textContent = message;
   const timeline = liveAssistantNode.querySelector(".live-turn-timeline");
   if (timeline) renderTimelineInto(timeline, timelineEvents, [...inspectionUpdates.values()]);
+  const graph = liveAssistantNode.querySelector(".live-graph-region");
+  if (graph) renderLiveGraph(graph, explorationState([...inspectionUpdates.values()]));
   scrollConversationToLatest(false);
 }
 
@@ -948,6 +951,16 @@ async function ask(question, displayQuestion = question) {
         } else if (payload.type === "inspection_update") {
           renderInspectionUpdate(payload);
           updateLiveAssistant();
+          // SSE frames can arrive in one browser task.  Keep the already-confirmed
+          // PROFILE replay on screen until it has painted before replacing it with
+          // the later CLAIM_BUILDING projection; this is display playback only,
+          // never a claim about real-time Neo4j node visits.
+          if (payload.stage === "GRAPH_EXECUTION" && payload.status === "COMPLETED") {
+            const replay = liveAssistantNode
+              ?.querySelector(".live-graph-region")
+              ?.profileReplay;
+            if (replay && typeof replay.then === "function") await replay;
+          }
         } else if (payload.type === "result") {
           result = payload;
           lastResult = payload;
@@ -1357,8 +1370,7 @@ function renderStageDetail(container, event, allowExplorationLinks, updates = in
         const title = document.createElement("strong");
         title.textContent = step.explanation_ko || step.operator || "Neo4j 실행 단계";
         const metrics = document.createElement("span");
-        const share = Number.isFinite(step.share_ms) ? ` · 배분 ${step.share_ms}ms` : "";
-        metrics.textContent = `행 ${step.rows || 0} · DB 접근 ${step.db_hits || 0}${share}`;
+        metrics.textContent = `행 ${step.rows || 0} · DB 접근 ${step.db_hits || 0}`;
         item.append(title, metrics);
         list.append(item);
       });
@@ -1467,21 +1479,81 @@ function addExplorationLink(container, label, tab) {
 function explorationState(updates = inspectionUpdates) {
   const schema = latestInspection("SCHEMA_SELECTION", updates);
   const explain = latestInspection("NEO4J_EXPLAIN", updates);
+  const execution = latestInspection("GRAPH_EXECUTION", updates);
   const claims = latestInspection("CLAIM_BUILDING", updates);
   return {
     schema: schema && schema.status === "COMPLETED" ? schema.summary : null,
     explain: explain && explain.status === "COMPLETED" ? explain.summary : null,
+    execution: execution && execution.status === "COMPLETED" ? execution.summary : null,
     claims: claims && claims.status === "COMPLETED" ? claims.summary : null,
   };
 }
 
+function graphStage(state) {
+  if (state.claims && state.claims.traversal_graph) {
+    return {
+      kind: "final",
+      graph: state.claims.traversal_graph,
+      title: "VERIFIED 사실과 원문 근거",
+    };
+  }
+  if (state.explain && state.explain.query_graph) {
+    const profileSteps = Array.isArray(state.execution?.traversal_steps)
+      ? state.execution.traversal_steps
+      : [];
+    return {
+      kind: profileSteps.length ? "profile" : "approved",
+      graph: state.explain.query_graph,
+      title: profileSteps.length ? "승인 논리 경로 · PROFILE 대응" : "승인된 논리 질의 경로",
+      profileSteps,
+    };
+  }
+  return null;
+}
+
+function renderGraphState(container, state, options = {}) {
+  const stage = graphStage(state);
+  if (!stage) return false;
+  const note = document.createElement("p");
+  note.className = "projection-note";
+  if (stage.kind === "approved") {
+    note.textContent =
+      "NEO4J EXPLAIN이 승인한 논리 질의 경로입니다. 아직 방문 상태를 표시하지 않습니다.";
+  } else if (stage.kind === "profile") {
+    note.textContent =
+      "GRAPH EXECUTION 완료 후 받은 PROFILE 실측 순서를 재생합니다. 관계 타입이 하나로 대응하는 경로만 강조하며, 다른 실행 연산자는 아래 목록에만 표시합니다.";
+  } else {
+    note.textContent =
+      "승인 경로와 VERIFIED Fact·Evidence로 만든 최종 projection입니다. 표시 순서는 실제 결과와 승인된 그래프 순서를 따르며 Neo4j의 물리적 노드 방문 기록은 아닙니다.";
+  }
+  container.append(note);
+  renderGraphPanel(container, stage.title, stage.graph, {
+    autoplay: Boolean(options.autoplay && stage.kind !== "approved"),
+    traversalMode: stage.kind === "profile" ? "profile" : stage.kind === "final" ? "projection" : "none",
+    profileSteps: stage.profileSteps || [],
+    live: Boolean(options.live),
+  });
+  return true;
+}
+
+function renderLiveGraph(container, state) {
+  if (graphResizeObserver) {
+    container.querySelectorAll(".graph-viewport").forEach((viewport) => {
+      graphResizeObserver.unobserve(viewport);
+    });
+  }
+  container.replaceChildren();
+  container.hidden = !queryDetailsEnabled || !renderGraphState(container, state, {
+    autoplay: true,
+    live: true,
+  });
+  container.profileReplay = container.hidden
+    ? null
+    : container.querySelector(".graph-panel")?.traversalPlayback || null;
+}
+
 function renderTurnGraph(container, state) {
-  const heading = document.createElement("p");
-  heading.className = "projection-note";
-  heading.textContent =
-    "이 답변에서 실제 승인된 Cypher와 검증 결과로 확인한 traversal만 표시합니다.";
-  container.append(heading);
-  renderGraphTab(container, state, true);
+  renderGraphState(container, state, { autoplay: true });
 }
 
 function renderExplorationPanel(container, updates = inspectionUpdates, result = lastResult) {
@@ -1503,15 +1575,10 @@ function renderExplorationPanel(container, updates = inspectionUpdates, result =
       state.schema.labels.length
     ),
     cypher: Boolean(state.explain && typeof state.explain.approved_cypher === "string"),
-    graph: Boolean(
-      state.explain &&
-      state.explain.query_graph &&
-      state.claims &&
-      state.claims.provenance_graph
-    ),
+    graph: Boolean(graphStage(state)),
   };
   const availableTabs = Object.keys(availability).filter((key) => availability[key]);
-  let selectedTab = container.dataset.activeTab || "schema";
+  let selectedTab = container.dataset.activeTab || (availability.graph ? "graph" : "schema");
   if (!availability[selectedTab] && availableTabs.length) {
     selectedTab = availableTabs[0];
     container.dataset.activeTab = selectedTab;
@@ -1639,32 +1706,7 @@ function renderCypherTab(container, summary) {
 }
 
 function renderGraphTab(container, state, autoplay = false) {
-  const note = document.createElement("p");
-  note.className = "projection-note";
-  note.textContent =
-    "현재 질문에 대해 실제 승인된 구조와 VERIFIED provenance만 표시한 projection입니다.";
-  container.append(note);
-  if (state.claims && state.claims.traversal_graph) {
-    renderGraphPanel(
-      container,
-      "실제 질의 traversal과 VERIFIED 근거",
-      state.claims.traversal_graph,
-      { autoplay }
-    );
-  } else if (state.explain && state.explain.query_graph) {
-    renderGraphPanel(container, "승인된 질의 구조", state.explain.query_graph);
-  }
-  if (
-    !state.claims?.traversal_graph &&
-    state.claims &&
-    state.claims.provenance_graph
-  ) {
-    renderGraphPanel(
-      container,
-      "조회 결과와 VERIFIED Evidence",
-      state.claims.provenance_graph
-    );
-  }
+  renderGraphState(container, state, { autoplay });
 }
 
 function addInspectionItem(container, label, value, options = {}) {
@@ -1739,6 +1781,18 @@ function graphRelationshipCategory(relationship) {
   return "other";
 }
 
+function graphNodeTypeLabel(node) {
+  return typeof node?.node_type_ko === "string" && node.node_type_ko.trim()
+    ? node.node_type_ko
+    : "확인된 그래프 항목";
+}
+
+function graphRelationshipLabel(edge) {
+  return typeof edge?.relationship_ko === "string" && edge.relationship_ko.trim()
+    ? edge.relationship_ko
+    : "확인된 관계";
+}
+
 function graphProjectionIsSafe(graph) {
   if (
     !graph ||
@@ -1791,13 +1845,13 @@ function renderGraphFallback(container, graph) {
     const target = nodes.get(edge.target);
     if (!source || !target) return;
     const item = document.createElement("li");
-    item.textContent = `${source.display_name} ──${edge.relationship_ko || edge.relationship}──> ${target.display_name}`;
+    item.textContent = `${source.display_name} ──${graphRelationshipLabel(edge)}──> ${target.display_name}`;
     list.append(item);
   });
   if (!list.childElementCount) {
     (graph.nodes || []).forEach((node) => {
       const item = document.createElement("li");
-      item.textContent = `${node.display_name} (${node.node_type_ko || node.node_type})`;
+      item.textContent = `${node.display_name} (${graphNodeTypeLabel(node)})`;
       list.append(item);
     });
   }
@@ -1815,41 +1869,162 @@ function graphLabelLines(value) {
   ];
 }
 
-function graphEdgeGeometry(source, target, nodeWidth, nodeHeight, mobile, offset) {
-  if (mobile || source.x === target.x) {
-    const x1 = source.x + nodeWidth / 2;
-    const y1 = source.y + nodeHeight;
-    const x2 = target.x + nodeWidth / 2;
-    const y2 = target.y;
+function graphEdgeGeometry(source, target, nodeWidth, nodeHeight, offset = 0) {
+  const x1 = source.x + nodeWidth / 2;
+  const y1 = source.y + nodeHeight;
+  const x2 = target.x + nodeWidth / 2;
+  const y2 = target.y;
+  if (y2 > y1) {
     const middle = (y1 + y2) / 2;
     return {
       path: `M ${x1} ${y1} C ${x1} ${middle}, ${x2} ${middle}, ${x2} ${y2}`,
-      labelX: x1 + 76 + offset,
-      labelY: middle - 7,
+      labelX: (x1 + x2) / 2 + offset,
+      labelY: middle - 8,
     };
   }
-  const x1 = source.x + nodeWidth;
-  const y1 = source.y + nodeHeight / 2;
-  const x2 = target.x;
-  const y2 = target.y + nodeHeight / 2;
-  const middle = (x1 + x2) / 2;
+  const bend = Math.max(x1, x2) + nodeWidth * 0.7 + Math.abs(offset);
   return {
-    path: `M ${x1} ${y1} C ${middle} ${y1}, ${middle} ${y2}, ${x2} ${y2}`,
-    labelX: middle,
-    labelY: (y1 + y2) / 2 - 12 + offset,
+    path: `M ${source.x + nodeWidth} ${source.y + nodeHeight / 2} C ${bend} ${source.y + nodeHeight / 2}, ${bend} ${target.y + nodeHeight / 2}, ${target.x} ${target.y + nodeHeight / 2}`,
+    labelX: bend + 10,
+    labelY: (source.y + target.y + nodeHeight) / 2,
   };
+}
+
+function graphNodeSort(left, right) {
+  const leftOrder = Number.isInteger(left.visit_order) ? left.visit_order : Number.MAX_SAFE_INTEGER;
+  const rightOrder = Number.isInteger(right.visit_order) ? right.visit_order : Number.MAX_SAFE_INTEGER;
+  return leftOrder - rightOrder || left.display_name.localeCompare(right.display_name, "ko") ||
+    left.id.localeCompare(right.id);
+}
+
+function deterministicLayeredLayout(graph, mobile) {
+  const nodes = [...graph.nodes].sort(graphNodeSort);
+  const nodeById = new Map(nodes.map((node) => [node.id, node]));
+  const outgoing = new Map(nodes.map((node) => [node.id, []]));
+  const incomingCount = new Map(nodes.map((node) => [node.id, 0]));
+  const edgeSort = (left, right) => {
+    const leftOrder = Number.isInteger(left.traversal_order) ? left.traversal_order : Number.MAX_SAFE_INTEGER;
+    const rightOrder = Number.isInteger(right.traversal_order) ? right.traversal_order : Number.MAX_SAFE_INTEGER;
+    return leftOrder - rightOrder || left.id.localeCompare(right.id);
+  };
+  graph.edges.slice().sort(edgeSort).forEach((edge) => {
+    if (!outgoing.has(edge.source) || !incomingCount.has(edge.target)) return;
+    outgoing.get(edge.source).push(edge);
+    incomingCount.set(edge.target, incomingCount.get(edge.target) + 1);
+  });
+  outgoing.forEach((edges) => edges.sort(edgeSort));
+
+  const depth = new Map();
+  const queue = nodes.filter((node) => incomingCount.get(node.id) === 0);
+  queue.forEach((node) => depth.set(node.id, 0));
+  const processed = new Set();
+  while (queue.length) {
+    queue.sort(graphNodeSort);
+    const node = queue.shift();
+    if (!node || processed.has(node.id)) continue;
+    processed.add(node.id);
+    (outgoing.get(node.id) || []).forEach((edge) => {
+      depth.set(edge.target, Math.max(depth.get(edge.target) || 0, (depth.get(node.id) || 0) + 1));
+      incomingCount.set(edge.target, incomingCount.get(edge.target) - 1);
+      if (incomingCount.get(edge.target) === 0) queue.push(nodeById.get(edge.target));
+    });
+  }
+  // Public projections are DAGs.  Keep this deterministic fallback for a malformed
+  // projection without inventing a repair edge or node.
+  nodes.filter((node) => !processed.has(node.id)).forEach((node) => {
+    const parents = graph.edges.filter((edge) => edge.target === node.id)
+      .map((edge) => depth.get(edge.source))
+      .filter(Number.isInteger);
+    depth.set(node.id, parents.length ? Math.max(...parents) + 1 : 0);
+  });
+
+  const layers = new Map();
+  nodes.forEach((node) => {
+    const level = depth.get(node.id) || 0;
+    if (!layers.has(level)) layers.set(level, []);
+    layers.get(level).push(node);
+  });
+  layers.forEach((layer) => layer.sort(graphNodeSort));
+  const nodeWidth = mobile ? 148 : 172;
+  const nodeHeight = mobile ? 70 : 76;
+  const xGap = mobile ? 20 : 42;
+  const yGap = mobile ? 120 : 132;
+  const widestLayer = Math.max(1, ...[...layers.values()].map((layer) => layer.length));
+  const width = Math.max(348, widestLayer * nodeWidth + (widestLayer - 1) * xGap + 88);
+  const positions = new Map();
+  [...layers.keys()].sort((left, right) => left - right).forEach((level) => {
+    const layer = layers.get(level);
+    const layerWidth = layer.length * nodeWidth + (layer.length - 1) * xGap;
+    const startX = (width - layerWidth) / 2;
+    layer.forEach((node, index) => {
+      positions.set(node.id, { x: startX + index * (nodeWidth + xGap), y: 40 + level * yGap });
+    });
+  });
+  return {
+    positions,
+    nodeWidth,
+    nodeHeight,
+    width,
+    height: Math.max(180, 40 + layers.size * yGap - (yGap - nodeHeight) + 40),
+  };
+}
+
+function projectionTraversalSequence(graph) {
+  return graph.edges
+    .filter((edge) => Number.isInteger(edge.traversal_order))
+    .slice()
+    .sort((left, right) => left.traversal_order - right.traversal_order || left.id.localeCompare(right.id))
+    .map((edge) => ({
+      order: edge.traversal_order,
+      edgeId: edge.id,
+      source: edge.source,
+      target: edge.target,
+    }));
+}
+
+function profileTraversalSequence(graph, profileSteps) {
+  const edgesByRelationship = new Map();
+  graph.edges.forEach((edge) => {
+    if (!edgesByRelationship.has(edge.relationship)) edgesByRelationship.set(edge.relationship, []);
+    edgesByRelationship.get(edge.relationship).push(edge);
+  });
+  const stepsByRelationship = new Map();
+  (Array.isArray(profileSteps) ? profileSteps : []).forEach((step) => {
+    if (!step || !Number.isInteger(step.order) || typeof step.relationship_type !== "string") return;
+    if (!stepsByRelationship.has(step.relationship_type)) stepsByRelationship.set(step.relationship_type, []);
+    stepsByRelationship.get(step.relationship_type).push(step);
+  });
+  const sequence = [];
+  stepsByRelationship.forEach((steps, relationship) => {
+    const edges = edgesByRelationship.get(relationship) || [];
+    // A relationship type is sufficient evidence only when it identifies exactly
+    // one public edge and one measured PROFILE operator.  Repeated relationships
+    // stay in the execution list rather than being guessed onto a graph branch.
+    if (edges.length !== 1 || steps.length !== 1) return;
+    sequence.push({
+      order: steps[0].order,
+      edgeId: edges[0].id,
+      source: edges[0].source,
+      target: edges[0].target,
+    });
+  });
+  return sequence.sort((left, right) => left.order - right.order || left.edgeId.localeCompare(right.edgeId));
 }
 
 function buildTraversalList(graph) {
   const nodes = new Map((graph.nodes || []).map((node) => [node.id, node]));
-  const edges = (graph.edges || [])
+  const edges = graph.edges
     .filter((edge) => Number.isInteger(edge.traversal_order))
-    .sort((left, right) => left.traversal_order - right.traversal_order);
+    .slice()
+    .sort((left, right) => left.traversal_order - right.traversal_order || left.id.localeCompare(right.id));
   if (!edges.length) return null;
   const section = document.createElement("section");
   section.className = "traversal-summary";
   const heading = document.createElement("h5");
-  heading.textContent = "실제 traversal 순서";
+  heading.textContent = "그래프 표시 순서";
+  const description = document.createElement("p");
+  description.className = "traversal-status";
+  description.textContent = "승인된 경로와 VERIFIED 결과를 표시하기 위한 순서입니다.";
   const list = document.createElement("ol");
   list.className = "traversal-list";
   edges.forEach((edge) => {
@@ -1857,30 +2032,91 @@ function buildTraversalList(graph) {
     const target = nodes.get(edge.target);
     if (!source || !target) return;
     const item = document.createElement("li");
-    item.dataset.order = String(edge.traversal_order);
+    item.dataset.edgeId = edge.id;
     const route = document.createElement("strong");
-    route.textContent =
-      `${source.display_name} → ${edge.relationship_ko || edge.relationship} → ${target.display_name}`;
+    route.textContent = `${source.display_name} → ${graphRelationshipLabel(edge)} → ${target.display_name}`;
     const metrics = document.createElement("span");
     const values = [];
     if (Number.isInteger(edge.rows)) values.push(`행 ${edge.rows}`);
     if (Number.isInteger(edge.db_hits)) values.push(`DB 접근 ${edge.db_hits}`);
-    if (Number.isFinite(edge.share_ms)) values.push(`배분 ${edge.share_ms}ms`);
     metrics.textContent = values.join(" · ");
     item.append(route, metrics);
     list.append(item);
   });
-  section.append(heading, list);
+  section.append(heading, description, list);
   return section;
 }
 
+function buildProfileStepList(graph, profileSteps, sequence) {
+  if (!Array.isArray(profileSteps) || !profileSteps.length) return null;
+  const mappedOrders = new Set(sequence.map((item) => item.order));
+  const section = document.createElement("section");
+  section.className = "traversal-summary profile-steps";
+  const heading = document.createElement("h5");
+  heading.textContent = "PROFILE 실측 실행 단계";
+  const description = document.createElement("p");
+  description.className = "traversal-status";
+  description.textContent = "실행 완료 후 PROFILE 실측 순서를 재생합니다. 그래프와 안전하게 대응하지 않는 연산자도 여기에는 그대로 남깁니다.";
+  const list = document.createElement("ol");
+  list.className = "traversal-list";
+  profileSteps.slice().sort((left, right) => left.order - right.order).forEach((step) => {
+    const item = document.createElement("li");
+    item.dataset.profileOrder = String(step.order);
+    const label = document.createElement("strong");
+    label.textContent = step.explanation_ko || "PROFILE 실행 단계";
+    const metrics = document.createElement("span");
+    const values = [];
+    if (Number.isInteger(step.rows)) values.push(`행 ${step.rows}`);
+    if (Number.isInteger(step.db_hits)) values.push(`DB 접근 ${step.db_hits}`);
+    if (mappedOrders.has(step.order)) values.push("그래프 경로 강조");
+    else if (step.relationship_type) values.push("그래프 노드에 연결하지 않음");
+    metrics.textContent = values.join(" · ");
+    item.append(label, metrics);
+    list.append(item);
+  });
+  section.append(heading, description, list);
+  return section;
+}
+
+function setGraphTraversalState(svg, sequence, completed, activeIndex) {
+  const completedEdges = new Set(sequence.slice(0, completed).map((item) => item.edgeId));
+  const active = activeIndex >= 0 ? sequence[activeIndex] : null;
+  const visitedNodes = new Set();
+  sequence.slice(0, completed).forEach((item) => {
+    visitedNodes.add(item.source);
+    visitedNodes.add(item.target);
+  });
+  if (active) visitedNodes.add(active.source);
+  svg.querySelectorAll(".graph-edge-group[data-edge-id]").forEach((edge) => {
+    edge.dataset.state = active?.edgeId === edge.dataset.edgeId
+      ? "active"
+      : completedEdges.has(edge.dataset.edgeId) ? "visited" : "unvisited";
+  });
+  svg.querySelectorAll(".graph-node[data-node-id]").forEach((node) => {
+    node.dataset.state = active?.target === node.dataset.nodeId
+      ? "active"
+      : visitedNodes.has(node.dataset.nodeId) ? "visited" : "unvisited";
+  });
+  const panel = svg.closest(".graph-panel");
+  panel?.querySelectorAll(".traversal-list li[data-edge-id]").forEach((item) => {
+    item.dataset.state = active?.edgeId === item.dataset.edgeId
+      ? "active"
+      : completedEdges.has(item.dataset.edgeId) ? "visited" : "unvisited";
+  });
+  panel?.querySelectorAll(".traversal-list li[data-profile-order]").forEach((item) => {
+    const value = Number(item.dataset.profileOrder);
+    item.dataset.state = active?.order === value
+      ? "active"
+      : sequence.slice(0, completed).some((entry) => entry.order === value)
+        ? "visited" : "unvisited";
+  });
+}
+
 function addTraversalControls(controls, svg, graph, options = {}) {
-  const orders = [...new Set(
-    (graph.edges || [])
-      .map((edge) => edge.traversal_order)
-      .filter((value) => Number.isInteger(value))
-  )].sort((left, right) => left - right);
-  if (!orders.length) return;
+  const sequence = options.traversalMode === "profile"
+    ? profileTraversalSequence(graph, options.profileSteps)
+    : options.traversalMode === "projection" ? projectionTraversalSequence(graph) : [];
+  if (!sequence.length) return sequence;
   const reduced = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
   const status = span("traversal-status", "");
   status.setAttribute("role", "status");
@@ -1888,51 +2124,54 @@ function addTraversalControls(controls, svg, graph, options = {}) {
   const replay = document.createElement("button");
   replay.type = "button";
   replay.className = "inspection-action";
-  replay.textContent = "탐색 순서 재생";
+  replay.textContent = options.traversalMode === "profile" ? "PROFILE 순서 재생" : "그래프 순서 재생";
 
   const clearTimers = () => {
     (svg.traversalTimers || []).forEach((timer) => window.clearTimeout(timer));
     svg.traversalTimers = [];
   };
-  const showThrough = (order) => {
-    svg.querySelectorAll(".graph-edge-group[data-order]").forEach((edge) => {
-      const value = Number(edge.dataset.order);
-      edge.classList.toggle("is-traversed", value <= order);
-      edge.classList.toggle("is-active", value === order);
-    });
-    svg.querySelectorAll(".graph-node[data-order]").forEach((node) => {
-      node.classList.toggle("is-traversed", Number(node.dataset.order) <= order + 1);
-    });
-    const panel = svg.closest(".graph-panel");
-    panel?.querySelectorAll(".traversal-list li[data-order]").forEach((item) => {
-      const value = Number(item.dataset.order);
-      item.classList.toggle("is-traversed", value <= order);
-      item.classList.toggle("is-active", value === order);
-    });
-  };
+  const finish = () => setGraphTraversalState(svg, sequence, sequence.length, -1);
   const play = () => {
+    let finishPlayback;
+    const playback = new Promise((resolve) => { finishPlayback = resolve; });
+    svg.traversalPlayback = playback;
     clearTimers();
     svg.classList.add("shows-traversal");
     if (reduced) {
-      showThrough(orders.at(-1));
-      status.textContent = "동작 줄이기 설정에 따라 전체 탐색 순서를 표시했습니다.";
-      return;
+      finish();
+      status.textContent = "동작 줄이기 설정에 따라 전체 순서를 표시했습니다.";
+      finishPlayback();
+      return playback;
     }
-    showThrough(0);
-    status.textContent = "승인된 traversal 순서를 재생합니다.";
+    setGraphTraversalState(svg, sequence, 0, 0);
+    status.textContent = options.traversalMode === "profile"
+      ? "실행 완료 후 PROFILE 실측 순서를 재생합니다."
+      : "승인된 그래프 표시 순서를 재생합니다.";
     replay.disabled = true;
-    orders.forEach((order, index) => {
+    sequence.forEach((entry, index) => {
       const timer = window.setTimeout(() => {
-        showThrough(order);
-        status.textContent = `${order}번째 실제 탐색 단계를 표시했습니다.`;
-        if (index === orders.length - 1) replay.disabled = false;
-      }, 420 * (index + 1));
+        const nextActive = index + 1 < sequence.length ? index + 1 : -1;
+        setGraphTraversalState(svg, sequence, index + 1, nextActive);
+        status.textContent = index + 1 < sequence.length
+          ? `${entry.order}번째 순서를 표시했습니다.`
+          : "전체 순서를 표시했습니다.";
+        if (index === sequence.length - 1) {
+          replay.disabled = false;
+          finishPlayback();
+        }
+      }, 480 * (index + 1));
       svg.traversalTimers.push(timer);
     });
+    return playback;
   };
   replay.addEventListener("click", play);
   controls.append(replay, status);
-  if (options.autoplay) window.requestAnimationFrame(play);
+  if (options.autoplay) {
+    svg.traversalPlayback = new Promise((resolve) => {
+      window.requestAnimationFrame(() => resolve(play()));
+    });
+  }
+  return sequence;
 }
 
 function renderGraphPanel(container, title, graph, options = {}) {
@@ -1958,42 +2197,12 @@ function renderGraphPanel(container, title, graph, options = {}) {
     const canvas = document.createElement("div");
     canvas.className = "graph-canvas";
     const svg = svgNode("svg", { role: "img", "aria-label": title });
+    if (options.traversalMode === "none") svg.classList.add("is-approved-path");
     const mobile = window.matchMedia("(max-width: 640px)").matches;
-    const positions = new Map();
-    const columns = new Map();
-    graph.nodes.forEach((node) => {
-      const column = mobile ? 0 : graphColumn(node);
-      if (!columns.has(column)) columns.set(column, []);
-      columns.get(column).push(node);
-    });
-    [...columns.values()].forEach((nodes) =>
-      nodes.sort((left, right) =>
-        `${left.node_type}:${left.display_name}`.localeCompare(
-          `${right.node_type}:${right.display_name}`,
-          "ko"
-        )
-      )
-    );
-    const orderedColumns = [...columns.keys()].sort((left, right) => left - right);
-    const columnIndex = new Map(
-      orderedColumns.map((column, index) => [column, index])
-    );
-    const nodeWidth = mobile ? 244 : 218;
-    const nodeHeight = 86;
-    const xGap = mobile ? 0 : 290;
-    const yGap = mobile ? 132 : 118;
-    let maxRows = 1;
-    [...columns.entries()].forEach(([column, nodes]) => {
-      maxRows = Math.max(maxRows, nodes.length);
-      nodes.forEach((node, index) => {
-        positions.set(node.id, {
-          x: 52 + columnIndex.get(column) * xGap,
-          y: 52 + index * yGap,
-        });
-      });
-    });
-    const width = mobile ? 348 : Math.max(348, orderedColumns.length * xGap + 44);
-    const height = Math.max(210, maxRows * yGap + 56);
+    // The layout derives depth solely from actual projection edges.  It uses
+    // traversal/visit order only as a deterministic sibling tie-breaker.
+    const layout = deterministicLayeredLayout(graph, mobile);
+    const { positions, nodeWidth, nodeHeight, width, height } = layout;
     svg.setAttribute("viewBox", `0 0 ${width} ${height}`);
     svg.setAttribute("preserveAspectRatio", "xMidYMin meet");
     svg.style.aspectRatio = `${width} / ${height}`;
@@ -2024,19 +2233,20 @@ function renderGraphPanel(container, title, graph, options = {}) {
         target,
         nodeWidth,
         nodeHeight,
-        mobile,
         ((index % 3) - 1) * 14
       );
       const edgeGroup = svgNode("g", {
         class: "graph-edge-group",
         tabindex: Number.isInteger(edge.traversal_order) ? 0 : -1,
         "data-kind": graphRelationshipCategory(edge.relationship),
+        "data-edge-id": edge.id,
+        "data-state": "unvisited",
       });
       if (Number.isInteger(edge.traversal_order)) {
         edgeGroup.dataset.order = String(edge.traversal_order);
         edgeGroup.setAttribute(
           "aria-label",
-          `${edge.traversal_order}번째, ${edge.relationship_ko || edge.relationship}`
+          `${edge.traversal_order}번째, ${graphRelationshipLabel(edge)}`
         );
       }
       const path = svgNode("path", {
@@ -2044,7 +2254,7 @@ function renderGraphPanel(container, title, graph, options = {}) {
         class: "graph-edge",
         "marker-end": `url(#${marker.id})`,
       });
-      const relationshipText = edge.relationship_ko || edge.relationship;
+      const relationshipText = graphRelationshipLabel(edge);
       const relationshipLabel = relationshipText.length > 22
         ? `${relationshipText.slice(0, 21)}…`
         : relationshipText;
@@ -2058,7 +2268,7 @@ function renderGraphPanel(container, title, graph, options = {}) {
       );
       const labelGroup = svgNode("g", { class: "graph-edge-label-group" });
       const labelTitle = svgNode("title");
-      labelTitle.textContent = `${relationshipText} (${edge.relationship})`;
+      labelTitle.textContent = relationshipText;
       const labelBox = svgNode("rect", {
         x: labelX - labelWidth / 2,
         y: geometry.labelY - 13,
@@ -2100,13 +2310,16 @@ function renderGraphPanel(container, title, graph, options = {}) {
     selected.textContent = "노드를 선택하면 공개 가능한 상세가 표시됩니다.";
     graph.nodes.forEach((node) => {
       const position = positions.get(node.id);
-      const nodeTypeKo = node.node_type_ko || node.node_type;
+      if (!position) return;
+      const nodeTypeKo = graphNodeTypeLabel(node);
       const group = svgNode("g", {
         class: "graph-node",
         tabindex: 0,
         role: "button",
         "aria-label": `${node.display_name}, ${nodeTypeKo}, ${node.verification_status}`,
         "data-kind": graphCategory(node.node_type),
+        "data-node-id": node.id,
+        "data-state": "unvisited",
         transform: `translate(${position.x} ${position.y})`,
       });
       if (Number.isInteger(node.visit_order)) {
@@ -2114,23 +2327,23 @@ function renderGraphPanel(container, title, graph, options = {}) {
       }
       const visual = svgNode("g", { class: "graph-node-visual" });
       const tooltip = svgNode("title");
-      tooltip.textContent = `${node.display_name} · ${nodeTypeKo} (${node.node_type})`;
+      tooltip.textContent = `${node.display_name} · ${nodeTypeKo}`;
       const box = svgNode("rect", {
         width: nodeWidth,
         height: nodeHeight,
-        rx: 11,
-        ry: 11,
+        rx: nodeHeight / 2,
+        ry: nodeHeight / 2,
       });
-      const name = svgNode("text", { x: 12, y: 25, class: "graph-node-name" });
+      const name = svgNode("text", { x: nodeWidth / 2, y: 27, class: "graph-node-name", "text-anchor": "middle" });
       graphLabelLines(node.display_name).forEach((line, lineIndex) => {
         const textLine = svgNode("tspan", {
-          x: 12,
+          x: nodeWidth / 2,
           dy: lineIndex === 0 ? 0 : 18,
         });
         textLine.textContent = line;
         name.append(textLine);
       });
-      const type = svgNode("text", { x: 12, y: 69, class: "graph-node-type" });
+      const type = svgNode("text", { x: nodeWidth / 2, y: nodeHeight - 13, class: "graph-node-type", "text-anchor": "middle" });
       type.textContent = nodeTypeKo;
       const verified = svgNode("text", {
         x: nodeWidth - 14,
@@ -2138,12 +2351,29 @@ function renderGraphPanel(container, title, graph, options = {}) {
         class: "graph-node-check",
         "text-anchor": "end",
       });
-      verified.textContent = node.citation_used ? "✓ 근거" : "✓";
+      verified.textContent = node.verification_status === "VERIFIED" ? "✓ 검증" : "✓ 승인";
+      const visitBadge = [];
+      if (Number.isInteger(node.visit_order)) {
+        const orderBadge = svgNode("circle", {
+          cx: 15,
+          cy: 16,
+          r: 10,
+          class: "graph-node-order-badge",
+        });
+        const orderText = svgNode("text", {
+          x: 15,
+          y: 20,
+          class: "graph-node-order-text",
+          "text-anchor": "middle",
+        });
+        orderText.textContent = String(node.visit_order);
+        visitBadge.push(orderBadge, orderText);
+      }
       const selectNode = () => {
         const page = Number.isInteger(node.excerpt_page)
           ? ` · 발췌 PDF ${node.excerpt_page}쪽`
           : "";
-        selected.textContent = `${node.display_name} · ${nodeTypeKo} (${node.node_type}) · ${node.verification_status}${page}`;
+        selected.textContent = `${node.display_name} · ${nodeTypeKo} · ${node.verification_status}${page}`;
       };
       group.addEventListener("click", selectNode);
       group.addEventListener("keydown", (event) => {
@@ -2152,7 +2382,7 @@ function renderGraphPanel(container, title, graph, options = {}) {
           selectNode();
         }
       });
-      visual.append(box, name, type, verified);
+      visual.append(box, name, type, verified, ...visitBadge);
       group.append(tooltip, visual);
       nodeLayer.append(group);
     });
@@ -2163,9 +2393,15 @@ function renderGraphPanel(container, title, graph, options = {}) {
     const setScale = (next) => {
       const scale = Math.min(2, Math.max(0.6, next));
       graphScales.set(graphKey, scale);
-      canvas.style.width = `${scale * 100}%`;
-      viewport.classList.toggle("is-pannable", scale > 1);
+      canvas.style.width = `${Math.ceil(width * scale)}px`;
+      viewport.classList.toggle("is-pannable", width * scale > viewport.clientWidth);
       scaleLabel.textContent = `${Math.round(scale * 100)}%`;
+    };
+    const centerGraphViewport = () => {
+      viewport.scrollTo({
+        top: 0,
+        left: Math.max(0, (canvas.scrollWidth - viewport.clientWidth) / 2),
+      });
     };
     const control = (label, action) => {
       const button = document.createElement("button");
@@ -2182,16 +2418,18 @@ function renderGraphPanel(container, title, graph, options = {}) {
       control("확대", () => setScale((graphScales.get(graphKey) || 1) + 0.2)),
       control("화면 맞춤", () => {
         setScale(1);
-        viewport.scrollTo({ top: 0, left: 0, behavior: "smooth" });
+        centerGraphViewport();
       }),
       control("초기화", () => {
         setScale(1);
-        viewport.scrollTo({ top: 0, left: 0 });
+        centerGraphViewport();
         selected.textContent = "노드를 선택하면 공개 가능한 상세가 표시됩니다.";
       })
     );
-    addTraversalControls(controls, svg, graph, options);
+    const sequence = addTraversalControls(controls, svg, graph, options);
+    if (options.live) panel.traversalPlayback = svg.traversalPlayback || null;
     setScale(graphScales.get(graphKey) || 1);
+    window.requestAnimationFrame(centerGraphViewport);
     viewport.fitGraph = () => {
       if ((graphScales.get(graphKey) || 1) === 1) setScale(1);
     };
@@ -2210,8 +2448,13 @@ function renderGraphPanel(container, title, graph, options = {}) {
       legend.append(item);
     });
     panel.append(controls, viewport, selected, legend);
-    const traversalList = buildTraversalList(graph);
-    if (traversalList) panel.append(traversalList);
+    if (options.traversalMode === "profile") {
+      const profileList = buildProfileStepList(graph, options.profileSteps, sequence);
+      if (profileList) panel.append(profileList);
+    } else if (options.traversalMode === "projection") {
+      const traversalList = buildTraversalList(graph);
+      if (traversalList) panel.append(traversalList);
+    }
   } catch (_) {
     renderGraphFallback(panel, graph);
   }
@@ -2257,18 +2500,101 @@ function renderEvidenceInto(container, presentation) {
   const section = document.createElement("section");
   section.className = "evidence turn-evidence";
   const heading = document.createElement("h4");
-  heading.textContent = pages.length
-    ? `발췌 PDF ${pages.length}개 페이지 · 근거 ${total}건`
-    : "표시할 VERIFIED 근거가 없습니다.";
+  heading.textContent = `이 답변에 사용된 VERIFIED 근거 ${total}건`;
+  const description = document.createElement("p");
+  description.className = "evidence-intro";
+  description.textContent = "답변 문장별 연결 정보는 없으므로, 답변에 사용된 원문 근거를 그대로 표시합니다.";
   section.append(heading);
+  section.append(description);
   if (pages.length && presentation.pdf && !presentation.pdf.available) {
     const notice = document.createElement("p");
     notice.className = "notice";
     notice.textContent = `${presentation.pdf.reason} 페이지 번호와 Evidence 원문은 계속 표시합니다.`;
     section.append(notice);
   }
-  pages.forEach((page) => section.append(pageCard(page, presentation.pdf, total)));
+  const cards = document.createElement("div");
+  cards.className = "evidence-cards";
+  let number = 0;
+  pages.forEach((page) => {
+    (page.evidence || []).forEach((evidence) => {
+      number += 1;
+      cards.append(evidenceCard(page, evidence, number, presentation.pdf));
+    });
+  });
+  section.append(cards);
+
+  const pageDetails = document.createElement("details");
+  pageDetails.className = "evidence-pages";
+  const pageSummary = document.createElement("summary");
+  pageSummary.textContent = `페이지 이미지와 강조 보기 (${pages.length}개 발췌 페이지)`;
+  const pageBody = document.createElement("div");
+  pageBody.className = "evidence-pages-body";
+  pageDetails.addEventListener("toggle", () => {
+    if (!pageDetails.open || pageBody.dataset.rendered) return;
+    pages.forEach((page) => pageBody.append(pageCard(page, presentation.pdf, total)));
+    pageBody.dataset.rendered = "true";
+  });
+  pageDetails.append(pageSummary, pageBody);
+  section.append(pageDetails);
   container.append(section);
+}
+
+function evidenceCard(page, evidence, number, pdf) {
+  const card = document.createElement("article");
+  card.className = "evidence-card";
+  const head = document.createElement("div");
+  head.className = "evidence-card-head";
+  const title = document.createElement("strong");
+  title.textContent = `근거 ${number}`;
+  const verified = span("evidence-verified", "VERIFIED");
+  verified.setAttribute("aria-label", "원문 검증 완료");
+  head.append(title, verified);
+
+  const sourceLabel = document.createElement("p");
+  sourceLabel.className = "evidence-source-label";
+  sourceLabel.textContent = "원문";
+  const source = document.createElement("p");
+  source.className = "evidence-card-source is-collapsed";
+  source.textContent = evidence.source_text || "원문 내용이 없습니다.";
+  const expand = document.createElement("button");
+  expand.type = "button";
+  expand.className = "evidence-expand";
+  expand.textContent = "전체 원문 보기";
+  expand.setAttribute("aria-expanded", "false");
+  expand.addEventListener("click", () => {
+    const expanded = source.classList.toggle("is-collapsed");
+    expand.textContent = expanded ? "전체 원문 보기" : "원문 접기";
+    expand.setAttribute("aria-expanded", String(!expanded));
+  });
+
+  const pages = document.createElement("ul");
+  pages.className = "evidence-page-meta";
+  [
+    ["발췌 PDF", page.excerpt_page],
+    ["원본 PDF", evidence.source_pdf_page ?? page.source_pdf_page],
+    ["인쇄 페이지", evidence.printed_page ?? page.printed_page],
+  ].forEach(([label, value]) => {
+    const item = document.createElement("li");
+    item.textContent = `${label} ${pageLabel(value)}쪽`;
+    pages.append(item);
+  });
+  if (pdf && pdf.available) {
+    const highlight = span(
+      evidence.highlight_found ? "evidence-highlight" : "evidence-highlight is-missing",
+      evidence.highlight_found ? `강조 ${evidence.highlights.length}곳` : "강조 위치를 찾지 못함"
+    );
+    pages.append(highlight);
+  }
+
+  const viewButton = document.createElement("button");
+  viewButton.type = "button";
+  viewButton.className = "view-source";
+  viewButton.textContent = "원문에서 보기";
+  viewButton.disabled = !(pdf && pdf.available);
+  viewButton.setAttribute("aria-label", `근거 ${number} 원문에서 보기`);
+  viewButton.addEventListener("click", () => openPdfModal(page, evidence));
+  card.append(head, sourceLabel, source, expand, pages, viewButton);
+  return card;
 }
 
 function pageLabel(value, fallback = "미표기") {

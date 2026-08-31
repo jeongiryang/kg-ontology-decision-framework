@@ -397,8 +397,9 @@ class InspectionCollector:
     def _safe_traversal_steps(value: Any) -> list[dict[str, Any]]:
         """Keep the engine's measured steps in execution order.
 
-        시간은 Neo4j 가 주지 않으므로 ``share_ms`` 는 총 실행 시간을 DB 접근 횟수
-        비율로 나눈 **배분값**이다. 화면이 그렇게 표시한다.
+        Neo4j 는 operator별 측정 시간을 주지 않는다. 따라서 실행 전체의 실측 시간은
+        별도 ``query_elapsed_ms`` 로만 내보내고, 여기에는 PROFILE 행 수·DB 접근 수와
+        실행 순서만 유지한다.
         """
 
         if not isinstance(value, (list, tuple)):
@@ -440,10 +441,6 @@ class InspectionCollector:
                     "rows": item.get("rows") if isinstance(item.get("rows"), int) else 0,
                     "db_hits": item.get("db_hits")
                     if isinstance(item.get("db_hits"), int)
-                    else 0,
-                    "share_ms": item.get("share_ms")
-                    if isinstance(item.get("share_ms"), (int, float))
-                    and not isinstance(item.get("share_ms"), bool)
                     else 0,
                     "detail": detail,
                 }

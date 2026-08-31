@@ -41,6 +41,12 @@ _SENSITIVE_MARKERS = (
     "neo4j://",
     "/home/",
 )
+# The generated schema currently supplies Korean names for every public label and
+# relationship.  These fallbacks are deliberately generic Korean phrases rather
+# than internal identifiers: an incomplete schema must not put an English Neo4j
+# label into the general-user graph UI.
+_SAFE_NODE_TYPE_FALLBACK = "확인된 그래프 항목"
+_SAFE_RELATIONSHIP_FALLBACK = "확인된 관계"
 
 
 def _opaque_id(key: bytes, namespace: str, value: str) -> str:
@@ -63,6 +69,20 @@ def _safe_display(value: Any, fallback: str) -> str:
     compact = PHONE_PATTERN.sub("<redacted-phone>", compact)
     compact = STUDENT_ID_PATTERN.sub("<redacted-student-id>", compact)
     return compact[:96]
+
+
+def _node_type_ko(catalog: SchemaCatalog, label: str) -> str:
+    """Return an ontology Korean type name safe for the public graph."""
+
+    value = catalog.label_ko(label)
+    return value if value and value != label else _SAFE_NODE_TYPE_FALLBACK
+
+
+def _relationship_ko(catalog: SchemaCatalog, relationship: str) -> str:
+    """Return a Korean relationship name without leaking an internal type."""
+
+    value = catalog.relationship_ko(relationship)
+    return value if value and value != relationship else _SAFE_RELATIONSHIP_FALLBACK
 
 
 def build_query_structure_projection(
@@ -100,7 +120,6 @@ def build_query_structure_projection(
     )
     if not safe_labels:
         return None
-    safe_labels = safe_labels[:MAX_GRAPH_NODES]
     try:
         catalog = SchemaCatalog.from_generated()
     except (OSError, ValueError, SchemaCatalogError):
@@ -111,14 +130,34 @@ def build_query_structure_projection(
         set(safe_labels),
         set(safe_relationships),
     )
+    # A multi-node query needs its validator-approved hops.  Showing all selected
+    # labels without those hops would turn a schema candidate set into a made-up
+    # query graph.  A single label is the one safe zero-hop query shape.
+    if path_edges and not steps:
+        return None
+    if not steps and len(safe_labels) != 1:
+        return None
+    path_labels = (
+        {
+            label
+            for step in steps
+            for label in (step["start_label"], step["end_label"])
+        }
+        if steps
+        else set(safe_labels)
+    )
+    if len(path_labels) > MAX_GRAPH_NODES or len(steps) > MAX_GRAPH_EDGES:
+        return None
+    visible_labels = sorted(path_labels)
     node_ids = {
-        label: _opaque_id(opaque_key, "query-node", label) for label in safe_labels
+        label: _opaque_id(opaque_key, "query-node", label) for label in visible_labels
     }
     nodes = [
         {
             "id": node_ids[label],
             "display_name": _scoped_label(catalog, label, parameters or {}),
             "node_type": label,
+            "node_type_ko": _node_type_ko(catalog, label),
             "verification_status": "SCHEMA_APPROVED",
             # 경로에 등장하는 순서. 등장하지 않는 라벨은 null 로 두고 화면이
             # 흐리게 그린다.
@@ -131,7 +170,7 @@ def build_query_structure_projection(
                 None,
             ),
         }
-        for label in safe_labels
+        for label in visible_labels
     ]
 
     edges: list[dict[str, Any]] = []
@@ -146,12 +185,11 @@ def build_query_structure_projection(
                     "source": node_ids[source],
                     "target": node_ids[target],
                     "relationship": relationship,
-                    "relationship_ko": catalog.relationship_ko(relationship),
+                    "relationship_ko": _relationship_ko(catalog, relationship),
                     "traversal_order": step["order"],
                 }
             )
     # 승인된 path가 없을 때 ontology endpoint의 교차곱으로 간선을 만들어 내지 않는다.
-    # 선택 label은 보여 줄 수 있지만 실제 query가 밟았다고 확인되지 않은 관계는 빈다.
     _assign_visit_order(nodes, edges, steps)
     return {
         "version": GRAPH_ENVELOPE_VERSION,
@@ -184,12 +222,8 @@ def build_traversal_projection(
     ClaimValidator 가 승인한 provenance 쌍에서만 나온다. 어느 쪽도 지어내지 않는다.
     """
 
-    approved = {
-        (fact_id, evidence_id)
-        for fact_id, evidence_id in approved_pairs
-        if isinstance(fact_id, str) and fact_id and isinstance(evidence_id, str) and evidence_id
-    }
-    if not path_edges or not rows or not approved:
+    approved = _approved_pairs(approved_pairs)
+    if not path_edges or not approved:
         return None
     try:
         catalog = SchemaCatalog.from_generated()
@@ -218,11 +252,16 @@ def build_traversal_projection(
         return {
             "rows": item.get("rows"),
             "db_hits": item.get("db_hits"),
-            "share_ms": item.get("share_ms"),
             "operator": item.get("operator"),
         }
-    fact_label = rows[0].get("fact_label")
+    verified_rows = _verified_projection_rows(rows, approved)
+    if verified_rows is None:
+        return None
+    fact_rows, evidence_rows = verified_rows
+    fact_label = next(iter(fact_rows.values())).get("fact_label")
     if not isinstance(fact_label, str) or not _SAFE_TYPE.fullmatch(fact_label):
+        return None
+    if any(row.get("fact_label") != fact_label for row in fact_rows.values()):
         return None
 
     nodes: list[dict[str, Any]] = []
@@ -258,7 +297,7 @@ def build_traversal_projection(
             "id": node_id,
             "display_name": real_name or _scoped_label(catalog, label, parameters),
             "node_type": label,
-            "node_type_ko": catalog.label_ko(label),
+            "node_type_ko": _node_type_ko(catalog, label),
             "verification_status": "SCHEMA_APPROVED",
             "visit_order": order,
         })
@@ -282,27 +321,36 @@ def build_traversal_projection(
             "source": scope_node(start),
             "target": scope_node(end),
             "relationship": step.get("relationship_type", ""),
-            "relationship_ko": catalog.relationship_ko(step.get("relationship_type", "")),
+            "relationship_ko": _relationship_ko(
+                catalog, step.get("relationship_type", "")
+            ),
             "traversal_order": hop,
             **take_measure(step.get("relationship_type", "")),
         })
+    # Fact가 경로의 루트인 경우에는 type-level scope node를 다시 만들지 않는다.
+    # 그 노드는 실제 ResultValidator 승인 Fact 인스턴스와 동일한 자리를 가리켜 ghost
+    # node가 되기 때문이다. 실제 상위 scope가 있을 때만 Fact branch의 부모로 둔다.
     parent_label = next(
-        (s.get("start_label") for s in steps if s.get("end_label") == fact_label), None
+        (
+            s.get("start_label")
+            for s in steps
+            if s.get("end_label") == fact_label
+            and s.get("start_label") != fact_label
+        ),
+        None,
     )
     parent_id = scope_node(parent_label) if isinstance(parent_label, str) else None
     into_fact = next(
-        (s for s in steps if s.get("end_label") == fact_label), None
+        (
+            s
+            for s in steps
+            if s.get("end_label") == fact_label
+            and s.get("start_label") != fact_label
+        ),
+        None,
     )
 
     # 2) 실제 매칭된 fact 인스턴스
-    fact_rows: dict[str, Mapping[str, Any]] = {}
-    evidence_rows: dict[str, Mapping[str, Any]] = {}
-    for row in rows:
-        fid, eid = row.get("fact_id"), row.get("evidence_id")
-        if isinstance(fid, str) and fid:
-            fact_rows.setdefault(fid, row)
-        if isinstance(eid, str) and eid:
-            evidence_rows.setdefault(eid, row)
     if len(fact_rows) + len(evidence_rows) + len(nodes) > MAX_GRAPH_NODES:
         return None
 
@@ -317,9 +365,11 @@ def build_traversal_projection(
         fact_ids[raw_id] = node_id
         nodes.append({
             "id": node_id,
-            "display_name": _fact_display(row, fact_label, catalog.label_ko(fact_label)),
+            "display_name": _fact_display(
+                row, fact_label, _node_type_ko(catalog, fact_label)
+            ),
             "node_type": fact_label,
-            "node_type_ko": catalog.label_ko(fact_label),
+            "node_type_ko": _node_type_ko(catalog, fact_label),
             "verification_status": "VERIFIED",
             "visit_order": order,
         })
@@ -330,7 +380,8 @@ def build_traversal_projection(
                 "source": parent_id,
                 "target": node_id,
                 "relationship": into_fact.get("relationship_type", ""),
-                "relationship_ko": catalog.relationship_ko(
+                "relationship_ko": _relationship_ko(
+                    catalog,
                     into_fact.get("relationship_type", "")
                 ),
                 "traversal_order": hop,
@@ -367,7 +418,7 @@ def build_traversal_projection(
                     "id": node_id,
                     "display_name": value,
                     "node_type": target_label,
-                    "node_type_ko": catalog.label_ko(target_label),
+                    "node_type_ko": _node_type_ko(catalog, target_label),
                     "verification_status": "VERIFIED",
                     "visit_order": order,
                 })
@@ -379,14 +430,16 @@ def build_traversal_projection(
                 "source": fact_ids[raw_id],
                 "target": neighbour_ids[key],
                 "relationship": step.get("relationship_type", ""),
-                "relationship_ko": catalog.relationship_ko(step.get("relationship_type", "")),
+                "relationship_ko": _relationship_ko(
+                    catalog, step.get("relationship_type", "")
+                ),
                 "traversal_order": hop,
                 **neighbour_measure,
             })
 
     # 3) 승인된 provenance 쌍만 Evidence 로 잇는다.
     evidence_ids: dict[str, str] = {}
-    supported_ko = catalog.relationship_ko("SUPPORTED_BY")
+    supported_ko = _relationship_ko(catalog, "SUPPORTED_BY")
     supported_measure = take_measure("SUPPORTED_BY")
     for raw_id, row in sorted(evidence_rows.items()):
         order += 1
@@ -397,7 +450,7 @@ def build_traversal_projection(
             "id": node_id,
             "display_name": f"발췌 PDF {page}쪽" if isinstance(page, int) else "원문 근거",
             "node_type": "Evidence",
-            "node_type_ko": catalog.label_ko("Evidence"),
+            "node_type_ko": _node_type_ko(catalog, "Evidence"),
             "verification_status": "VERIFIED",
             "visit_order": order,
             "excerpt_page": page if isinstance(page, int) else None,
@@ -531,7 +584,7 @@ def _scoped_label(
     학수번호·내부 ID 처럼 사람이 읽기 어려운 값은 붙이지 않는다.
     """
 
-    base = catalog.label_ko(label)
+    base = _node_type_ko(catalog, label)
     prefixes: list[str] = []
     for name, value in parameters.items():
         binding = BASE_FILTER_BINDINGS.get(name)
@@ -547,7 +600,10 @@ def _scoped_label(
                 if vocabulary
                 else ""
             )
-            prefixes.append(korean or value)
+            # CSE 같은 내부 코드나 영문 controlled value를 이름처럼 보이게 하지
+            # 않는다. 한국어 표기가 명세에 있을 때만 범위 이름에 붙인다.
+            if korean:
+                prefixes.append(korean)
     return f"{' '.join(prefixes)} {base}".strip() if prefixes else base
 
 
@@ -624,15 +680,10 @@ def _fact_display(row: Mapping[str, Any], fact_label: str, fallback_ko: str = ""
     return f"{fallback_ko or fact_label} 결과"
 
 
-def build_provenance_projection(
-    rows: Sequence[Mapping[str, Any]],
+def _approved_pairs(
     approved_pairs: Iterable[tuple[str, str]],
-    *,
-    opaque_key: bytes,
-) -> dict[str, Any] | None:
-    """Project only VERIFIED direct Fact→Evidence pairs approved by validators."""
-
-    approved = {
+) -> set[tuple[str, str]]:
+    return {
         (fact_id, evidence_id)
         for fact_id, evidence_id in approved_pairs
         if isinstance(fact_id, str)
@@ -640,9 +691,21 @@ def build_provenance_projection(
         and isinstance(evidence_id, str)
         and evidence_id
     }
+
+
+def _verified_projection_rows(
+    rows: Sequence[Mapping[str, Any]],
+    approved: set[tuple[str, str]],
+) -> tuple[dict[str, Mapping[str, Any]], dict[str, Mapping[str, Any]]] | None:
+    """Return only exact ResultValidator and ClaimValidator-approved row pairs.
+
+    The final graph cannot have a weaker boundary than the standalone provenance
+    projection.  In particular, a row that is not in the approved pair set must
+    not leave a Fact or Evidence node behind merely because another row passed.
+    """
+
     if not rows or not approved:
         return None
-
     row_pairs: set[tuple[str, str]] = set()
     fact_rows: dict[str, Mapping[str, Any]] = {}
     evidence_rows: dict[str, Mapping[str, Any]] = {}
@@ -669,6 +732,22 @@ def build_provenance_projection(
         evidence_rows.setdefault(evidence_id, row)
     if row_pairs != approved:
         return None
+    return fact_rows, evidence_rows
+
+
+def build_provenance_projection(
+    rows: Sequence[Mapping[str, Any]],
+    approved_pairs: Iterable[tuple[str, str]],
+    *,
+    opaque_key: bytes,
+) -> dict[str, Any] | None:
+    """Project only VERIFIED direct Fact→Evidence pairs approved by validators."""
+
+    approved = _approved_pairs(approved_pairs)
+    verified_rows = _verified_projection_rows(rows, approved)
+    if verified_rows is None:
+        return None
+    fact_rows, evidence_rows = verified_rows
 
     if len(fact_rows) + len(evidence_rows) > MAX_GRAPH_NODES:
         return None
@@ -685,13 +764,19 @@ def build_provenance_projection(
     except (OSError, ValueError, SchemaCatalogError):
         catalog = None
     supported_by_ko = (
-        catalog.relationship_ko("SUPPORTED_BY") if catalog else "SUPPORTED_BY"
+        _relationship_ko(catalog, "SUPPORTED_BY")
+        if catalog
+        else _SAFE_RELATIONSHIP_FALLBACK
     )
 
     nodes: list[dict[str, Any]] = []
     for raw_id, row in sorted(fact_rows.items()):
         fact_label = str(row["fact_label"])
-        label_ko = catalog.label_ko(fact_label) if catalog else fact_label
+        label_ko = (
+            _node_type_ko(catalog, fact_label)
+            if catalog
+            else _SAFE_NODE_TYPE_FALLBACK
+        )
         nodes.append(
             {
                 "id": fact_ids[raw_id],
@@ -708,7 +793,11 @@ def build_provenance_projection(
                 "id": evidence_ids[raw_id],
                 "display_name": f"발췌 PDF {page}쪽",
                 "node_type": "Evidence",
-                "node_type_ko": catalog.label_ko("Evidence") if catalog else "Evidence",
+                "node_type_ko": (
+                    _node_type_ko(catalog, "Evidence")
+                    if catalog
+                    else _SAFE_NODE_TYPE_FALLBACK
+                ),
                 "verification_status": "VERIFIED",
                 "excerpt_page": page,
                 "citation_used": True,

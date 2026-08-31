@@ -166,6 +166,14 @@ class _ChatStub:
                 "parameters": {"academic_year": 2026},
                 "labels": ["CourseOffering", "Evidence"],
                 "relationship_types": ["SUPPORTED_BY"],
+                "path_edges": [
+                    {
+                        "order": 1,
+                        "start_label": "CourseOffering",
+                        "relationship_type": "SUPPORTED_BY",
+                        "end_label": "Evidence",
+                    }
+                ],
                 "limit": 1,
                 "parameter_binding_verified": True,
                 "direct_evidence_path_verified": True,
@@ -1015,7 +1023,16 @@ class StarletteRouteTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("prefers-reduced-motion: reduce", script)
         self.assertIn("ResizeObserver", script)
         self.assertIn("shows-traversal", script)
+        self.assertIn("renderLiveGraph", script)
+        self.assertIn("graphStage", script)
+        self.assertIn("이 답변에 사용된 VERIFIED 근거", script)
+        self.assertIn("evidence-card", script)
+        self.assertNotIn("share_ms", script)
+        self.assertNotIn("현재 Neo4j가", script)
         self.assertIn("graph-traversal-flow", style)
+        self.assertIn('data-state="active"', style)
+        self.assertIn("live-graph-region", style)
+        self.assertIn("evidence-card-source", style)
         self.assertIn("overflow-x: hidden", style)
         self.assertIn("graphLabelLines", script)
         self.assertIn("renderGraphFallback", script)
@@ -1082,7 +1099,7 @@ class InspectionGraphProjectionTests(unittest.TestCase):
 
     def test_query_projection_uses_only_approved_schema_members(self):
         graph = build_query_structure_projection(
-            ["CourseOffering", "Course", "Evidence"],
+            ["CourseOffering", "Course", "Evidence", "Department"],
             ["OF_COURSE", "SUPPORTED_BY", "NOT_A_RELATION"],
             opaque_key=b"query-test-key",
             path_edges=[
@@ -1107,16 +1124,31 @@ class InspectionGraphProjectionTests(unittest.TestCase):
             {edge["relationship"] for edge in graph["edges"]},
             {"OF_COURSE", "SUPPORTED_BY"},
         )
+        self.assertEqual(
+            {node["node_type"] for node in graph["nodes"]},
+            {"CourseOffering", "Course", "Evidence"},
+        )
+        self.assertTrue(all(node["node_type_ko"] for node in graph["nodes"]))
         serialized = json.dumps(graph, ensure_ascii=False)
         self.assertNotIn("NOT_A_RELATION", serialized)
+        self.assertNotIn("Department", serialized)
 
-    def test_query_projection_never_invents_edges_without_an_approved_path(self):
+    def test_query_projection_is_hidden_without_an_approved_multinode_path(self):
         graph = build_query_structure_projection(
             ["CourseOffering", "Course", "Evidence"],
             ["OF_COURSE", "SUPPORTED_BY"],
             opaque_key=b"query-test-key",
         )
+        self.assertIsNone(graph)
+
+    def test_query_projection_allows_only_a_real_zero_hop_single_label_query(self):
+        graph = build_query_structure_projection(
+            ["CourseOffering"],
+            [],
+            opaque_key=b"query-test-key",
+        )
         self.assertIsNotNone(graph)
+        self.assertEqual(len(graph["nodes"]), 1)
         self.assertEqual(graph["edges"], [])
         self.assertFalse(graph["ordered"])
 
@@ -1179,11 +1211,36 @@ class InspectionGraphProjectionTests(unittest.TestCase):
             {edge["relationship"] for edge in graph["edges"]},
             {"SUPPORTED_BY"},
         )
+        self.assertEqual(len(graph["nodes"]), 2)
+        self.assertEqual(len(graph["edges"]), 1)
+        self.assertEqual(
+            sum(node["node_type"] == "CourseOffering" for node in graph["nodes"]),
+            1,
+        )
         self.assertTrue(all(node["id"].startswith("ui:") for node in graph["nodes"]))
         serialized = json.dumps(graph, ensure_ascii=False)
         self.assertNotIn(row["fact_id"], serialized)
         self.assertNotIn(row["evidence_id"], serialized)
         self.assertIn("relationship_ko", serialized)
+        self.assertNotIn("share_ms", serialized)
+
+        unrelated = _offering_row(1)
+        self.assertIsNone(
+            build_traversal_projection(
+                [
+                    {
+                        "order": 1,
+                        "start_label": "CourseOffering",
+                        "relationship_type": "SUPPORTED_BY",
+                        "end_label": "Evidence",
+                    }
+                ],
+                {"academic_year": 2026},
+                [row, unrelated],
+                [pair],
+                opaque_key=b"traversal-test-key",
+            )
+        )
 
     def test_profile_details_with_sensitive_markers_are_removed(self):
         collector = InspectionCollector(DETAIL_FULL)
@@ -1208,9 +1265,39 @@ class InspectionGraphProjectionTests(unittest.TestCase):
             )
         )
         self.assertEqual(update["summary"]["traversal_steps"][0]["detail"], "")
+        self.assertNotIn("share_ms", update["summary"]["traversal_steps"][0])
         serialized = json.dumps(update, ensure_ascii=False)
         self.assertNotIn("synthetic-password-marker", serialized)
         self.assertNotIn("/home/", serialized)
+
+    def test_traversal_projection_renders_each_exact_fact_evidence_pair_once(self):
+        rows = [_offering_row(), _offering_row(1)]
+        pairs = [(row["fact_id"], row["evidence_id"]) for row in rows]
+        graph = build_traversal_projection(
+            [
+                {
+                    "order": 1,
+                    "start_label": "CourseOffering",
+                    "relationship_type": "SUPPORTED_BY",
+                    "end_label": "Evidence",
+                }
+            ],
+            {"academic_year": 2026},
+            rows,
+            pairs,
+            opaque_key=b"traversal-test-key",
+        )
+        self.assertIsNotNone(graph)
+        self.assertEqual(
+            sum(node["node_type"] == "CourseOffering" for node in graph["nodes"]),
+            2,
+        )
+        self.assertEqual(
+            sum(node["node_type"] == "Evidence" for node in graph["nodes"]),
+            2,
+        )
+        self.assertEqual(len(graph["edges"]), 2)
+        self.assertTrue(all(edge["relationship"] == "SUPPORTED_BY" for edge in graph["edges"]))
 
 
 if __name__ == "__main__":
