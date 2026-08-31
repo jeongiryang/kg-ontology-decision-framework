@@ -309,6 +309,50 @@ kbd {
 .evidence-head { display: flex; align-items: baseline; gap: 12px; flex-wrap: wrap; margin-bottom: 12px; }
 .evidence-head h3 { font-size: 1rem; }
 .evidence-head p { font-size: 0.8rem; color: var(--muted); }
+.turn-evidence {
+  width: 100%; margin-top: 12px; padding-top: 12px;
+  border-top: 1px solid var(--line);
+}
+.turn-evidence > h4 { margin: 0; font-size: .86rem; }
+.evidence-intro { margin-top: 5px; color: var(--muted); font-size: .76rem; }
+.evidence-cards { display: grid; gap: 9px; margin-top: 11px; }
+.evidence-card {
+  min-width: 0; padding: 11px; border: 1px solid var(--line); border-radius: 10px;
+  background: var(--panel-2);
+}
+.evidence-card-head { display: flex; align-items: center; gap: 8px; }
+.evidence-card-head strong { color: var(--text); font-size: .8rem; }
+.evidence-verified {
+  display: inline-block; border: 1px solid color-mix(in srgb, var(--ok) 60%, var(--line));
+  border-radius: 999px; padding: 1px 6px; color: var(--ok); font-size: .66rem; font-weight: 750;
+}
+.evidence-source-label { margin-top: 9px; color: var(--muted); font-size: .7rem; font-weight: 650; }
+.evidence-card-source {
+  margin-top: 2px; color: var(--text); font-size: .8rem; line-height: 1.55;
+  white-space: pre-wrap; overflow-wrap: anywhere;
+}
+.evidence-card-source.is-collapsed {
+  display: -webkit-box; overflow: hidden; -webkit-box-orient: vertical; -webkit-line-clamp: 3;
+}
+.evidence-expand {
+  margin-top: 4px; padding: 0; border: 0; background: transparent; color: var(--accent);
+  font-size: .73rem; text-decoration: underline; text-underline-offset: 2px;
+}
+.evidence-expand:focus-visible, .view-source:focus-visible {
+  outline: 2px solid var(--accent); outline-offset: 2px;
+}
+.evidence-page-meta {
+  display: flex; flex-wrap: wrap; gap: 3px 9px; margin: 9px 0 0; padding: 0;
+  list-style: none; color: var(--muted); font-size: .71rem;
+}
+.evidence-highlight { color: var(--ok); }
+.evidence-highlight.is-missing { color: var(--warn); }
+.evidence-pages { margin-top: 11px; border-top: 1px solid var(--line); }
+.evidence-pages > summary {
+  cursor: pointer; padding: 9px 0 0; color: var(--accent); font-size: .76rem; font-weight: 650;
+}
+.evidence-pages > summary:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
+.evidence-pages-body { margin-top: 10px; }
 
 .page-card {
   background: var(--panel); border: 1px solid var(--line);
@@ -443,11 +487,24 @@ kbd {
 .graph-edge-group[data-kind="course"] .graph-edge { stroke: #8b5cf6; }
 .graph-edge-group[data-kind="rule"] .graph-edge { stroke: #cf6b1b; }
 .graph-edge-group[data-kind="evidence"] .graph-edge { stroke: var(--ok); }
+.graph-canvas svg.is-approved-path .graph-edge { stroke: var(--skip); opacity: 0.72; }
+.graph-canvas svg.is-approved-path .graph-node { opacity: 0.78; }
+.graph-canvas svg.is-approved-path .graph-node rect {
+  fill: var(--panel-2); stroke: var(--skip);
+}
 .graph-canvas svg.shows-traversal .graph-edge-group,
 .graph-canvas svg.shows-traversal .graph-node { opacity: 0.22; }
-.graph-canvas svg.shows-traversal .graph-edge-group.is-traversed,
-.graph-canvas svg.shows-traversal .graph-node.is-traversed { opacity: 1; }
-.graph-canvas svg.shows-traversal .graph-edge-group.is-active .graph-edge {
+.graph-canvas svg.shows-traversal .graph-edge-group[data-state="unvisited"] .graph-edge {
+  stroke: var(--skip); opacity: 0.8;
+}
+.graph-canvas svg.shows-traversal .graph-edge-group[data-state="visited"],
+.graph-canvas svg.shows-traversal .graph-node[data-state="visited"],
+.graph-canvas svg.shows-traversal .graph-edge-group[data-state="active"],
+.graph-canvas svg.shows-traversal .graph-node[data-state="active"] { opacity: 1; }
+.graph-canvas svg.shows-traversal .graph-edge-group[data-state="visited"] .graph-edge {
+  stroke: var(--ok); stroke-width: 2.5; opacity: 1;
+}
+.graph-canvas svg.shows-traversal .graph-edge-group[data-state="active"] .graph-edge {
   stroke: var(--accent); stroke-width: 3;
   stroke-dasharray: 8 6; animation: graph-traversal-flow 700ms linear infinite;
 }
@@ -467,10 +524,21 @@ kbd {
 .graph-node[data-kind="course"] rect { fill: rgba(139, 92, 246, 0.14); stroke: #8b5cf6; }
 .graph-node[data-kind="rule"] rect { fill: rgba(234, 126, 40, 0.14); stroke: #cf6b1b; }
 .graph-node[data-kind="evidence"] rect { fill: rgba(23, 128, 90, 0.14); stroke: var(--ok); }
+.graph-canvas svg.shows-traversal .graph-node[data-state="unvisited"] rect {
+  fill: var(--panel-2); stroke: var(--skip);
+}
+.graph-canvas svg.shows-traversal .graph-node[data-state="visited"] rect {
+  fill: rgba(23, 128, 90, 0.2); stroke: var(--ok); stroke-width: 2.5;
+}
+.graph-canvas svg.shows-traversal .graph-node[data-state="active"] rect {
+  fill: var(--accent-soft); stroke: var(--accent); stroke-width: 3;
+}
 .graph-node:focus rect, .graph-node:hover rect { stroke-width: 3; }
 .graph-node-name { fill: var(--text); font: 600 12px system-ui, sans-serif; }
 .graph-node-type { fill: var(--muted); font: 10px ui-monospace, monospace; }
 .graph-node-check { fill: var(--ok); font: 700 10px system-ui, sans-serif; }
+.graph-node-order-badge { fill: var(--panel); stroke: var(--accent); stroke-width: 1.5; }
+.graph-node-order-text { fill: var(--accent); font: 700 9px system-ui, sans-serif; }
 .graph-selected { margin-top: 8px; color: var(--muted); font-size: 0.76rem; overflow-wrap: anywhere; }
 .graph-legend {
   margin: 8px 0 0; padding: 0; display: flex; flex-wrap: wrap; gap: 8px 14px;
@@ -493,8 +561,8 @@ kbd {
 }
 .traversal-list li { padding: 6px 8px; border: 1px solid var(--line); border-radius: 7px; }
 .traversal-list li strong, .traversal-list li span { display: block; overflow-wrap: anywhere; }
-.traversal-list li.is-traversed { color: var(--text); border-color: var(--ok); }
-.traversal-list li.is-active { border-color: var(--accent); background: var(--accent-soft); }
+.traversal-list li[data-state="visited"] { color: var(--text); border-color: var(--ok); }
+.traversal-list li[data-state="active"] { border-color: var(--accent); background: var(--accent-soft); }
 .operator-list { display: grid; gap: 6px; margin: 10px 0 0; padding-left: 22px; font-size: .74rem; }
 .operator-list strong, .operator-list span { display: block; }
 .operator-list span { color: var(--muted); }
@@ -503,7 +571,7 @@ kbd {
 
 @media (prefers-reduced-motion: reduce) {
   .graph-edge-group, .graph-node { transition: none; }
-  .graph-canvas svg.shows-traversal .graph-edge-group.is-active .graph-edge {
+  .graph-canvas svg.shows-traversal .graph-edge-group[data-state="active"] .graph-edge {
     animation: none; stroke-dasharray: none;
   }
 }
@@ -522,6 +590,14 @@ kbd {
   .exploration { padding: 12px; }
   .exploration-tabs { margin-inline: -4px; padding-inline: 4px; }
 }
+
+.live-graph-region {
+  min-width: 0; margin-top: 12px; padding-top: 12px;
+  border-top: 1px solid var(--line);
+}
+.live-graph-region[hidden] { display: none; }
+.live-graph-region .projection-note { margin: 0 0 8px; }
+.live-graph-region .graph-panel { margin: 0; }
 
 .view-source {
   margin-top: 8px; border: 1px solid var(--line); border-radius: 8px;

@@ -119,7 +119,8 @@ Verified bundle과 Neo4j의 결과가 일치했다.
 - 미공개 단일 50문항은 이전 상태 분포와 50/50 일치했고 평균/P50/P95
   `14.644/14.575/49.376초`, `ANSWERED` Citation 30/30이었다. 다중 턴 20개·65턴도
   이전 상태 전이와 65/65 일치했고 `13.783/14.704/29.164초`, Citation 43/43이었다.
-  115턴 전체 tool trace는 351회, KG query 112회, 부분 재작성 38회, canonical fallback
+  165개 평가 항목(원본 50문항 + 미공개 50문항 + 다중 턴 65턴)의 tool trace는
+  351회, KG query 112회, 부분 재작성 38회, canonical fallback
   0회, 공개 오류·SAFE_FAILURE 0이었다.
 - 최종 Chromium 시나리오와 GitHub Actions 결과는 commit·push 직전 최신 결과로
   갱신한다. 실행하지 않은 검증은 통과로 기록하지 않는다.

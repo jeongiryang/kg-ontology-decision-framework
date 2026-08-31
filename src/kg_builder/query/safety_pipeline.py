@@ -236,9 +236,8 @@ class SafetyPipeline:
                 ProgressState.COMPLETED,
                 elapsed_ms,
                 row_count=len(rows),
-                # 엔진이 실제로 밟은 단계. 시간은 Neo4j 가 주지 않으므로, 총 실행
-                # 시간을 DB 접근 횟수 비율로 나눈 **배분값**을 함께 보낸다. 화면이
-                # 이것이 측정값이 아니라 배분값임을 표시한다.
+                # 엔진이 실제로 밟은 단계. Neo4j 는 operator별 측정 시간을 주지
+                # 않으므로 행 수와 DB 접근 수만 보낸다. 임의 배분 시간은 만들지 않는다.
                 traversal_steps=[
                     {
                         "order": step.order,
@@ -249,11 +248,6 @@ class SafetyPipeline:
                         "rows": step.rows,
                         "db_hits": step.db_hits,
                         "detail": step.detail,
-                        "share_ms": round(
-                            elapsed_ms
-                            * (step.db_hits / max(1, sum(s.db_hits for s in steps))),
-                            3,
-                        ),
                     }
                     for step in steps
                 ],
