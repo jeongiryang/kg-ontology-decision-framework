@@ -41,7 +41,12 @@ from .contracts import (
     AgentPolicy,
     AgentTraceEvent,
     ConversationContext,
+    PendingRequest,
+    RequestAction,
+    RequestedItem,
+    RequestedItemStatus,
     ToolName,
+    TurnFulfillmentStatus,
 )
 from .tools import validate_tool_input
 
@@ -57,6 +62,25 @@ _ELLIPTICAL_FOLLOWUP = re.compile(
     r"다시|둘의|둘[ \t]*다|그중|그[ \t]*추천|그[ \t]*기준|같은[ \t]*거|"
     r"0[ \t]*학점|총학점만|확인[ \t]*가능한|"
     r"(?:성적표|개인[ \t]*정보)[ \t]*없이|요약|정리)"
+)
+_PENDING_RETRY = re.compile(
+    r"^[ \t]*(?:(?:다|전부|모두|전체)[ \t]*)?(?:과목명|과목|그거)?[ \t]*"
+    r"(?:(?:다|전부|모두|전체)[ \t]*)?(?:출력|보여|알려|정리)"
+    r"(?:해)?[ \t]*(?:달라고|줘|주세요)?[.!?？]?[ \t]*$"
+)
+_LIST_REQUEST = re.compile(
+    r"(?:(?:모든|전체|전부|모두|다)[ \t]*(?:과목|강의|수업|과목명)|"
+    r"(?:과목|강의|수업|과목명).{0,30}(?:모든|전체|전부|모두|다|빠짐없이|몽땅)"
+    r"[ \t]*(?:보여|알려|출력|정리|목록)|"
+    r"(?:과목|강의|수업|과목명)(?:은|는|이|가|을|를|들)?[ \t]*(?:목록|명단)|"
+    r"(?:과목|강의|수업)(?:들이|들은|을|를)?[ \t]*(?:뭐|무엇|어떤)|"
+    r"(?:과목|강의|수업)(?:은|는|이|가|을|를|들)?(?:명)?[ \t]*(?:한[ \t]*번에[ \t]*)?정리)"
+)
+_SOCIAL_TURN = re.compile(
+    r"^[ \t]*(?:안녕(?:하세요)?|반가워|고마워|감사(?:합니다|해요)?|"
+    r"설명[ \t]*잘[ \t]*들었어|도움(?:이)?[ \t]*됐어|"
+    r"(?:그럼[ \t]*)?(?:다음에는|이어서).{0,12}(?:뭘|무엇을).{0,8}"
+    r"(?:물어|질문).{0,8})[.!?~ ]*$"
 )
 _EXPLICIT_TOPIC_REDIRECT = re.compile(r"(?:말고|대신|이번에는|주제를[ \t]*바꿔)")
 _CURRICULUM_SCOPE_QUESTION = re.compile(
@@ -81,13 +105,26 @@ _GENERIC_REQUIREMENT_FOLLOWUP = re.compile(
     r"(?:성적표|개인[ \t]*(?:정보|이력))[ \t]*없이.{0,24}(?:일반|공통)[ \t]*(?:기준|요건|규정))"
 )
 _COURSE_ASPECT = re.compile(
-    r"(?:학수번호|과목[ \t]*코드|학점|이수구분|학년|학기|언제|개설|과목[ \t]*정보)"
+    r"(?:학수번호|과목[ \t]*코드|이수구분|학년|학기|언제|개설|과목[ \t]*정보|"
+    r"담당[ \t]*교수|교수님|강의실)"
 )
 _MULTI_TOPIC_SUMMARY = re.compile(
     r"(?:지금까지|앞서|이전).{0,24}(?:정리|요약|구분)|"
     r"(?:정보|내용|사실).{0,16}(?:구분|정리|요약)|(?:정리|요약)해[ \t]*줘"
 )
-_CREDIT_CALCULATION = re.compile(r"(?:부족|모자라|남은|얼마나[ \t]*남|계산|절반|충족)")
+_CREDIT_CALCULATION = re.compile(
+    r"(?:얼마나[ \t]*(?:부족|모자라|남)|몇[ \t]*학점.{0,12}(?:부족|남)|"
+    r"(?:영역별|졸업까지).{0,16}(?:부족|남)|남은[ \t]*(?:학점|요건)|"
+    r"다시[ \t]*계산|절반)"
+)
+_ELIGIBILITY_REQUEST = re.compile(
+    r"(?:가능|인정|대체|선수[ \t]*과목|들을[ \t]*수|받을[ \t]*수|"
+    r"졸업할[ \t]*수|채울[ \t]*수|해야[ \t]*(?:해|돼|하나|하는)|"
+    r"(?:들어|이수해)야[ \t]*(?:해|돼|하나|하는)|"
+    r"않아도[ \t]*(?:돼|되|괜찮)|문제[ \t]*없|되는[ \t]*거|되는지|"
+    r"문제(?:야|인가|있|되)|졸업[ \t]*(?:못|안)|처리되는|줄어드는|뜻이야|"
+    r"둘[ \t]*다|하나만[ \t]*충족)"
+)
 _MORE_REQUIRED_COURSES = re.compile(
     r"(?:더|추가로|앞으로|남은).{0,28}(?:전공[ \t]*)?필수[ \t]*과목|"
     r"(?:전공[ \t]*)?필수[ \t]*과목.{0,20}(?:더|추가|남)"
@@ -155,9 +192,9 @@ _FORBIDDEN_NARRATIVE = re.compile(
 )
 _TOOL_DETAIL = {
     ToolName.READ_USER_PROFILE: "브라우저가 제공한 구조화 프로필을 확인했습니다.",
-    ToolName.RESOLVE_COURSE: "대화에서 언급한 과목 identity를 검증했습니다.",
-    ToolName.QUERY_CURRICULUM: "승인된 읽기 전용 KG 질의 경로를 실행했습니다.",
-    ToolName.CALCULATE_REMAINING_CREDITS: "검증된 기준과 사용자 진술을 분리해 계산했습니다.",
+    ToolName.RESOLVE_COURSE: "대화에서 언급한 과목을 교육과정의 등록 과목과 대조했습니다.",
+    ToolName.QUERY_CURRICULUM: "승인된 읽기 전용 교육과정 조회를 실행했습니다.",
+    ToolName.CALCULATE_REMAINING_CREDITS: "교육과정 기준과 입력한 학점을 구분해 계산했습니다.",
     ToolName.ASK_CLARIFICATION: "답변에 필요한 최소 정보를 확인했습니다.",
     ToolName.ASSESS_EVIDENCE: "확보한 근거를 평가하고 다음 탐색 필요 여부를 결정했습니다.",
     ToolName.GROUNDED_NARRATIVE: "검증된 사실 문장을 유지하며 대화형 표현을 구성했습니다.",
@@ -311,11 +348,22 @@ class AgenticCurriculumChatService:
             if extraction is not None and not extraction.conflicts
             else current_profile
         )
+        restored_question = self._restore_pending_question(question, conversation)
+        requested_items = self._requested_items(
+            question
+            if conversation is not None and conversation.pending_request is not None
+            else restored_question or question,
+            message_profile,
+            conversation,
+        )
+        if restored_question is not None:
+            question = restored_question
         if (
             extraction is not None
             and extraction.changed_fields
             and not extraction.conflicts
             and self.service._is_profile_statement_only(question)
+            and not requested_items
         ):
             self._record(
                 trace,
@@ -331,8 +379,7 @@ class AgenticCurriculumChatService:
                 )
             )
             message = (
-                f"제공한 사용자 정보({labels})를 현재 브라우저 프로필에 반영했습니다. "
-                "이 정보는 학교 규정 근거와 구분되며 다음 질문에서만 참고합니다."
+                f"알겠습니다. 입력한 {labels} 정보는 이어지는 학사 질문에 반영할게요."
             )
             personalized = PersonalizedChatResult(
                 response=ChatResponse.unresolved(str(uuid.uuid4())),
@@ -367,6 +414,108 @@ class AgenticCurriculumChatService:
                 recent_course_codes=self._course_codes(
                     conversation, empty_plan, personalized
                 ),
+            )
+        if requested_items and all(
+            item.action is RequestAction.SOCIAL for item in requested_items
+        ):
+            default_scope = self._default_scope()
+            academic_year = default_scope.get("academic_year")
+            department_name = "컴퓨터공학과"
+            planner = self._query_planner()
+            planner_context = getattr(planner, "context", None)
+            if isinstance(planner_context, Mapping):
+                department_id = default_scope.get("department_id")
+                for department in planner_context.get("departments", ()):
+                    if (
+                        isinstance(department, Mapping)
+                        and department.get("department_id") == department_id
+                        and isinstance(department.get("name_ko"), str)
+                    ):
+                        department_name = department["name_ko"]
+                        break
+            scope_label = (
+                f"{academic_year}학년도 공통 교양과 {department_name} 교육과정"
+                if isinstance(academic_year, int)
+                else f"공통 교양과 {department_name} 교육과정"
+            )
+            message = (
+                f"안녕하세요! {scope_label}에 관해 궁금한 점을 편하게 물어보세요."
+                if re.search(r"안녕|반가워", question)
+                else (
+                    "교양 이수요건, 컴퓨터공학과 과목 목록, 과목별 학년·학기나 "
+                    "학수번호 등을 이어서 물어볼 수 있어요."
+                    if re.search(r"(?:뭘|무엇을).{0,8}(?:물어|질문)", question)
+                    else "도움이 되었다니 다행입니다. 이어서 궁금한 학사규정이나 과목을 물어보세요."
+                )
+            )
+            personalized = PersonalizedChatResult(
+                ChatResponse.unresolved(str(uuid.uuid4())),
+                DecisionOutcome(OutcomeStatus.ADVISORY, message),
+                message_profile,
+                extraction.changed_fields if extraction is not None else (),
+            )
+            fulfilled = tuple(
+                item.with_status(RequestedItemStatus.ANSWERED) for item in requested_items
+            )
+            return AgentChatResult(
+                personalized=personalized,
+                conversation_id=(
+                    conversation.conversation_id if conversation else "conversation:single"
+                ),
+                turn_id=conversation.turn_id if conversation else "turn:single",
+                display_answer=message,
+                trace=tuple(trace),
+                summary=self._summary(
+                    conversation,
+                    conversation.current_topic if conversation else None,
+                    personalized,
+                ),
+                current_topic=conversation.current_topic if conversation else None,
+                recent_course_codes=(
+                    conversation.recent_course_codes if conversation else ()
+                ),
+                requested_items=fulfilled,
+                fulfillment_status=TurnFulfillmentStatus.COMPLETE,
+            )
+        if self._is_ambiguous_short(question, conversation):
+            message = (
+                "어떤 내용을 확인하고 싶은지 조금만 더 알려 주세요. 예를 들어 "
+                "과목명, 학수번호, 개설 학년·학기 또는 이수요건을 함께 말해 주면 "
+                "관련 근거를 찾아볼게요."
+            )
+            personalized = PersonalizedChatResult(
+                ChatResponse.clarification_required(str(uuid.uuid4()), message),
+                DecisionOutcome(
+                    OutcomeStatus.NEEDS_USER_INFO,
+                    message,
+                    required_user_fields=("question_detail",),
+                ),
+                message_profile,
+                extraction.changed_fields if extraction is not None else (),
+            )
+            fulfilled_items, fulfillment_status, pending_request = self._fulfillment(
+                requested_items, personalized
+            )
+            return AgentChatResult(
+                personalized=personalized,
+                conversation_id=(
+                    conversation.conversation_id if conversation else "conversation:single"
+                ),
+                turn_id=conversation.turn_id if conversation else "turn:single",
+                display_answer=message,
+                trace=tuple(trace),
+                summary=self._summary(
+                    conversation,
+                    conversation.current_topic if conversation else None,
+                    personalized,
+                ),
+                current_topic=conversation.current_topic if conversation else None,
+                recent_course_codes=(
+                    conversation.recent_course_codes if conversation else ()
+                ),
+                requested_items=fulfilled_items,
+                fulfillment_status=fulfillment_status,
+                pending_request=pending_request,
             )
         # Profile completeness and service-scope gates must be evaluated against the
         # user's actual turn before an LLM is allowed to rewrite it into a narrower
@@ -420,6 +569,9 @@ class AgenticCurriculumChatService:
                 tuple(item.tool for item in trace),
                 conversation.current_topic if conversation else None,
             )
+            fulfilled_items, fulfillment_status, pending_request = self._fulfillment(
+                requested_items, personalized
+            )
             return AgentChatResult(
                 personalized=personalized,
                 conversation_id=(
@@ -439,6 +591,9 @@ class AgenticCurriculumChatService:
                 recent_course_codes=self._course_codes(
                     conversation, direct_plan, personalized
                 ),
+                requested_items=fulfilled_items,
+                fulfillment_status=fulfillment_status,
+                pending_request=pending_request,
             )
         if _SERVICE_SCOPE_QUESTION.search(question):
             self._record(
@@ -591,6 +746,7 @@ class AgenticCurriculumChatService:
         profile_statement = bool(
             personalized.changed_profile_fields
             and self.service._is_profile_statement_only(question)
+            and not requested_items
         )
         if profile_statement:
             labels = ", ".join(
@@ -603,8 +759,7 @@ class AgenticCurriculumChatService:
                 response=ChatResponse.unresolved(personalized.response.request_id),
                 outcome=DecisionOutcome(
                     OutcomeStatus.ADVISORY,
-                    f"제공한 사용자 정보({labels})를 현재 브라우저 프로필에 반영했습니다. "
-                    "이 정보는 학교 규정 근거와 구분되며 다음 질문에서만 참고합니다.",
+                    f"알겠습니다. 입력한 {labels} 정보는 이어지는 학사 질문에 반영할게요.",
                     used_profile_fields=personalized.changed_profile_fields,
                 ),
                 profile=personalized.profile,
@@ -675,6 +830,14 @@ class AgenticCurriculumChatService:
         for item in self._fact_family_subquestions(question):
             if item != plan.question and item not in subquestions:
                 subquestions.append(item)
+        if any(
+            item.action is RequestAction.LOOKUP_REQUIREMENT
+            for item in requested_items
+        ) and re.search(r"졸업[ \t]*(?:요건|기준|학점)", question):
+            for category in ("total", "general", "major"):
+                requirement_question = _CREDIT_REQUIREMENT_QUERIES[category]
+                if requirement_question != plan.question and requirement_question not in subquestions:
+                    subquestions.append(requirement_question)
         if (
             not profile_statement
             and _MORE_REQUIRED_COURSES.search(question)
@@ -828,7 +991,7 @@ class AgenticCurriculumChatService:
                         item.response.status is ChatStatus.ANSWERABLE
                         for item in calculation_results
                     )
-                    and "사용자 진술" in message
+                    and "현재 입력한" in message
                     and "학점이 남습니다" in message
                 )
                 calculation_resolves_outcome = bool(
@@ -864,7 +1027,7 @@ class AgenticCurriculumChatService:
         ):
             limitation = (
                 "질문의 교육과정 부분은 검증된 근거로 답했지만, 실시간 개설·잔여석·"
-                "시간표 정보는 현재 PDF와 Verified KG에 없습니다."
+                "시간표 정보는 현재 확인 가능한 교육과정 자료에 없습니다."
                 if _ACADEMIC_LIVE_CONTRAST.search(question)
                 else "질문의 교육과정 부분은 검증된 근거로 답했지만, 함께 요청한 다른 "
                 "주제는 현재 2026 교육과정 데이터 범위 밖입니다."
@@ -911,6 +1074,28 @@ class AgenticCurriculumChatService:
                 {"missing_fields": list(personalized.outcome.required_user_fields)},
             )
             self._record(trace, trace_callback, ToolName.ASK_CLARIFICATION, "COMPLETED", 0)
+        fulfilled_items, fulfillment_status, pending_request = self._fulfillment(
+            requested_items, personalized
+        )
+        if (
+            fulfillment_status is not TurnFulfillmentStatus.COMPLETE
+            and personalized.response.status is ChatStatus.ANSWERABLE
+        ):
+            limitation = self._fulfillment_limitation(fulfilled_items)
+            personalized = PersonalizedChatResult(
+                personalized.response,
+                DecisionOutcome(
+                    OutcomeStatus.INSUFFICIENT_EVIDENCE,
+                    "\n\n".join((personalized.outcome.message, limitation)),
+                    required_user_fields=personalized.outcome.required_user_fields,
+                    used_profile_fields=personalized.outcome.used_profile_fields,
+                    limitations=tuple(
+                        dict.fromkeys((*personalized.outcome.limitations, limitation))
+                    ),
+                ),
+                personalized.profile,
+                personalized.changed_profile_fields,
+            )
         narrative_started = perf_counter()
         display, narrative_metadata = self._narrative(
             question,
@@ -945,6 +1130,360 @@ class AgenticCurriculumChatService:
             summary=summary,
             current_topic=plan.topic or (conversation.current_topic if conversation else None),
             recent_course_codes=codes,
+            requested_items=fulfilled_items,
+            fulfillment_status=fulfillment_status,
+            pending_request=pending_request,
+        )
+
+    def _requested_items(
+        self,
+        question: str,
+        profile: UserProfile,
+        conversation: ConversationContext | None,
+    ) -> tuple[RequestedItem, ...]:
+        """Extract answer tasks independently from profile side effects.
+
+        The model still plans the retrieval.  This bounded semantic layer only says
+        which user-visible jobs must be accounted for before the turn may finish.
+        It carries no answer values, Evidence IDs, or question fixtures.
+        """
+
+        if (
+            conversation is not None
+            and conversation.pending_request is not None
+            and _PENDING_RETRY.fullmatch(question.strip())
+        ):
+            return tuple(
+                RequestedItem(
+                    f"item:{index}",
+                    item.action,
+                    dict(item.filters),
+                    item.scope,
+                    item.group_by,
+                    item.display_fields,
+                )
+                for index, item in enumerate(conversation.pending_request.items, start=1)
+            )
+        if _SOCIAL_TURN.fullmatch(question.strip()):
+            return (
+                RequestedItem(
+                    "item:1", RequestAction.SOCIAL, {}, "FILTERED", (), ()
+                ),
+            )
+        if self._is_ambiguous_short(question, conversation):
+            return (
+                RequestedItem(
+                    "item:1", RequestAction.OTHER, {}, "FILTERED", (), ()
+                ),
+            )
+        profile_statement_only = getattr(
+            self.service, "_is_profile_statement_only", None
+        )
+        if callable(profile_statement_only) and profile_statement_only(question):
+            return ()
+
+        default = self._default_scope()
+        year = profile.curriculum_year or profile.admission_year or default.get("academic_year")
+        department_id = profile.department_id or default.get("department_id")
+        filters = {
+            key: value
+            for key, value in {
+                "academic_year": year,
+                "department_id": department_id,
+            }.items()
+            if value is not None
+        }
+        actions: list[tuple[RequestAction, str, tuple[str, ...], tuple[str, ...]]] = []
+        if _LIST_REQUEST.search(question):
+            planner = self._query_planner()
+            deterministic_list = getattr(planner, "_deterministic_course_list_plan", None)
+            if callable(deterministic_list):
+                plan = deterministic_list(question)
+                if plan is not None:
+                    filters = dict(plan.filters)
+            actions.append(
+                (
+                    RequestAction.LIST_COURSES,
+                    "ALL"
+                    if re.search(r"(?:모든|전체|전부|모두|다|빠짐없이|몽땅)", question)
+                    else "FILTERED",
+                    ("completion_type",),
+                    ("course_name",),
+                )
+            )
+        eligibility_request = bool(_ELIGIBILITY_REQUEST.search(question))
+        if re.search(
+            r"(?:추천|다음[ \t]*(?:학기)?에?.{0,12}(?:듣|수강)|"
+            r"(?:다음[ \t]*(?:학기)?에?[ \t]*)?(?:뭘|무엇을)[ \t]*(?:듣|수강))",
+            question,
+        ):
+            actions.append((RequestAction.RECOMMEND_COURSES, "FILTERED", (), ()))
+        if eligibility_request:
+            actions.append((RequestAction.CHECK_ELIGIBILITY, "FILTERED", (), ()))
+        if (
+            _CREDIT_CALCULATION.search(question)
+            and re.search(r"(?:졸업|학점|이수|요건)", question)
+            and not eligibility_request
+        ):
+            actions.append((RequestAction.CALCULATE_REMAINING, "FILTERED", (), ()))
+        explicit_requirement = bool(
+            re.search(r"(?:요건|기준|규정)", question)
+            and re.search(r"(?:확인|알려|뭐|무엇|어떤|얼마|필요)", question)
+        )
+        if _REQUIREMENT_TOPIC.search(question) and (
+            explicit_requirement
+            or (
+                not actions
+                and re.search(r"(?:요건|기준|규정|졸업|면제|대체)", question)
+            )
+        ):
+            actions.append((RequestAction.LOOKUP_REQUIREMENT, "FILTERED", (), ()))
+        if (
+            not actions
+            and (
+                self.service.course_resolver.find_mentions(question)
+                or _COURSE_ASPECT.search(question)
+            )
+        ):
+            actions.append((RequestAction.LOOKUP_COURSE, "FILTERED", (), ()))
+        if (
+            not actions
+            and _ACADEMIC_CLAUSE.search(question)
+            and not (
+                callable(profile_statement_only) and profile_statement_only(question)
+            )
+        ):
+            actions.append((RequestAction.OTHER, "FILTERED", (), ()))
+        return tuple(
+            RequestedItem(
+                f"item:{index}",
+                action,
+                filters,
+                scope,
+                group_by,
+                display_fields,
+            )
+            for index, (action, scope, group_by, display_fields) in enumerate(
+                dict.fromkeys(actions), start=1
+            )
+        )
+
+    def _default_scope(self) -> Mapping[str, Any]:
+        planner = self._query_planner()
+        context = getattr(planner, "context", None)
+        default = context.get("default_scope") if isinstance(context, Mapping) else None
+        return default if isinstance(default, Mapping) else {}
+
+    def _is_ambiguous_short(
+        self, question: str, conversation: ConversationContext | None
+    ) -> bool:
+        normalized = re.sub(r"[\s.!?？~]", "", question)
+        if not normalized or len(normalized) > 8:
+            return False
+        if (
+            _SOCIAL_TURN.fullmatch(question.strip())
+            or _ACADEMIC_CLAUSE.search(question)
+            or _COURSE_ASPECT.search(question)
+            or _ELLIPTICAL_FOLLOWUP.search(question)
+            or _MULTI_TOPIC_SUMMARY.search(question)
+        ):
+            return False
+        if self.service.course_resolver.find_mentions(question):
+            return False
+        if (
+            conversation is not None
+            and conversation.recent_course_codes
+            and _REFERENCE.search(question)
+        ):
+            return False
+        return True
+
+    def _query_planner(self) -> Any:
+        """Resolve the one existing planner without creating a parallel pipeline."""
+
+        current: Any = self.service
+        for attribute in ("service", "query_service"):
+            current = getattr(current, attribute, None)
+            if current is None:
+                return None
+        return getattr(current, "planner", None)
+
+    def _restore_pending_question(
+        self, question: str, conversation: ConversationContext | None
+    ) -> str | None:
+        if (
+            conversation is None
+            or not _PENDING_RETRY.fullmatch(question.strip())
+        ):
+            return None
+        if conversation.pending_request is None:
+            # A user may repeat an already fulfilled list request for emphasis. Use
+            # only their prior message—not the assistant answer—as dialogue context.
+            for message in reversed(conversation.recent_messages):
+                if message.role.value == "user" and _LIST_REQUEST.search(message.content):
+                    return message.content
+            return None
+        if len(conversation.pending_request.items) != 1:
+            return None
+        item = conversation.pending_request.items[0]
+        if item.action is not RequestAction.LIST_COURSES:
+            return None
+        filters = item.filters
+        pieces: list[str] = []
+        year = filters.get("academic_year")
+        if isinstance(year, int):
+            pieces.append(f"{year}학년도")
+        department_id = filters.get("department_id")
+        planner = self._query_planner()
+        context = getattr(planner, "context", None)
+        if isinstance(context, Mapping):
+            for department in context.get("departments", ()):
+                if (
+                    isinstance(department, Mapping)
+                    and department.get("department_id") == department_id
+                    and isinstance(department.get("name_ko"), str)
+                ):
+                    pieces.append(department["name_ko"])
+                    break
+        completion_type = filters.get("completion_type")
+        if isinstance(completion_type, str):
+            pieces.append(ENUM_KO.get(completion_type, completion_type))
+        pieces.append("과목의 모든 과목명을 이수구분별로 보여 주세요")
+        return " ".join(pieces)
+
+    def _fulfillment(
+        self,
+        requested_items: tuple[RequestedItem, ...],
+        result: PersonalizedChatResult,
+    ) -> tuple[tuple[RequestedItem, ...], TurnFulfillmentStatus, PendingRequest | None]:
+        if not requested_items:
+            return (), TurnFulfillmentStatus.COMPLETE, None
+        outcome_map = {
+            OutcomeStatus.ANSWERED: RequestedItemStatus.ANSWERED,
+            OutcomeStatus.ADVISORY: RequestedItemStatus.ANSWERED,
+            OutcomeStatus.NEEDS_USER_INFO: RequestedItemStatus.NEEDS_USER_INFO,
+            OutcomeStatus.INSUFFICIENT_EVIDENCE: RequestedItemStatus.INSUFFICIENT_EVIDENCE,
+            OutcomeStatus.OUT_OF_SCOPE: RequestedItemStatus.OUT_OF_SCOPE,
+        }
+        default_status = outcome_map[result.outcome.status]
+        claim_types = {claim.claim_type for claim in result.response.grounded_claims}
+        observed_courses = {
+            course.entity_id
+            for claim in result.response.grounded_claims
+            if claim.claim_type is ClaimType.COURSE_LIST
+            and isinstance(claim.value, tuple)
+            for course in claim.value
+        }
+        fulfilled_items: list[RequestedItem] = []
+        for item in requested_items:
+            status = default_status
+            reason = None if status is RequestedItemStatus.ANSWERED else status.value
+            structurally_answered = {
+                RequestAction.LIST_COURSES: ClaimType.COURSE_LIST in claim_types,
+                RequestAction.LOOKUP_COURSE: bool(
+                    claim_types & {ClaimType.FIELD_VALUE, ClaimType.COURSE_LIST}
+                ),
+                RequestAction.LOOKUP_REQUIREMENT: bool(
+                    claim_types
+                    & {
+                        ClaimType.NUMERIC_REQUIREMENT,
+                        ClaimType.BOOLEAN_POLICY,
+                        ClaimType.VERIFIED_RULE_TEXT,
+                    }
+                ),
+                RequestAction.CALCULATE_REMAINING: bool(
+                    claim_types & {ClaimType.NUMERIC_REQUIREMENT, ClaimType.AGGREGATE}
+                )
+                and bool(
+                    re.search(
+                        r"(?:학점이 남습니다|학점 부족|약[ \t]*\d+(?:\.\d+)?%)",
+                        result.outcome.message,
+                    )
+                ),
+                RequestAction.RECOMMEND_COURSES: bool(
+                    result.outcome.status is OutcomeStatus.ADVISORY
+                    or claim_types
+                    & {ClaimType.COURSE_LIST, ClaimType.RECOMMENDATION_LIST}
+                ),
+                RequestAction.SOCIAL: result.outcome.status is OutcomeStatus.ADVISORY,
+            }.get(item.action)
+            if (
+                structurally_answered is True
+                and status is RequestedItemStatus.ANSWERED
+            ):
+                status = RequestedItemStatus.ANSWERED
+                reason = None
+            elif structurally_answered is False and status is RequestedItemStatus.ANSWERED:
+                status = RequestedItemStatus.INSUFFICIENT_EVIDENCE
+                reason = "REQUEST_ITEM_NOT_GROUNDED"
+            if (
+                status is RequestedItemStatus.ANSWERED
+                and item.action is RequestAction.LIST_COURSES
+                and item.scope == "ALL"
+            ):
+                expected_count = getattr(
+                    self.service, "expected_unique_course_count", None
+                )
+                expected = (
+                    expected_count(item.filters)
+                    if callable(expected_count)
+                    else len(observed_courses)
+                )
+                if expected and len(observed_courses) < expected:
+                    status = RequestedItemStatus.INSUFFICIENT_EVIDENCE
+                    reason = "INCOMPLETE_RESULT"
+            fulfilled_items.append(item.with_status(status, reason))
+        fulfilled = tuple(fulfilled_items)
+        answered = sum(item.status is RequestedItemStatus.ANSWERED for item in fulfilled)
+        if answered == len(fulfilled):
+            overall = TurnFulfillmentStatus.COMPLETE
+            pending = None
+        elif answered:
+            overall = TurnFulfillmentStatus.PARTIAL
+            pending = PendingRequest(
+                tuple(item for item in fulfilled if item.status is not RequestedItemStatus.ANSWERED)
+            )
+        else:
+            terminal = all(
+                item.status is RequestedItemStatus.OUT_OF_SCOPE for item in fulfilled
+            )
+            overall = (
+                TurnFulfillmentStatus.COMPLETE
+                if terminal
+                else TurnFulfillmentStatus.UNRESOLVED
+            )
+            pending = None if terminal else PendingRequest(fulfilled)
+        return fulfilled, overall, pending
+
+    @staticmethod
+    def _fulfillment_limitation(items: tuple[RequestedItem, ...]) -> str:
+        unresolved = [
+            item for item in items if item.status is not RequestedItemStatus.ANSWERED
+        ]
+        if any(
+            item.action is RequestAction.LIST_COURSES
+            and item.reason_code == "INCOMPLETE_RESULT"
+            for item in unresolved
+        ):
+            return (
+                "요청한 전체 목록 중 검증된 근거로 확인되지 않은 항목이 있어, "
+                "현재 표시한 목록만으로 전체 범위를 충족했다고 확정하지 않았습니다."
+            )
+        labels = {
+            RequestAction.LIST_COURSES: "과목 목록",
+            RequestAction.LOOKUP_COURSE: "과목 정보",
+            RequestAction.LOOKUP_REQUIREMENT: "학사요건",
+            RequestAction.CHECK_ELIGIBILITY: "가능 여부",
+            RequestAction.CALCULATE_REMAINING: "잔여 학점 계산",
+            RequestAction.RECOMMEND_COURSES: "과목 추천",
+            RequestAction.OTHER: "추가 요청",
+        }
+        subjects = list(
+            dict.fromkeys(labels.get(item.action, "추가 요청") for item in unresolved)
+        )
+        return (
+            f"함께 요청한 {', '.join(subjects)} 부분은 이번 조회에서 직접 근거를 "
+            "확보하지 못했습니다. 확인된 내용과 미확인 부분을 구분해 안내합니다."
         )
 
     def _run_result_driven_loop(
@@ -1714,6 +2253,13 @@ class AgenticCurriculumChatService:
             and item.outcome.status
             in {OutcomeStatus.INSUFFICIENT_EVIDENCE, OutcomeStatus.OUT_OF_SCOPE}
         ]
+        # The original compound wording may not map to one registered fact family,
+        # while each independently decomposed family is fully grounded.  Once every
+        # data-declared family requested by the turn produced an approved result,
+        # the generic scaffold miss is not an unanswered user task.
+        requested_families = self._fact_family_subquestions(question)
+        if requested_families and len(answerable) >= len(requested_families):
+            ungrounded = []
         if len(answerable) == 1:
             single = answerable[0]
             if not ungrounded:
@@ -1913,6 +2459,69 @@ class AgenticCurriculumChatService:
                 "canonical_fallback_sections": 0,
                 "repair_attempts": 0,
             }
+        large_course_lists = [
+            claim
+            for source in approved
+            for claim in source.response.grounded_claims
+            if claim.claim_type is ClaimType.COURSE_LIST
+            and isinstance(claim.value, tuple)
+            and len(claim.value) > 20
+        ]
+        if large_course_lists:
+            # The complete, Evidence-backed list is already rendered
+            # deterministically.  Sending hundreds of row-shaped Claim items back
+            # through the model adds no grounding and can exhaust the context or
+            # browser timeout.  The model receives only bounded aggregate context
+            # for optional discourse around the untouched verified list.
+            intro = closing = ""
+            unique_courses = len(
+                {
+                    item.entity_id
+                    for claim in large_course_lists
+                    for item in claim.value
+                }
+            )
+            area_count = len(
+                {
+                    item.area_name
+                    for claim in large_course_lists
+                    for item in claim.value
+                    if item.area_name
+                }
+            )
+            try:
+                payload = self.client.generate_json(
+                    system_prompt=(
+                        "검증된 전체 목록은 Python이 그대로 표시한다. 목록을 다시 쓰거나 "
+                        "과목명·숫자·학교 규정을 만들지 말고, 사실이 없는 짧은 한국어 "
+                        "intro와 closing만 반환한다. sections는 빈 배열로 반환한다."
+                    ),
+                    user_prompt=json.dumps(
+                        {
+                            "request_kind": "verified_complete_course_list",
+                            "verified_group_count": area_count,
+                            "verified_unique_course_count": unique_courses,
+                        },
+                        ensure_ascii=False,
+                    ),
+                    response_schema=_FACT_PACKET_NARRATIVE_SCHEMA,
+                ).payload
+                intro = self._safe_discourse(
+                    payload.get("intro"), canonical, max_length=120
+                )
+                closing = self._safe_discourse(
+                    payload.get("closing"), canonical, max_length=160
+                )
+            except (LLMResponseError, ValueError, TypeError):
+                pass
+            return " ".join(item for item in (intro, canonical, closing) if item).strip(), {
+                "packet_count": len(approved),
+                "rewritten_sections": 0,
+                "canonical_fallback_sections": len(approved),
+                "repair_attempts": 0,
+                "large_list_compacted": True,
+                "large_list_unique_courses": unique_courses,
+            }
         packets = [
             {
                 "packet_id": f"fact:{index}",
@@ -2103,10 +2712,12 @@ class AgenticCurriculumChatService:
             or not response._is_approved()
         ):
             return ""
-        draft = " ".join(value.split()).strip()
-        source = " ".join(response.answer_text.split()).strip()
+        display_draft = value.strip()
+        display_source = response.answer_text.strip()
+        draft = " ".join(display_draft.split()).strip()
+        source = " ".join(display_source.split()).strip()
         if not draft or not source or len(draft) > 5000 or draft == source:
-            return source if draft == source else ""
+            return display_source if draft == source else ""
         if len(draft) < max(8, int(len(source) * 0.55)) or len(draft) > len(source) * 1.65:
             return ""
         if _FORBIDDEN_NARRATIVE.search(draft) or any(ord(char) < 32 for char in draft):
@@ -2116,7 +2727,11 @@ class AgenticCurriculumChatService:
             claims, expanded=expanded
         ):
             return ""
-        if Counter(_FACT_NUMBER.findall(draft)) != Counter(_FACT_NUMBER.findall(source)):
+        # A readable grouped list may state its count in both a group heading and a
+        # final total, while a natural rewrite states the same approved value once.
+        # Compare the closed set of numeric facts here; the per-Claim role checks
+        # below still require every approved count, credit and grade in its role.
+        if set(_FACT_NUMBER.findall(draft)) != set(_FACT_NUMBER.findall(source)):
             return ""
         if Counter(_COURSE_CODE.findall(draft)) != Counter(_COURSE_CODE.findall(source)):
             return ""
@@ -2140,13 +2755,13 @@ class AgenticCurriculumChatService:
             for claim in claims
         ):
             return ""
-        return draft
+        return display_draft
 
     @staticmethod
     def _rewritable_claims(
         claims: tuple[GroundedClaim, ...], *, expanded: bool = False
     ) -> bool:
-        max_claims = 12 if expanded else 3
+        max_claims = 16 if expanded else 4
         if not claims or len(claims) > max_claims:
             return False
         kinds = {claim.claim_type for claim in claims}
@@ -2173,7 +2788,7 @@ class AgenticCurriculumChatService:
             )
         return kinds == {ClaimType.AGGREGATE} and {
             claim.field for claim in claims
-        } <= {"fact_count", "credits_sum"}
+        } <= {"fact_count", "unique_course_count", "credits_sum"}
 
     @staticmethod
     def _claim_role_is_preserved(claim: GroundedClaim, draft: str) -> bool:
@@ -2194,7 +2809,7 @@ class AgenticCurriculumChatService:
             return isinstance(label, str) and label in draft
         if claim.field in {"credits", "credits_sum"} or claim.unit == "CREDIT":
             return re.search(rf"(?<!\d){re.escape(str(value))}\s*학점", draft) is not None
-        if claim.field == "fact_count" or claim.unit == "COURSE":
+        if claim.field in {"fact_count", "unique_course_count"} or claim.unit == "COURSE":
             return re.search(
                 rf"(?<!\d){re.escape(str(value))}\s*(?:개|과목)", draft
             ) is not None

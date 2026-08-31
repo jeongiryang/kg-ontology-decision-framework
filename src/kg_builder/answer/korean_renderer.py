@@ -293,8 +293,8 @@ class KoreanAnswerRenderer:
             # ordinary offering lists therefore remain unchanged.
             if item.course_code:
                 details.append(item.course_code)
-            if item.completion_type and scope is None:
-                details.append(ENUM_KO.get(item.completion_type, item.completion_type))
+            # Every list item is rendered under its completion-type heading below;
+            # repeating the same value in parentheses makes long lists unreadable.
             if item.grade_year not in (None, (), []) and scope is None:
                 years = (
                     item.grade_year
@@ -319,11 +319,33 @@ class KoreanAnswerRenderer:
                 else item.display_name
             )
 
-        course_text = ", ".join(item_text(item) for item in items)
-        result = f"{label} 과목은 {course_text}로 총 {aggregates['fact_count'].value}과목"
+        unique_items = list({item.entity_id: item for item in items}.values())
+        group_by_area = any(item.area_name for item in unique_items)
+        groups: dict[str, list] = {}
+        for item in unique_items:
+            group = (
+                item.area_name
+                if group_by_area and item.area_name
+                else ENUM_KO.get(item.completion_type, item.completion_type or label)
+            )
+            groups.setdefault(group, []).append(item)
+        lines = [
+            "조회한 과목을 영역별로 정리했습니다."
+            if group_by_area
+            else "조회한 과목을 이수구분별로 정리했습니다."
+        ]
+        for group, group_items in groups.items():
+            lines.extend(("", f"{group} ({len(group_items)}과목)"))
+            lines.extend(f"- {item_text(item)}" for item in group_items)
+        course_count = aggregates.get("unique_course_count", aggregates["fact_count"])
+        total = f"총 {course_count.value}과목입니다."
         if "credits_sum" in aggregates:
-            result += f"이며 합계 {aggregates['credits_sum'].value}학점"
-        return result + "입니다."
+            total = (
+                f"총 {course_count.value}과목, "
+                f"{aggregates['credits_sum'].value}학점입니다."
+            )
+        lines.extend(("", total))
+        return "\n".join(lines)
 
     @staticmethod
     def _allocations(claims: Sequence[GroundedClaim]) -> str:

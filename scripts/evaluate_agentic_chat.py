@@ -34,6 +34,7 @@ def _empty_context() -> dict[str, Any]:
         "recent_course_codes": [],
         "recent_evidence_ids": [],
         "pending_clarification": None,
+        "pending_request": None,
     }
 
 
@@ -88,6 +89,10 @@ def _turn(
         (item for item in events if item.get("type") == "profile_update"),
         None,
     )
+    fulfillment = next(
+        (item for item in events if item.get("type") == "request_fulfillment"),
+        {"status": "MISSING_FULFILLMENT", "requested_items": []},
+    )
     wire = result["response"]
     trace = [item for item in events if item.get("type") == "agent_trace"]
     narrative = next(
@@ -117,6 +122,8 @@ def _turn(
             (item.get("message") for item in events if item.get("type") == "error"),
             None,
         ),
+        "fulfillment_status": fulfillment.get("status"),
+        "requested_items": fulfillment.get("requested_items", []),
         "recent_course_codes": list(update.get("recent_course_codes", []))
         if update
         else [],
@@ -158,6 +165,7 @@ def _turn(
         "recent_course_codes": update["recent_course_codes"],
         "recent_evidence_ids": update["evidence_ids"],
         "pending_clarification": update.get("pending_clarification"),
+        "pending_request": update.get("pending_request"),
     }
     return record, next_profile, next_context
 

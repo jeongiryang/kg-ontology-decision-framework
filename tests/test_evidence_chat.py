@@ -1005,6 +1005,13 @@ class StarletteRouteTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn("answer-again", markup)
         self.assertIn('id="composer-status"', markup)
         self.assertIn('id="jump-latest"', markup)
+        self.assertNotIn('id="examples"', markup)
+        self.assertNotIn("renderExamples", script)
+        server_text = (
+            Path(__file__).parents[1] / "src/evidence_chat/server.py"
+        ).read_text()
+        self.assertNotIn("EXAMPLE_QUESTIONS", server_text)
+        self.assertIn("remaining < 240", script)
         self.assertIn("finishConversationTurn", script)
         self.assertIn("renderAssistantDetails", script)
         self.assertIn("event.isComposing", script)
@@ -1024,6 +1031,10 @@ class StarletteRouteTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn("Cypher 및 지식그래프 탐색 정보 보기", markup)
         self.assertIn("resize: none", style)
         self.assertIn("overflow-y: hidden", style)
+        self.assertIn("width: min(1440px, 100%)", style)
+        self.assertIn("max-width: 75%", style)
+        self.assertIn("max-width: 62%", style)
+        self.assertIn("overflow: hidden", style)
         self.assertIn('const PROFILE_KEY = "evidence-chat-profile-v1"', script)
         self.assertIn("localStorage.getItem(PROFILE_KEY)", script)
         self.assertIn("localStorage.setItem(PROFILE_KEY", script)
@@ -1184,6 +1195,40 @@ class InspectionGraphProjectionTests(unittest.TestCase):
         self.assertNotIn(row["fact_id"], serialized)
         self.assertNotIn(row["evidence_id"], serialized)
         self.assertIn("relationship_ko", serialized)
+
+    def test_large_traversal_projection_retains_all_verified_rows_for_lazy_ui(self):
+        rows = []
+        pairs = []
+        for index in range(189):
+            row = _offering_row(index, page=17 + (index % 4))
+            row["area_name"] = f"영역 {(index % 4) + 1}"
+            rows.append(row)
+            pairs.append((row["fact_id"], row["evidence_id"]))
+        graph = build_traversal_projection(
+            [
+                {"order": 1, "start_label": "CurriculumVersion", "relationship_type": "HAS_OFFERING", "end_label": "CourseOffering"},
+                {"order": 2, "start_label": "CourseOffering", "relationship_type": "OF_COURSE", "end_label": "Course"},
+                {"order": 3, "start_label": "CourseOffering", "relationship_type": "IN_AREA", "end_label": "EducationArea"},
+                {"order": 4, "start_label": "CourseOffering", "relationship_type": "SUPPORTED_BY", "end_label": "Evidence"},
+            ],
+            {"academic_year": 2026},
+            rows,
+            pairs,
+            opaque_key=b"large-traversal-test-key",
+        )
+        self.assertIsNotNone(graph)
+        self.assertEqual(
+            len([node for node in graph["nodes"] if node["node_type"] == "CourseOffering"]),
+            189,
+        )
+        self.assertEqual(
+            {node.get("group_name") for node in graph["nodes"] if node["node_type"] == "CourseOffering"},
+            {"영역 1", "영역 2", "영역 3", "영역 4"},
+        )
+        self.assertEqual(
+            len([edge for edge in graph["edges"] if edge["relationship"] == "SUPPORTED_BY"]),
+            189,
+        )
 
     def test_profile_details_with_sensitive_markers_are_removed(self):
         collector = InspectionCollector(DETAIL_FULL)

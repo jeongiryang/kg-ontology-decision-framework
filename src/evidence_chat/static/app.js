@@ -16,7 +16,6 @@ const el = {
   question: $("question"),
   submit: $("submit"),
   composerStatus: $("composer-status"),
-  examples: $("examples"),
   askNotice: $("ask-notice"),
   profileForm: $("profile-form"),
   profileAdmissionYear: $("profile-admission-year"),
@@ -62,6 +61,7 @@ let lastResult = null;
 let clarificationPresentation = null;
 let latestOutcome = null;
 let latestConversationUpdate = null;
+let latestRequestFulfillment = null;
 let agentTraceEvents = [];
 let currentConversationId = null;
 let activeTurnId = null;
@@ -88,7 +88,7 @@ const span = (className, text) => {
 };
 
 const CONVERSATION_DB = "evidence-chat-conversations";
-const CONVERSATION_DB_VERSION = 2;
+const CONVERSATION_DB_VERSION = 3;
 const CONVERSATION_STORE = "conversations";
 const MESSAGE_STORE = "messages";
 const CURRENT_CONVERSATION_KEY = "evidence-chat-current-conversation-v1";
@@ -141,7 +141,7 @@ async function listConversations() {
   const rows = await dbRequest(CONVERSATION_STORE, "readonly", (store) => store.getAll());
   return Array.isArray(rows)
     ? rows
-      .filter((item) => item && [1, 2].includes(item.version) &&
+      .filter((item) => item && [1, 2, 3].includes(item.version) &&
         typeof item.conversation_id === "string")
       .sort((left, right) => String(right.updated_at).localeCompare(String(left.updated_at)))
     : [];
@@ -153,7 +153,7 @@ async function loadConversationMessages(conversationId) {
   );
   return Array.isArray(rows)
     ? rows
-      .filter((item) => item && [1, 2].includes(item.version) &&
+      .filter((item) => item && [1, 2, 3].includes(item.version) &&
         ["user", "assistant"].includes(item.role) && typeof item.content === "string")
       .sort((left, right) => String(left.created_at).localeCompare(String(right.created_at)))
     : [];
@@ -180,6 +180,7 @@ async function createConversation() {
     recent_course_codes: [],
     recent_evidence_ids: [],
     pending_clarification: null,
+    pending_request: null,
   };
   await saveConversation(conversation);
   currentConversationId = conversation.conversation_id;
@@ -195,7 +196,7 @@ async function ensureConversation() {
   }
   if (currentConversationId) {
     const found = await dbRequest(CONVERSATION_STORE, "readonly", (store) => store.get(currentConversationId));
-    if (found && [1, 2].includes(found.version)) return found;
+    if (found && [1, 2, 3].includes(found.version)) return found;
   }
   return createConversation();
 }
@@ -263,11 +264,31 @@ function renderConversationMessage(message) {
   block.dataset.turnId = message.turn_id || "";
   const role = document.createElement("strong");
   role.className = "message-role";
-  role.textContent = message.role === "user" ? "나" : "학사 챗봇";
+  role.textContent = message.role === "user" ? "나" : "학사 챗봇 답변";
+  if (message.role === "assistant") role.classList.add("sr-only");
   const content = document.createElement("p");
   content.className = "message-content";
   content.textContent = message.content;
   block.append(role, content);
+  if (message.role === "assistant" && message.content.length > 1800) {
+    block.classList.add("is-long");
+    const contentId = opaqueId("answer-content");
+    content.id = contentId;
+    content.classList.add("is-collapsible", "is-collapsed");
+    const toggle = document.createElement("button");
+    toggle.type = "button";
+    toggle.className = "message-content-toggle";
+    toggle.setAttribute("aria-controls", contentId);
+    toggle.setAttribute("aria-expanded", "false");
+    toggle.textContent = "전체 답변 펼치기";
+    toggle.addEventListener("click", () => {
+      const expanded = toggle.getAttribute("aria-expanded") === "true";
+      toggle.setAttribute("aria-expanded", String(!expanded));
+      toggle.textContent = expanded ? "전체 답변 펼치기" : "답변 접기";
+      content.classList.toggle("is-collapsed", expanded);
+    });
+    block.append(toggle);
+  }
   if (message.role === "assistant") renderAssistantDetails(block, message);
   return block;
 }
@@ -282,14 +303,24 @@ function renderAssistantDetails(block, message) {
   const response = result && result.response;
   const presentation = result && result.presentation;
   const retryable = Boolean(message.error || (response && response.status === "SAFE_FAILURE"));
-  if (message.response_status) {
+  const fulfillmentStatus = snapshot.request_fulfillment &&
+    snapshot.request_fulfillment.version === 1
+    ? snapshot.request_fulfillment.status : null;
+  const statusLabel = fulfillmentStatus === "PARTIAL" ? "일부 완료"
+    : fulfillmentStatus === "UNRESOLVED" ? "확인 필요"
+    : RESPONSE_STATUS_LABELS[message.response_status] || message.response_status;
+  if (message.response_status || fulfillmentStatus) {
     const badge = document.createElement("span");
     badge.className = "badge turn-status";
-    badge.dataset.state = message.response_status;
-    badge.textContent = RESPONSE_STATUS_LABELS[message.response_status] || message.response_status;
+    badge.dataset.state = fulfillmentStatus === "PARTIAL" || fulfillmentStatus === "UNRESOLVED"
+      ? "INSUFFICIENT_EVIDENCE" : message.response_status;
+    badge.textContent = statusLabel;
     block.insertBefore(badge, block.querySelector(".message-content"));
   }
-  if (response && response.clarification) {
+  const normalizedMessage = String(message.content || "").replace(/\s+/g, " ").trim();
+  const normalizedClarification = String(response && response.clarification || "")
+    .replace(/\s+/g, " ").trim();
+  if (normalizedClarification && normalizedClarification !== normalizedMessage) {
     const clarification = document.createElement("p");
     clarification.className = "message-clarification";
     clarification.textContent = response.clarification;
@@ -322,7 +353,7 @@ function renderAssistantDetails(block, message) {
     }
   }
   if (Array.isArray(snapshot.agent_trace) && snapshot.agent_trace.length) {
-    tools.append(turnDisclosure("Agent 도구 기록", (body) =>
+    tools.append(turnDisclosure("조회 기록", (body) =>
       renderAgentTrace(body, snapshot.agent_trace)));
   }
   if (tools.childElementCount) block.append(tools);
@@ -459,6 +490,7 @@ async function beginConversationTurn(question) {
     recent_course_codes: conversation.recent_course_codes || [],
     recent_evidence_ids: conversation.recent_evidence_ids || [],
     pending_clarification: conversation.pending_clarification || null,
+    pending_request: conversation.pending_request || null,
   };
 }
 
@@ -476,6 +508,7 @@ function currentTurnSnapshot(result = lastResult, error = null) {
     timeline_events: timelineEvents,
     inspection_updates: [...inspectionUpdates.values()],
     agent_trace: agentTraceEvents,
+    request_fulfillment: latestRequestFulfillment,
     error,
   };
 }
@@ -491,6 +524,7 @@ async function finishConversationTurn(update, snapshot = currentTurnSnapshot()) 
   conversation.recent_evidence_ids = Array.isArray(update.evidence_ids)
     ? update.evidence_ids : [];
   conversation.pending_clarification = update.pending_clarification || null;
+  conversation.pending_request = update.pending_request || null;
   conversation.version = CONVERSATION_DB_VERSION;
   await saveConversation(conversation);
   await saveConversationMessage({
@@ -750,7 +784,9 @@ function scrollConversationToLatest(force = false) {
 
 function updateJumpLatest() {
   shouldFollowLatest = isNearConversationBottom();
-  el.jumpLatest.hidden = shouldFollowLatest;
+  const remaining = el.conversationTranscript.scrollHeight -
+    el.conversationTranscript.scrollTop - el.conversationTranscript.clientHeight;
+  el.jumpLatest.hidden = shouldFollowLatest || remaining < 240;
 }
 
 el.conversationTranscript.addEventListener("scroll", updateJumpLatest, { passive: true });
@@ -786,28 +822,11 @@ async function loadHealth() {
       dot.dataset.state = "ok";
       text.textContent = "질의 서비스 준비됨 · PDF 탑재됨";
     }
-    renderExamples(data.examples || []);
     await renderConversationUi();
   } catch (_) {
     el.status.querySelector(".dot").dataset.state = "error";
     el.status.querySelector(".status-text").textContent = "서버 상태 확인 실패";
   }
-}
-
-function renderExamples(examples) {
-  el.examples.replaceChildren();
-  examples.forEach((text) => {
-    const button = document.createElement("button");
-    button.type = "button";
-    button.textContent = text;
-    button.addEventListener("click", () => {
-      if (inFlight) return;
-      el.question.value = text;
-      autoGrow();
-      el.form.requestSubmit();
-    });
-    el.examples.append(button);
-  });
 }
 
 function autoGrow() {
@@ -850,7 +869,7 @@ function mountLiveAssistant() {
   block.dataset.turnId = activeTurnId || "";
   const role = document.createElement("strong");
   role.className = "message-role";
-  role.textContent = "학사 챗봇";
+  role.textContent = "답변 준비 중";
   const content = document.createElement("p");
   content.className = "message-content live-answer";
   content.textContent = "질문을 분석하고 있습니다…";
@@ -886,6 +905,7 @@ async function ask(question, displayQuestion = question) {
   clarificationPresentation = null;
   latestOutcome = null;
   latestConversationUpdate = null;
+  latestRequestFulfillment = null;
   agentTraceEvents = [];
   liveAssistantNode = null;
 
@@ -939,8 +959,13 @@ async function ask(question, displayQuestion = question) {
           clarificationPresentation = payload;
         } else if (payload.type === "profile_update" && payload.version === 1) {
           saveProfile(payload.profile);
+          if (Array.isArray(payload.changed_fields) && payload.changed_fields.length) {
+            showNotice(el.profileNotice, "입력한 학적 정보를 프로필에 반영했습니다.", false);
+          }
         } else if (payload.type === "outcome" && payload.version === 1) {
           latestOutcome = payload;
+        } else if (payload.type === "request_fulfillment" && payload.version === 1) {
+          latestRequestFulfillment = payload;
         } else if (payload.type === "conversation_update" && payload.version === 1) {
           latestConversationUpdate = payload;
         } else if (payload.type === "agent_trace" && payload.version === 1) {
@@ -993,6 +1018,7 @@ async function ask(question, displayQuestion = question) {
           recent_course_codes: [],
           evidence_ids: response.used_evidence_ids || [],
           pending_clarification: null,
+          pending_request: null,
           display_answer: response.answer_text || "답변을 확인하지 못했습니다.",
           response_status: response.status || "SAFE_FAILURE",
           citation_ids: [],
@@ -1645,12 +1671,17 @@ function renderGraphTab(container, state, autoplay = false) {
     "현재 질문에 대해 실제 승인된 구조와 VERIFIED provenance만 표시한 projection입니다.";
   container.append(note);
   if (state.claims && state.claims.traversal_graph) {
-    renderGraphPanel(
-      container,
-      "실제 질의 traversal과 VERIFIED 근거",
-      state.claims.traversal_graph,
-      { autoplay }
-    );
+    const graph = state.claims.traversal_graph;
+    if ((graph.nodes || []).length > 100) {
+      renderLargeGraphSummary(container, graph, { autoplay });
+    } else {
+      renderGraphPanel(
+        container,
+        "실제 질의 traversal과 VERIFIED 근거",
+        graph,
+        { autoplay }
+      );
+    }
   } else if (state.explain && state.explain.query_graph) {
     renderGraphPanel(container, "승인된 질의 구조", state.explain.query_graph);
   }
@@ -1665,6 +1696,40 @@ function renderGraphTab(container, state, autoplay = false) {
       state.claims.provenance_graph
     );
   }
+}
+
+function renderLargeGraphSummary(container, graph, options = {}) {
+  const panel = document.createElement("section");
+  panel.className = "graph-panel graph-summary-panel";
+  const heading = document.createElement("h4");
+  heading.textContent = "조회 결과 요약";
+  const groups = new Map();
+  graph.nodes
+    .filter((node) => node.node_type !== "Evidence" && node.group_name)
+    .forEach((node) => groups.set(node.group_name, (groups.get(node.group_name) || 0) + 1));
+  const description = document.createElement("p");
+  description.textContent =
+    `검증된 결과 ${[...groups.values()].reduce((sum, count) => sum + count, 0)}개를 ` +
+    `${groups.size}개 영역으로 요약했습니다. 전체 노드와 근거는 필요할 때만 그립니다.`;
+  const list = document.createElement("ul");
+  list.className = "graph-group-summary";
+  groups.forEach((count, name) => {
+    const item = document.createElement("li");
+    item.textContent = `${name} · ${count}과목`;
+    list.append(item);
+  });
+  const show = document.createElement("button");
+  show.type = "button";
+  show.className = "ghost compact";
+  show.textContent = "전체 노드 표시";
+  const target = document.createElement("div");
+  show.addEventListener("click", () => {
+    show.disabled = true;
+    show.textContent = "전체 노드를 표시했습니다";
+    renderGraphPanel(target, "실제 질의 traversal과 VERIFIED 근거", graph, options);
+  }, { once: true });
+  panel.append(heading, description, list, show, target);
+  container.append(panel);
 }
 
 function addInspectionItem(container, label, value, options = {}) {
@@ -1749,8 +1814,8 @@ function graphProjectionIsSafe(graph) {
     ].includes(graph.kind) ||
     !Array.isArray(graph.nodes) ||
     !Array.isArray(graph.edges) ||
-    graph.nodes.length > 200 ||
-    graph.edges.length > 300
+    graph.nodes.length > 650 ||
+    graph.edges.length > 800
   ) return false;
   const ids = new Set();
   for (const node of graph.nodes) {
@@ -1761,6 +1826,11 @@ function graphProjectionIsSafe(graph) {
       ids.has(node.id) ||
       typeof node.display_name !== "string" ||
       typeof node.node_type !== "string" ||
+      !(
+        node.group_name === undefined ||
+        node.group_name === null ||
+        typeof node.group_name === "string"
+      ) ||
       !["SCHEMA_APPROVED", "VERIFIED"].includes(
         node.verification_status
       )

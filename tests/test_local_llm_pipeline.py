@@ -108,6 +108,41 @@ class LocalLLMContractTests(unittest.TestCase):
         self.assertEqual(outcome.plan.selection_mode, SelectionMode.COURSE_LIST)
         self.assertEqual(outcome.plan.filters["completion_type"], "MAJOR_REQUIRED")
 
+    def test_generic_department_all_course_names_is_a_complete_course_list(self):
+        outcome = LocalQueryPlanner(SequenceClient([])).plan(
+            "컴공과 과목 이름을 전부 보여 줘."
+        )
+        self.assertEqual(outcome.status, PlanningStatus.READY)
+        self.assertEqual(outcome.plan.selection_mode, SelectionMode.COURSE_LIST)
+        self.assertEqual(outcome.plan.filters["academic_year"], 2026)
+        self.assertEqual(
+            outcome.plan.filters["department_id"], "department:cwnu:cse"
+        )
+        self.assertNotIn("completion_type", outcome.plan.filters)
+        self.assertIn("name_ko", outcome.plan.requested_fields)
+
+    def test_multiple_course_classifications_do_not_collapse_to_one_filter(self):
+        outcome = LocalQueryPlanner(SequenceClient([])).plan(
+            "컴공과 전공필수와 전공선택 과목 이름을 모두 알려 줘."
+        )
+        self.assertEqual(outcome.status, PlanningStatus.READY)
+        self.assertEqual(outcome.plan.selection_mode, SelectionMode.COURSE_LIST)
+        self.assertNotIn("completion_type", outcome.plan.filters)
+        self.assertIn("completion_type", outcome.plan.requested_fields)
+
+    def test_area_course_list_uses_data_derived_descendant_area_scope(self):
+        outcome = LocalQueryPlanner(SequenceClient([])).plan(
+            "균형교양 과목명을 전부 출력해 줘."
+        )
+        self.assertEqual(outcome.status, PlanningStatus.READY)
+        self.assertEqual(outcome.plan.selection_mode, SelectionMode.COURSE_LIST)
+        self.assertEqual(len(outcome.plan.filters["area_ids"]), 4)
+        self.assertNotIn("department_id", outcome.plan.filters)
+        subset = QuerySchemaSelector().select(outcome.plan)
+        scaffold = build_syntax_scaffold(outcome.plan, subset)
+        self.assertIn("MATCH (o)-[:IN_AREA]->(a:EducationArea)", scaffold)
+        self.assertIn("a.area_id IN $area_ids", scaffold)
+
     def test_required_course_list_with_requested_credits_is_deterministic(self):
         outcome = LocalQueryPlanner(SequenceClient([])).plan(
             "전공필수 목록과 각 과목의 학점을 한꺼번에 알려 줘."
@@ -139,6 +174,28 @@ class LocalLLMContractTests(unittest.TestCase):
         self.assertEqual(outcome.plan.selection_mode, SelectionMode.MULTIPLE_RULES)
         self.assertGreaterEqual(len(outcome.plan.filters["rule_ids"]), 2)
         self.assertTrue(outcome.plan.evidence_required)
+
+    def test_general_english_standard_selects_verified_atomic_rule_family(self):
+        outcome = LocalQueryPlanner(SequenceClient([])).plan(
+            "컴퓨터공학과 학생이 졸업하려면 필요한 영어 기준을 알려 줘."
+        )
+        self.assertEqual(outcome.status, PlanningStatus.READY)
+        self.assertEqual(outcome.plan.selection_mode, SelectionMode.MULTIPLE_RULES)
+        self.assertGreaterEqual(len(outcome.plan.filters["rule_ids"]), 2)
+        self.assertTrue(outcome.plan.evidence_required)
+
+    def test_general_course_list_language_is_deterministic(self):
+        for question in (
+            "2026 컴공 3학년 과목을 한 번에 정리해 줘.",
+            "전공선택 과목을 빠짐없이 알려 주세요.",
+            "컴공 수업 뭐 있는지 이름만 몽땅 보여 줘.",
+        ):
+            with self.subTest(question=question):
+                outcome = LocalQueryPlanner(SequenceClient([])).plan(question)
+                self.assertEqual(outcome.status, PlanningStatus.READY)
+                self.assertEqual(
+                    outcome.plan.selection_mode, SelectionMode.COURSE_LIST
+                )
 
     def test_course_advice_retrieves_verified_course_details_before_recommending(self):
         outcome = LocalQueryPlanner(SequenceClient([])).plan(
@@ -467,6 +524,31 @@ class LocalLLMContractTests(unittest.TestCase):
         validated = CypherValidator(SchemaCatalog.from_generated()).validate(plan, scaffold)
         self.assertEqual(validated.provenance.fact_label, "CourseOffering")
         self.assertIn("c.course_id AS course_identity", scaffold)
+
+    def test_course_list_scaffold_uses_bounded_complete_catalog_limit(self) -> None:
+        payload = plan_payload()
+        payload["selection_mode"] = "COURSE_LIST"
+        payload["filters"] = {
+            "academic_year": 2026,
+            "area_ids": [
+                "area:general:balanced:digital-communication",
+                "area:general:balanced:humanities-arts",
+            ],
+        }
+        payload["requested_fields"] = ["name_ko", "completion_type"]
+        plan = QueryPlan.from_dict(payload, SchemaCatalog.from_generated())
+        scaffold = build_syntax_scaffold(plan, QuerySchemaSelector().select(plan))
+
+        validated = CypherValidator(SchemaCatalog.from_generated()).validate(plan, scaffold)
+        self.assertEqual(validated.limit, 250)
+        self.assertIn("c.course_id AS course_identity", scaffold)
+        self.assertIn("a.name_ko AS area_name", scaffold)
+
+        with self.assertRaises(CypherValidationError) as raised:
+            CypherValidator(SchemaCatalog.from_generated()).validate(
+                plan, scaffold.replace("LIMIT 250", "LIMIT 100")
+            )
+        self.assertEqual(raised.exception.code, "CYPHER_LIST_LIMIT_INCOMPLETE")
 
     def test_single_course_code_lookup_adds_grounded_subject_without_answer_slot(self) -> None:
         payload = plan_payload()

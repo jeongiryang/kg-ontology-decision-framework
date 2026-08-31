@@ -91,6 +91,14 @@ def _summary(item: dict[str, Any], events: list[dict[str, Any]], elapsed: float)
         (event["data"] for event in reversed(events) if event["event"] == "outcome"),
         {},
     )
+    fulfillment = next(
+        (
+            event["data"]
+            for event in reversed(events)
+            if event["event"] == "request_fulfillment"
+        ),
+        {},
+    )
     citations = response.get("citations") or []
     return {
         **item,
@@ -102,6 +110,8 @@ def _summary(item: dict[str, Any], events: list[dict[str, Any]], elapsed: float)
         "required_user_fields": outcome.get("required_user_fields") or [],
         "used_profile_fields": outcome.get("used_profile_fields") or [],
         "limitations": outcome.get("limitations") or [],
+        "fulfillment_status": fulfillment.get("status"),
+        "requested_items": fulfillment.get("requested_items") or [],
         "citation_count": len(citations),
         "citations": citations,
         "clarification": response.get("clarification"),

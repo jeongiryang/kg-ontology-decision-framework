@@ -20,8 +20,8 @@ from kg_builder.query.query_trace import EMAIL_PATTERN, PHONE_PATTERN, STUDENT_I
 
 
 GRAPH_ENVELOPE_VERSION = 1
-MAX_GRAPH_NODES = 200
-MAX_GRAPH_EDGES = 300
+MAX_GRAPH_NODES = 650
+MAX_GRAPH_EDGES = 800
 _SAFE_TYPE = re.compile(r"[A-Za-z][A-Za-z0-9_]{0,79}\Z")
 _DISPLAY_FIELDS = (
     "name_ko",
@@ -322,6 +322,7 @@ def build_traversal_projection(
             "node_type_ko": catalog.label_ko(fact_label),
             "verification_status": "VERIFIED",
             "visit_order": order,
+            "group_name": _safe_display(row.get("area_name"), "") or None,
         })
         if parent_id and into_fact:
             hop += 1
@@ -348,8 +349,10 @@ def build_traversal_projection(
         if not isinstance(target_label, str) or target_label == "Evidence":
             continue
         target_props = catalog.properties_for_labels({target_label})
-        display_field = next(
-            (f for f in _DISPLAY_FIELDS if f in target_props), None
+        display_field = (
+            "area_name"
+            if target_label == "EducationArea"
+            else next((f for f in _DISPLAY_FIELDS if f in target_props), None)
         )
         if display_field is None:
             continue

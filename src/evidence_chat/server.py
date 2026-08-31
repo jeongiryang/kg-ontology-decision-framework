@@ -113,16 +113,6 @@ def _env_detail_level(name: str) -> str:
 
 _AUTOSTRING = re.compile(r"\$autostring_\d+|\$autoint_\d+")
 
-EXAMPLE_QUESTIONS = (
-    "2026학년도 교양 최소 이수학점은?",
-    "균형교양 이수요건은?",
-    "편입생도 교양을 이수해야 하나?",
-    "자료구조는 몇 학년 몇 학기에 개설되나?",
-    "컴퓨터공학과 전공필수 과목은?",
-    "자료구조의 이수구분은?",
-)
-
-
 class ChatService(Protocol):
     def ask(
         self,
@@ -931,7 +921,6 @@ async def health(request: Request) -> Response:
         "service_ready": state.ready,
         "error": state.error,
         "pdf_mounted": source.available,
-        "examples": list(EXAMPLE_QUESTIONS),
         "max_question_length": MAX_QUESTION_LENGTH,
         "client_timeout_seconds": state.client_timeout_seconds,
         "debug": state.debug,
@@ -1107,6 +1096,10 @@ async def ask(request: Request) -> Response:
                         )
                         personalized = agent_result.personalized
                         response = personalized.response
+                        loop.call_soon_threadsafe(
+                            queue.put_nowait,
+                            agent_result.request_fulfillment_update(),
+                        )
                         loop.call_soon_threadsafe(
                             queue.put_nowait, agent_result.conversation_update()
                         )
